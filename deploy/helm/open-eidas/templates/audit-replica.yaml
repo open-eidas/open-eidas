@@ -60,6 +60,7 @@ spec:
                 - 'wget -q -O /dev/null --header="Authorization: Basic $(printf ''%s:%s'' "$USERNAME" "$PASSWORD" | base64)" http://localhost/'
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 5
             failureThreshold: 10
           resources:
             {{- toYaml .Values.auditReplica.resources | nindent 12 }}

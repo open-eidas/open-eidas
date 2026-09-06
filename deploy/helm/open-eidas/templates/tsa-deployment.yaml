@@ -135,18 +135,21 @@ spec:
               path: /healthz
               port: http
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 90
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 30
+            timeoutSeconds: 5
             failureThreshold: 6
           resources:
             {{- toYaml .Values.tsa.resources | nindent 12 }}

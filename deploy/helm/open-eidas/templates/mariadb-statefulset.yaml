@@ -53,6 +53,7 @@ spec:
               command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
             initialDelaySeconds: 10
             periodSeconds: 5
+            timeoutSeconds: 5
             failureThreshold: 20
           resources:
             {{- toYaml .Values.mariadb.resources | nindent 12 }}

@@ -94,7 +94,7 @@ jobs:
     name: Amorçage complet + démonstration (Helm sur kind)
     runs-on: ubuntu-latest
     needs: [build, helm-lint]
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -128,8 +128,14 @@ jobs:
             --set tsa.time.policy=monitor
 
       - name: Attend que tous les pods soient prêts
+        # Le tout premier essai de signature après l'amorçage de la CA
+        # marque parfois une pause programmée le temps que le statut du
+        # token de signature se rafraîchisse (comportement normal
+        # d'OpenXPKI, observé aussi en local) : jusqu'à 5-6 minutes avant
+        # que le watchdog ne relance le workflow. 12 minutes laisse une
+        # marge confortable sur un runner potentiellement plus lent.
         run: |
-          kubectl -n open-eidas wait --for=condition=ready pod --all --timeout=8m
+          kubectl -n open-eidas wait --for=condition=ready pod --all --timeout=12m
 
       - name: Horodate un fichier et vérifie le jeton (openssl ts)
         run: |
