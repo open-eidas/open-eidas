@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  test:
+    name: Format, vet, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # crypto11 se lie à un module PKCS#11 via dlopen (CGO) : la compilation
+      # exige un compilateur C, pas le module lui-même.
+      - name: Vérifie le formatage
+        run: |
+          fmt_diff="$(gofmt -l .)"
+          if [ -n "$fmt_diff" ]; then
+            echo "fichiers non formatés (gofmt -l) :"
+            echo "$fmt_diff"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -cover ./...
+
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: ${{ env.GO_VERSION }}
+
+  build:
+    name: Construction de l'image TSA
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Construit l'image (sans publication)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/tsa/Dockerfile
+          push: false
+          load: true
+          tags: openeidas-tsa:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ github.sha }}
+
+      - name: Vérifie que le binaire démarre
+        run: docker run --rm -e OPENEIDAS_PIN=ci openeidas-tsa:ci version
+
+      - name: Scan de vulnérabilités (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: openeidas-tsa:ci
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+  compose-smoke-test:
+    name: Amorçage complet + démonstration (docker compose)
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Amorce la pile (PKI OpenXPKI + TSA)
+        run: ./scripts/bootstrap.sh
+
+      - name: Horodate un fichier et vérifie le jeton (openssl ts)
+        run: ./scripts/demo.sh
+
+      - name: Vérifie la chaîne du journal d'audit
+        run: docker compose exec -T tsa tsa-server verify-audit
+
+      - name: Journaux (utile en cas d'échec)
+        if: always()
+        run: docker compose logs --tail 200
+
+      - name: Arrête la pile
+        if: always()
+        run: docker compose down -v
