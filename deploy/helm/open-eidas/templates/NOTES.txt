@@ -1,0 +1,36 @@
+Open eIDAS a été déployé dans le namespace {{ .Release.Namespace }}.
+
+L'amorçage complet (récupération de la configuration OpenXPKI, génération de
+la hiérarchie de CA de test, enrôlement de la TSU) prend quelques minutes.
+Suivez sa progression :
+
+  kubectl -n {{ .Release.Namespace }} get pods -w
+
+Le conteneur "bootstrap" du Pod openxpki journalise l'émission de la
+hiérarchie de CA de test :
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "open-eidas.fullname" . }}-openxpki -c bootstrap -f
+
+Une fois {{ include "open-eidas.fullname" . }}-tsa prêt (Ready), exposez le
+service et vérifiez l'horodatage :
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "open-eidas.fullname" . }}-tsa {{ .Values.tsa.service.port }}:{{ .Values.tsa.service.port }}
+
+  DIGEST=$(sha256sum facture.pdf | cut -d' ' -f1)
+  curl -s -X POST http://localhost:{{ .Values.tsa.service.port }}/api/v1/timestamp \
+       -H 'Content-Type: application/json' \
+       -d "{\"hash\":\"$DIGEST\"}"
+
+{{- if .Values.tsa.ingress.enabled }}
+
+L'ingress expose également le service sur : http://{{ .Values.tsa.ingress.host }}
+{{- end }}
+
+Relire le journal d'audit :
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "open-eidas.fullname" . }}-tsa -- tsa-server verify-audit
+
+AVERTISSEMENT : comme le docker-compose de démonstration, ce déploiement
+utilise une hiérarchie de CA jetable, un enrôlement anonyme auto-approuvé et
+SoftHSM en lieu d'un HSM certifié. Voir docs/ARCHITECTURE.md pour la liste
+complète des écarts au référentiel eIDAS.

@@ -1,0 +1,205 @@
+{{- $fullname := include "open-eidas.fullname" . -}}
+{{- $name := printf "%s-tsa" $fullname -}}
+{{- $openxpkiHost := printf "%s-openxpki" $fullname -}}
+{{- $auditReplicaHost := printf "%s-audit-replica" $fullname -}}
+{{- $generatedSecret := include "open-eidas.generatedSecretName" . -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-softhsm
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "tsa") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.tsa.persistence.softhsm.storageClassName }}
+  storageClassName: {{ .Values.tsa.persistence.softhsm.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.tsa.persistence.softhsm.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-state
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "tsa") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.tsa.persistence.state.storageClassName }}
+  storageClassName: {{ .Values.tsa.persistence.state.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.tsa.persistence.state.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "tsa") | nindent 4 }}
+spec:
+  replicas: {{ .Values.tsa.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "tsa") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "tsa") | nindent 8 }}
+    spec:
+      containers:
+        - name: tsa
+          image: "{{ .Values.tsa.image.repository }}:{{ .Values.tsa.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.tsa.service.port }}
+          env:
+            - name: OPENEIDAS_LISTEN
+              value: {{ printf ":%d" (.Values.tsa.service.port | int) | quote }}
+            - name: OPENEIDAS_PIN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $generatedSecret }}
+                  key: tsa-pin
+            - name: OPENEIDAS_TOKEN_LABEL
+              value: open-eidas-tsa
+            - name: OPENEIDAS_KEY_LABEL
+              value: tsu-signing-key
+            - name: OPENEIDAS_KEY_BITS
+              value: "3072"
+            - name: OPENEIDAS_POLICY_OID
+              value: {{ .Values.tsa.policyOID | quote }}
+            - name: OPENEIDAS_ACCURACY
+              value: "1s"
+            - name: OPENEIDAS_TIME_POLICY
+              value: {{ .Values.tsa.time.policy | quote }}
+            - name: OPENEIDAS_TIME_SOURCES
+              value: {{ .Values.tsa.time.sources | quote }}
+            - name: OPENEIDAS_TIME_MIN_SOURCES
+              value: {{ .Values.tsa.time.minSources | quote }}
+            - name: OPENEIDAS_TIME_MAX_OFFSET
+              value: {{ .Values.tsa.time.maxOffset | quote }}
+            - name: OPENEIDAS_AUDIT_FILE
+              value: /var/lib/open-eidas/state/audit.log
+            - name: OPENEIDAS_AUDIT_SEAL_INTERVAL
+              value: {{ .Values.tsa.audit.sealInterval | quote }}
+            - name: OPENEIDAS_CROSS_TSA_URLS
+              value: {{ .Values.tsa.crossTSA.urls | quote }}
+            - name: OPENEIDAS_AUDIT_REPLICA_URL
+              value: {{ printf "http://%s/" $auditReplicaHost | quote }}
+            - name: OPENEIDAS_AUDIT_REPLICA_USER
+              value: {{ .Values.auditReplica.username | quote }}
+            - name: OPENEIDAS_AUDIT_REPLICA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $generatedSecret }}
+                  key: webdav-password
+            - name: OPENEIDAS_CERT_FILE
+              value: /var/lib/open-eidas/state/tsu.pem
+            - name: OPENEIDAS_CHAIN_FILE
+              value: /var/lib/open-eidas/state/chain.pem
+            - name: OPENEIDAS_ENROLL_ENDPOINT
+              value: {{ printf "https://%s/rpc/tsa/RequestCertificate" $openxpkiHost | quote }}
+            # Comme en docker-compose, le certificat TLS auto-signé
+            # d'OpenXPKI n'est pas vérifiable : acceptable pour cette
+            # démonstration, à remplacer par OPENEIDAS_ENROLL_CA_FILE en
+            # production (voir values.tsa.enrollCAConfigMap dans le README
+            # du chart pour brancher une ancre de confiance explicite).
+            - name: OPENEIDAS_ENROLL_INSECURE
+              value: "true"
+            - name: OPENEIDAS_SUBJECT_CN
+              value: {{ .Values.tsa.subject.commonName | quote }}
+            - name: OPENEIDAS_SUBJECT_OU
+              value: {{ .Values.tsa.subject.organizationalUnit | quote }}
+            - name: OPENEIDAS_SUBJECT_O
+              value: {{ .Values.tsa.subject.organization | quote }}
+            - name: OPENEIDAS_SUBJECT_C
+              value: {{ .Values.tsa.subject.country | quote }}
+          volumeMounts:
+            - name: softhsm
+              mountPath: /var/lib/softhsm/tokens
+            - name: state
+              mountPath: /var/lib/open-eidas/state
+          # Le serveur HTTP ne démarre qu'une fois l'enrôlement RPC auprès
+          # d'OpenXPKI réussi (jusqu'à 60 tentatives à 10 s d'intervalle,
+          # voir deploy/tsa/entrypoint.sh) : sans startupProbe, la
+          # livenessProbe tuerait le conteneur avant même que /healthz
+          # existe, pendant cette attente pourtant normale.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.tsa.resources | nindent 12 }}
+      volumes:
+        - name: softhsm
+          persistentVolumeClaim:
+            claimName: {{ $name }}-softhsm
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ $name }}-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "tsa") | nindent 4 }}
+spec:
+  selector:
+    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "tsa") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.tsa.service.port }}
+      targetPort: http
+{{- if .Values.tsa.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "tsa") | nindent 4 }}
+  {{- with .Values.tsa.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.tsa.ingress.className }}
+  ingressClassName: {{ .Values.tsa.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.tsa.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: {{ .Values.tsa.service.port }}
+  {{- with .Values.tsa.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

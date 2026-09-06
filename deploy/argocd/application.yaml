@@ -1,0 +1,57 @@
+# Exemple de déploiement du chart Helm Open eIDAS piloté par ArgoCD.
+#
+#   kubectl apply -f deploy/argocd/application.yaml
+#
+# ArgoCD suit alors la branche main du dépôt : tout changement fusionné dans
+# deploy/helm/open-eidas/ est automatiquement synchronisé sur le cluster.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: open-eidas
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/open-eidas/open-eidas.git
+    targetRevision: main
+    path: deploy/helm/open-eidas
+    helm:
+      # Décommenter et adapter pour un déploiement de démonstration exposé
+      # publiquement :
+      # values: |
+      #   tsa:
+      #     ingress:
+      #       enabled: true
+      #       host: tsa.exemple.org
+      #       className: nginx
+      {}
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: open-eidas
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # Le Secret des valeurs générées (mots de passe, PIN SoftHSM, clé du
+    # coffre de données) est produit par le chart via le motif `lookup` :
+    # ArgoCD doit tolérer sa dérive apparente d'un diff à l'autre plutôt que
+    # de le recréer, sous peine de rendre les données déjà écrites
+    # (base MariaDB, token SoftHSM) inaccessibles.
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  ignoreDifferences:
+    - group: ""
+      kind: Secret
+      name: open-eidas-generated
+      jsonPointers:
+        - /data

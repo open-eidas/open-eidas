@@ -26,6 +26,10 @@ lint: ## Vérifie le formatage et lance go vet
 audit: ## Vérifie la chaîne de hachage du journal d'audit
 	docker compose exec tsa tsa-server verify-audit
 
+helm-lint: ## Vérifie le chart Helm (lint + rendu complet)
+	helm lint deploy/helm/open-eidas
+	helm template open-eidas deploy/helm/open-eidas > /dev/null
+
 logs: ## Suit les journaux de la TSA
 	docker compose logs -f tsa
 
@@ -36,4 +40,4 @@ purge: ## Arrête la pile et supprime les volumes (PKI et token HSM inclus)
 	docker compose down -v
 	rm -f deploy/openxpki/.sampleconfig-done
 
-.PHONY: help up demo test lint audit logs down purge
+.PHONY: help up demo test lint audit helm-lint logs down purge

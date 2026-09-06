@@ -1,0 +1,363 @@
+{{- /*
+La PKI est packagée comme un unique Pod à quatre conteneurs (server, client,
+web, bootstrap) partageant des volumes éphémères, plutôt que quatre
+ressources séparées liées par un PVC ReadWriteMany : c'est exactement la
+même topologie logique que le docker-compose de démonstration (qui partage
+un unique répertoire hôte entre ses services), sans exiger de classe de
+stockage RWX. Rien de ce qui vit dans ces volumes n'a besoin de survivre à un
+redémarrage du Pod : la hiérarchie de CA et ses clés sont stockées chiffrées
+dans MariaDB (voir config.d/system/crypto.yaml, key_store: OPENXPKI), donc
+persistantes indépendamment de ce Pod.
+
+Le conteneur "bootstrap" attend que le serveur soit prêt puis exécute une
+seule fois contrib/sampleconfig.sh (génération de la hiérarchie de CA de
+test) — l'idempotence est vérifiée en interrogeant OpenXPKI lui-même
+(oxi token list) plutôt que via un marqueur sur disque, pour rester correcte
+même si ce Pod est recréé après un premier amorçage réussi.
+*/ -}}
+{{- $fullname := include "open-eidas.fullname" . -}}
+{{- $name := printf "%s-openxpki" $fullname -}}
+{{- $mariadbHost := printf "%s-mariadb" $fullname -}}
+{{- $generatedSecret := include "open-eidas.generatedSecretName" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "openxpki") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "openxpki") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "openxpki") | nindent 8 }}
+    spec:
+      securityContext:
+        # Ajouté comme groupe supplémentaire à tous les conteneurs, et
+        # appliqué (avec le bit setgid) aux volumes emptyDir partagés : c'est
+        # ce qui permet à server (uid 100), client (uid 101) et bootstrap
+        # (uid 1000, pkiadm) d'écrire chacun dans leurs répertoires
+        # d'exécution respectifs sans avoir à connaître les uid/gid exacts
+        # de l'image en amont.
+        fsGroup: 102
+        # Équivalent du `group_add: [openxpkiclient]` du docker-compose :
+        # au démarrage, le serveur chowne le socket openxpkid en groupe
+        # openxpkiclient (103) pour que le client y accède sans passer par
+        # le groupe partagé 102 — il doit donc appartenir à ce groupe.
+        supplementalGroups: [103]
+      initContainers:
+        - name: fetch-config
+          image: {{ .Values.openxpki.gitImage }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              git clone --depth 1 --single-branch --branch "$CONFIG_REF" \
+                  https://github.com/openxpki/openxpki-config.git /etc/openxpki
+          env:
+            - name: CONFIG_REF
+              value: {{ .Values.openxpki.configRef | quote }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openxpki
+
+        - name: apply-overlay
+          image: busybox:1.36
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              # Copie fichier par fichier plutôt qu'une fusion récursive :
+              # busybox ne sait fusionner ni via `cp -a` (refuse un
+              # répertoire de destination déjà existant) ni via `tar`
+              # (tente de supprimer les répertoires déjà créés par le git
+              # clone). Les trois fichiers de l'overlay sont connus et fixes.
+              mkdir -p /etc/openxpki/config.d/realm.tpl/profile
+              mkdir -p /etc/openxpki/config.d/realm.tpl/rpc
+              mkdir -p /etc/openxpki/client.d/service/rpc
+              cp /overlay/config.d/realm.tpl/profile/tsa_signer.yaml /etc/openxpki/config.d/realm.tpl/profile/tsa_signer.yaml
+              cp /overlay/config.d/realm.tpl/rpc/tsa.yaml /etc/openxpki/config.d/realm.tpl/rpc/tsa.yaml
+              cp /overlay/client.d/service/rpc/tsa.yaml /etc/openxpki/client.d/service/rpc/tsa.yaml
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openxpki
+            - name: overlay
+              mountPath: /overlay
+              readOnly: true
+
+        - name: configure-secrets
+          image: {{ .Values.openxpki.opensslImage }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+
+              # Clé d'administration CLI : régénérée à chaque démarrage du
+              # Pod. Rien n'en dépend d'un redémarrage à l'autre — cli.yaml
+              # et la clé privée sont toujours produits ensemble, ici.
+              mkdir -p /home/pkiadm/.oxi
+              openssl ecparam -name prime256v1 -genkey -noout -out /home/pkiadm/.oxi/client.key
+              # 640 et non 600 : ce fichier est créé par cet initContainer
+              # (root) mais lu par le conteneur "bootstrap", qui tourne en
+              # tant que pkiadm — accessible via le groupe openxpki commun
+              # (fsGroup), pas via la propriété du fichier.
+              chmod 640 /home/pkiadm/.oxi/client.key
+              PUBKEY=$(openssl pkey -in /home/pkiadm/.oxi/client.key -pubout | sed 's/^/            /')
+              cat > /etc/openxpki/config.d/system/cli.yaml <<EOF
+              auth:
+                  pkiadm:
+                      role: RA Operator
+                      key: |
+              $PUBKEY
+              EOF
+
+              # Coffre de données : cette clé chiffre les clés privées de la
+              # PKI conservées dans MariaDB. Générée une fois par Helm et
+              # stable d'un déploiement à l'autre (voir secret-generated.yaml)
+              # — la faire varier rendrait la hiérarchie de CA déjà émise
+              # illisible.
+              sed -r "s/value: .*##SVAULTKEY##/value: ${SVAULT_KEY}/" \
+                  /etc/openxpki/config.d/system/crypto.yaml > /tmp/crypto.yaml
+              mv /tmp/crypto.yaml /etc/openxpki/config.d/system/crypto.yaml
+
+              cat > /etc/openxpki/config.d/system/database.yaml <<EOF
+              main:
+                  type: MariaDB2
+                  name: ${DB_NAME}
+                  host: ${DB_HOST}
+                  port: 3306
+                  user: ${DB_USER}
+                  passwd: ${DB_PASSWORD}
+              EOF
+
+              chmod -R a+rX /etc/openxpki
+          env:
+            - name: DB_NAME
+              value: {{ .Values.mariadb.database | quote }}
+            - name: DB_HOST
+              value: {{ $mariadbHost | quote }}
+            - name: DB_USER
+              value: {{ .Values.mariadb.user | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $generatedSecret }}
+                  key: mariadb-password
+            - name: SVAULT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $generatedSecret }}
+                  key: svault-key
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openxpki
+            - name: pkiadm-home
+              mountPath: /home/pkiadm
+
+      containers:
+        - name: server
+          image: "{{ .Values.openxpki.image.repository }}:{{ .Values.openxpki.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["/usr/bin/openxpkictl", "start", "server", "--nd"]
+          securityContext:
+            runAsUser: 100
+            runAsGroup: 102
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openxpki
+            - name: run-openxpkid
+              mountPath: /run/openxpkid
+            - name: var-log-server
+              mountPath: /var/log/openxpki
+            - name: www-download
+              mountPath: /var/www/download
+          readinessProbe:
+            exec:
+              command: ["/usr/bin/openxpkictl", "status", "server"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.openxpki.resources | nindent 12 }}
+
+        - name: client
+          image: "{{ .Values.openxpki.image.repository }}:{{ .Values.openxpki.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["/usr/bin/openxpkictl", "start", "client", "--nd"]
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 103
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openxpki
+            - name: run-openxpkid
+              mountPath: /run/openxpkid
+            - name: run-clientd
+              mountPath: /run/openxpki-clientd
+            - name: var-log-client
+              mountPath: /var/log/openxpki-client
+          readinessProbe:
+            exec:
+              command: ["/usr/bin/openxpkictl", "status", "client"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.openxpki.resources | nindent 12 }}
+
+        - name: web
+          image: "{{ .Values.openxpki.image.repository }}:{{ .Values.openxpki.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          # Le docker-compose de démonstration monte explicitement le vhost
+          # apache fourni par le dépôt de configuration
+          # (contrib/apache2-openxpki-site.conf, qui proxie /healthcheck et
+          # /rpc vers le client via socket Unix) par-dessus le vhost par
+          # défaut de l'image. En k8s, ce fichier vit dans le même volume
+          # /etc/openxpki que les autres conteneurs : on le recopie avant de
+          # démarrer apache plutôt que de le dupliquer dans un ConfigMap.
+          command:
+            - sh
+            - -c
+            - |
+              cp /etc/openxpki/contrib/apache2-openxpki-site.conf /etc/apache2/sites-enabled/openxpki.conf
+              # apache2ctl re-source /etc/apache2/envvars sans tenir compte
+              # de l'environnement du conteneur : imposer APACHE_RUN_GROUP
+              # via une variable d'environnement ne suffit pas, il faut
+              # modifier le fichier lui-même. Le docker-compose ajoute
+              # www-data aux groupes du conteneur client pour que le socket
+              # qu'il crée lui soit accessible ; en k8s ce socket hérite du
+              # groupe partagé (fsGroup 102), donc il est plus simple de
+              # faire tourner les workers Apache dans ce même groupe que de
+              # reproduire le mécanisme inverse.
+              sed -i 's/^export APACHE_RUN_GROUP=.*/export APACHE_RUN_GROUP=openxpki/' /etc/apache2/envvars
+              exec /usr/bin/start-webserver apache
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openxpki
+            - name: run-clientd
+              mountPath: /run/openxpki-clientd
+            - name: www-download
+              mountPath: /var/www/download
+              readOnly: true
+          ports:
+            - name: https
+              containerPort: 443
+            - name: http
+              containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /healthcheck/ping
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.openxpki.resources | nindent 12 }}
+
+        - name: bootstrap
+          image: "{{ .Values.openxpki.image.repository }}:{{ .Values.openxpki.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          env:
+            - name: HOME
+              value: /home/pkiadm
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              echo "attente du serveur OpenXPKI..."
+              for i in $(seq 1 120); do
+                  if [ -S /run/openxpkid/openxpkid.sock ] && oxi cli ping >/dev/null 2>&1; then
+                      break
+                  fi
+                  sleep 5
+              done
+              touch /home/pkiadm/.bootstrap-attempted
+
+              if oxi token list --realm democa --type certsign 2>/dev/null | grep -q 'active:'; then
+                  echo "hiérarchie de CA déjà initialisée, amorçage ignoré"
+              else
+                  echo "génération de la hiérarchie de CA de test"
+                  bash /etc/openxpki/contrib/sampleconfig.sh
+              fi
+
+              echo "amorçage terminé — ce conteneur reste actif pour inspection (kubectl logs)"
+              sleep infinity
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openxpki
+              readOnly: true
+            - name: run-openxpkid
+              mountPath: /run/openxpkid
+              readOnly: true
+            - name: pkiadm-home
+              mountPath: /home/pkiadm
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/home/pkiadm/.bootstrap-attempted"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 60
+          resources:
+            # Le CLI oxi (Perl) est plus gourmand en mémoire que sa
+            # simplicité apparente ne le suggère — 128Mi le fait tuer par
+            # l'OOM killer en plein amorçage.
+            requests: { cpu: 20m, memory: 128Mi }
+            limits: { cpu: 300m, memory: 512Mi }
+
+      volumes:
+        - name: config
+          emptyDir: {}
+        - name: run-openxpkid
+          emptyDir: {}
+        - name: run-clientd
+          emptyDir: {}
+        - name: www-download
+          emptyDir: {}
+        - name: var-log-server
+          emptyDir: {}
+        - name: var-log-client
+          emptyDir: {}
+        - name: pkiadm-home
+          emptyDir: {}
+        - name: overlay
+          configMap:
+            name: {{ $fullname }}-openxpki-overlay
+            items:
+              - key: tsa-signer-profile.yaml
+                path: config.d/realm.tpl/profile/tsa_signer.yaml
+              - key: rpc-server-tsa.yaml
+                path: config.d/realm.tpl/rpc/tsa.yaml
+              - key: rpc-client-tsa.yaml
+                path: client.d/service/rpc/tsa.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "openxpki") | nindent 4 }}
+spec:
+  selector:
+    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "openxpki") | nindent 4 }}
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+    - name: http
+      port: 80
+      targetPort: http

@@ -116,12 +116,26 @@ docker compose exec tsa tsa-server verify-audit
 Autres cibles : `make test`, `make lint`, `make audit`, `make logs`,
 `make down`, `make purge`.
 
+### Déployer sur Kubernetes
+
+La même pile est packagée en chart Helm, pour un déploiement piloté par
+ArgoCD ou un `helm install` direct :
+
+```bash
+helm install open-eidas deploy/helm/open-eidas --namespace open-eidas --create-namespace
+```
+
+Voir [deploy/helm/open-eidas/README.md](deploy/helm/open-eidas/README.md) et
+[deploy/argocd/application.yaml](deploy/argocd/application.yaml).
+
 ## Documentation
 
 - [Architecture technique](docs/ARCHITECTURE.md) — choix de conception,
   séquence de démarrage, écarts au référentiel, trajectoire de qualification.
 - [Référence de l'API](docs/API.md) — endpoints, codes d'erreur RFC 3161,
   variables de configuration.
+- [Chart Helm](deploy/helm/open-eidas/README.md) — déploiement Kubernetes /
+  ArgoCD.
 
 ## Structure du dépôt
 

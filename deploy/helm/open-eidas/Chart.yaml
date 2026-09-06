@@ -1,0 +1,21 @@
+apiVersion: v2
+name: open-eidas
+description: >-
+  Autorité d'horodatage RFC 3161 Open eIDAS, adossée à une PKI OpenXPKI et à
+  un module PKCS#11 — la même pile que le docker-compose de démonstration,
+  packagée pour un déploiement Kubernetes piloté par ArgoCD.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/open-eidas/open-eidas
+sources:
+  - https://github.com/open-eidas/open-eidas
+keywords:
+  - eidas
+  - rfc3161
+  - timestamping
+  - pki
+  - openxpki
+maintainers:
+  - name: Open eIDAS
+    url: https://github.com/open-eidas

@@ -1,0 +1,33 @@
+{{- if .Values.openxpki.ingress.enabled -}}
+{{- $fullname := include "open-eidas.fullname" . -}}
+{{- $name := printf "%s-openxpki" $fullname -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "openxpki") | nindent 4 }}
+  {{- with .Values.openxpki.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.openxpki.ingress.className }}
+  ingressClassName: {{ .Values.openxpki.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.openxpki.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: 80
+  {{- with .Values.openxpki.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
