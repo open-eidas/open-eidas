@@ -122,6 +122,7 @@ services:
       OPENEIDAS_TIME_MAX_OFFSET: 500ms
       OPENEIDAS_AUDIT_FILE: /var/lib/open-eidas/state/audit.log
       OPENEIDAS_AUDIT_SEAL_INTERVAL: 1h
+      OPENEIDAS_CROSS_TSA_URLS: ${OPENEIDAS_CROSS_TSA_URLS:-https://freetsa.org/tsr,http://timestamp.digicert.com}
       OPENEIDAS_CERT_FILE: /var/lib/open-eidas/state/tsu.pem
       OPENEIDAS_CHAIN_FILE: /var/lib/open-eidas/state/chain.pem
       OPENEIDAS_ENROLL_ENDPOINT: https://pki-web/rpc/tsa/RequestCertificate

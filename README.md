@@ -49,16 +49,16 @@ Ce dépôt héberge le prototype **fonctionnel et vérifiable** du premier servi
 - une **heure traçable jusqu'à UTC** : le service recoupe deux serveurs de
   laboratoires de métrologie (Observatoire de Paris, PTB) et **cesse d'émettre**
   dès que la dérive dépasse le seuil annoncé, comme l'exige ETSI EN 319 421 ;
-- un **journal d'audit chaîné par hachage** : chaque jeton émis, chaque refus
-  et chaque mesure de temps y sont consignés, et toute retouche du journal est
-  détectable — le service refuse même de démarrer sur un journal altéré ;
+- un **journal d'audit chaîné par hachage, contresigné par des TSA tierces
+  publiques** (FreeTSA.org, DigiCert) : chaque scellement se vérifie avec les
+  outils RFC 3161 standards, sans dépendre de la confiance en Open eIDAS ;
 - le tout orchestré en `docker compose`, démarrable en une commande.
 
 Ce n'est pas encore une TSA qualifiée : les écarts avec le référentiel eIDAS
 sont listés explicitement dans
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#8-écarts-assumés-du-prototype-vis-à-vis-dune-tsa-qualifiée)
-— HSM certifié, horodatage croisé du journal, redondance, audit d'un organisme
-accrédité. Le chiffrage de ce chemin est connu : **70 à 95 k€** pour
+— HSM certifié, réplication du journal hors site, redondance, audit d'un
+organisme accrédité. Le chiffrage de ce chemin est connu : **70 à 95 k€** pour
 l'infrastructure et l'audit initial.
 
 ## Démarrage
@@ -119,6 +119,7 @@ internal/tsa/        cœur RFC 3161 : validation, TSTInfo, CMS SignedData
 internal/hsm/        accès PKCS#11 à la clé de signature
 internal/timesource/ surveillance de la traçabilité de l'heure
 internal/audit/      journal d'audit chaîné par hachage
+internal/crosstsa/   contreseing du journal par des TSA tierces publiques
 internal/enroll/     client RPC d'enrôlement OpenXPKI
 internal/httpapi/    endpoints HTTP (RFC 3161 + façade JSON)
 deploy/tsa/          image du service

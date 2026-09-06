@@ -28,6 +28,7 @@ import (
 	"github.com/open-eidas/tsa/internal/audit"
 	"github.com/open-eidas/tsa/internal/certs"
 	"github.com/open-eidas/tsa/internal/config"
+	"github.com/open-eidas/tsa/internal/crosstsa"
 	"github.com/open-eidas/tsa/internal/enroll"
 	"github.com/open-eidas/tsa/internal/hsm"
 	"github.com/open-eidas/tsa/internal/httpapi"
@@ -158,8 +159,14 @@ func runServe(logger *slog.Logger) error {
 		return err
 	}
 
+	crossClient := crosstsa.New(crosstsa.Options{
+		URLs:    cfg.CrossTSAURLs,
+		Timeout: cfg.CrossTSATimeout,
+		Logger:  logger,
+	})
+
 	clock.Start(ctx)
-	startSealing(ctx, journal, authority, cfg.AuditSealInterval, logger)
+	startSealing(ctx, journal, authority, crossClient, cfg.AuditSealInterval, logger)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -305,7 +312,7 @@ func currentCertUsable(cfg *config.Config, signer crypto.Signer) (bool, string) 
 // horodate sa propre empreinte, ce qui date le contenu du journal à cet
 // instant. Un horodatage croisé par une TSA tierce reste à ajouter pour
 // qu'un auditeur n'ait pas à se fier au seul service.
-func startSealing(ctx context.Context, journal *audit.Log, authority *tsa.Authority, interval time.Duration, logger *slog.Logger) {
+func startSealing(ctx context.Context, journal *audit.Log, authority *tsa.Authority, cross *crosstsa.Client, interval time.Duration, logger *slog.Logger) {
 	if interval <= 0 {
 		logger.Warn("scellement périodique du journal d'audit désactivé")
 		return
@@ -336,6 +343,26 @@ func startSealing(ctx context.Context, journal *audit.Log, authority *tsa.Author
 			return
 		}
 		logger.Info("journal d'audit scellé", "enregistrements", seq, "tete", head[:16]+"…")
+
+		// Contreseing par des TSA tierces publiques : lève le caractère
+		// auto-référentiel du scellement ci-dessus, chaque attestation étant
+		// vérifiable indépendamment avec les outils RFC 3161 standards.
+		attestations := cross.Seal(ctx, digest, crypto.SHA256)
+		if len(attestations) == 0 {
+			return
+		}
+		data := map[string]any{"sealed_seq": seq, "sealed_head": head}
+		for i, att := range attestations {
+			data[fmt.Sprintf("attestation_%d_tsa", i)] = att.TSA
+			data[fmt.Sprintf("attestation_%d_gen_time", i)] = att.GenTime
+			data[fmt.Sprintf("attestation_%d_serial", i)] = att.Serial
+			data[fmt.Sprintf("attestation_%d_token", i)] = att.Token
+		}
+		if err := journal.Append(audit.EventCrossSealed, data); err != nil {
+			logger.Error("contreseing non consigné", "err", err)
+			return
+		}
+		logger.Info("journal d'audit contresigné par des TSA tierces", "attestations", len(attestations))
 	}
 
 	go func() {

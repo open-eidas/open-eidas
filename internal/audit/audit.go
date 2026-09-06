@@ -30,6 +30,7 @@ var GenesisHash = strings.Repeat("0", 64)
 const (
 	EventOpened             = "log.opened"
 	EventSealed             = "log.sealed"
+	EventCrossSealed        = "log.cross_sealed"
 	EventTimestampGranted   = "timestamp.granted"
 	EventTimestampRejected  = "timestamp.rejected"
 	EventTimeMeasurement    = "time.measurement"

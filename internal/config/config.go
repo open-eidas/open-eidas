@@ -31,6 +31,9 @@ type Config struct {
 	AuditFile         string
 	AuditSealInterval time.Duration
 
+	CrossTSAURLs    []string
+	CrossTSATimeout time.Duration
+
 	PolicyOID     asn1.ObjectIdentifier
 	Accuracy      time.Duration
 	SigningDigest crypto.Hash
@@ -72,6 +75,7 @@ func Load() (*Config, error) {
 		SubjectO:        env("OPENEIDAS_SUBJECT_O", "Open eIDAS"),
 		SubjectC:        env("OPENEIDAS_SUBJECT_C", "FR"),
 		TimeSources:     splitList(env("OPENEIDAS_TIME_SOURCES", "ntp.obspm.fr,ptbtime1.ptb.de")),
+		CrossTSAURLs:    splitList(env("OPENEIDAS_CROSS_TSA_URLS", "https://freetsa.org/tsr,http://timestamp.digicert.com")),
 	}
 
 	var err error
@@ -97,6 +101,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.AuditSealInterval, err = envDuration("OPENEIDAS_AUDIT_SEAL_INTERVAL", time.Hour); err != nil {
+		return nil, err
+	}
+	if cfg.CrossTSATimeout, err = envDuration("OPENEIDAS_CROSS_TSA_TIMEOUT", 15*time.Second); err != nil {
 		return nil, err
 	}
 	if cfg.TimeMinSources, err = envInt("OPENEIDAS_TIME_MIN_SOURCES", 2); err != nil {

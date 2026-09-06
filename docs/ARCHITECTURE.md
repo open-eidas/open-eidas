@@ -163,13 +163,36 @@ Deux propriétés rendent le dispositif exploitable :
 - **Un journal altéré empêche le démarrage.** La chaîne est vérifiée
   intégralement à l'ouverture.
 
-Enfin, la tête de chaîne est **scellée périodiquement**
+La tête de chaîne est **scellée périodiquement**
 (`OPENEIDAS_AUDIT_SEAL_INTERVAL`, une heure par défaut) : la TSU horodate sa
 propre empreinte de tête et le jeton obtenu est inscrit au journal, ce qui
-date son contenu. Ce scellement reste auto-référentiel — il prouve
-l'antériorité vis-à-vis d'un tiers seulement si l'on fait confiance à la TSU.
-Le franchir suppose un horodatage croisé par une autorité tierce et une
-réplication hors site, tous deux hors périmètre du prototype.
+date son contenu.
+
+### Contreseing par des TSA tierces
+
+Le scellement ci-dessus reste auto-référentiel : il ne prouve l'antériorité à
+un tiers que si l'on fait déjà confiance à la TSU elle-même. Le service
+soumet donc la même tête de chaîne à une ou plusieurs **TSA publiques
+indépendantes** (`OPENEIDAS_CROSS_TSA_URLS`, par défaut FreeTSA.org et
+DigiCert), via le protocole RFC 3161 standard, et consigne chaque attestation
+obtenue (`log.cross_sealed`) : émetteur, date, numéro de série et jeton
+complet en base64.
+
+Un auditeur n'a besoin de rien d'Open eIDAS pour vérifier une attestation : le
+certificat de la TSA tierce est public, et les outils standards suffisent —
+```bash
+openssl ts -query -digest <tête-de-chaîne> -sha256 -no_nonce -out head.tsq
+openssl ts -verify -in <jeton-décodé> -queryfile head.tsq \
+    -CAfile <CA-de-la-TSA-tierce> -untrusted <certificat-de-la-TSA-tierce>
+```
+— une réponse `Verification: OK` établit que la tête de chaîne, donc tout le
+journal qu'elle couvre par construction, existait à la date attestée par une
+autorité qui n'a aucun lien avec Open eIDAS.
+
+L'indisponibilité d'une TSA tierce est journalisée mais non bloquante : le
+scellement propre au service continue, et les autres TSA configurées
+prennent le relais. Reste hors périmètre du prototype : la réplication du
+journal hors site.
 
 ## 8. Écarts assumés du prototype vis-à-vis d'une TSA qualifiée
 
@@ -181,7 +204,7 @@ feuille de route de qualification :
 | Module cryptographique | SoftHSM2 (logiciel) | HSM certifié FIPS 140-2 niv. 3 / CC EAL4+ |
 | Source de temps | Surveillance NTP de deux sources UTC(k) avec suspension automatique de l'émission | Réception redondante et indépendante, calibration documentée, journal des mesures conservé et audité |
 | Enrôlement de la TSU | Anonyme et auto-approuvé | Authentification du demandeur et approbation par un opérateur RA |
-| Journalisation | Journal chaîné par hachage, scellé par la TSU elle-même | Horodatage croisé par une TSA tierce, réplication hors site, politique de conservation |
+| Journalisation | Journal chaîné par hachage, contresigné par des TSA tierces publiques | Réplication hors site, politique de conservation formalisée |
 | Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` | OID sous l'arc PEN de l'association, TSA Policy et Practice Statement publiés |
 | Extensions du certificat TSU | Points CRL/OCSP et OID de politique hérités de la configuration de démonstration amont (`pki.example.com`) | Points de distribution réellement publiés et politique de certification propre |
 | Continuité | Instance unique | Redondance active/active, plan de cessation d'activité, séquestre des clés |
@@ -200,8 +223,7 @@ expiré) et journalise un avertissement sur les écarts de profil non bloquants.
    déjà compatible.
 3. **Politique.** Publier la TSA Policy et la Practice Statement, obtenir un
    arc OID propre.
-4. **Exploitation.** Horodatage croisé du journal par une TSA tierce,
-   réplication hors site, supervision, deux instances derrière un
-   répartiteur, procédure de révocation testée.
+4. **Exploitation.** Réplication hors site du journal d'audit, supervision,
+   deux instances derrière un répartiteur, procédure de révocation testée.
 5. **Qualification.** Constituer le dossier ANSSI et engager l'audit d'un
    organisme accrédité.

@@ -198,6 +198,8 @@ Toutes les options sont pilotées par variables d'environnement.
 | `OPENEIDAS_MAX_REQUEST_BYTES` | `65536` | Taille maximale d'une requête |
 | `OPENEIDAS_AUDIT_FILE` | `/var/lib/open-eidas/audit.log` | Journal d'audit chaîné par hachage |
 | `OPENEIDAS_AUDIT_SEAL_INTERVAL` | `1h` | Période de scellement de la tête de chaîne (`0` désactive) |
+| `OPENEIDAS_CROSS_TSA_URLS` | `https://freetsa.org/tsr,http://timestamp.digicert.com` | TSA tierces contresignant chaque scellement, séparées par des virgules |
+| `OPENEIDAS_CROSS_TSA_TIMEOUT` | `15s` | Délai d'attente par TSA tierce |
 | `OPENEIDAS_TIME_POLICY` | `enforce` | `enforce` (refus de signer si l'heure n'est pas traçable), `monitor` ou `disabled` |
 | `OPENEIDAS_TIME_SOURCES` | `ntp.obspm.fr,ptbtime1.ptb.de` | Serveurs de temps de référence, séparés par des virgules |
 | `OPENEIDAS_TIME_MIN_SOURCES` | `2` | Nombre de sources devant répondre pour établir la traçabilité |
