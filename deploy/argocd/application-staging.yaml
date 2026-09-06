@@ -1,0 +1,53 @@
+# Déploiement public de démonstration piloté par ArgoCD :
+#   staging-api.open-eidas.eu (TSA) / staging-pki.open-eidas.eu (PKI).
+#
+# Préalables sur le cluster cible, non gérés par cette Application (voir
+# deploy/helm/open-eidas/values-staging.yaml et
+# deploy/cert-manager/cluster-issuer-letsencrypt.yaml) :
+#   - un ingress controller exposé publiquement (ex. ingress-nginx) ;
+#   - cert-manager avec le ClusterIssuer "letsencrypt-prod" ;
+#   - les enregistrements DNS staging-api / staging-pki pointant vers
+#     l'adresse publique de l'ingress controller.
+#
+#   kubectl apply -f deploy/argocd/application-staging.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: open-eidas-staging
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/open-eidas/open-eidas.git
+    targetRevision: main
+    path: deploy/helm/open-eidas
+    helm:
+      valueFiles:
+        - values-staging.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: open-eidas-staging
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # Voir deploy/argocd/application.yaml : le Secret généré par le chart
+    # dérive d'un motif `lookup` qu'ArgoCD ne doit pas tenter de corriger.
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  ignoreDifferences:
+    - group: ""
+      kind: Secret
+      name: open-eidas-generated
+      jsonPointers:
+        - /data

@@ -1,0 +1,44 @@
+# Surcouche de valeurs pour le déploiement public de démonstration sur
+# staging-api.open-eidas.eu (TSA) / staging-pki.open-eidas.eu (PKI).
+#
+# Préalables sur le cluster cible (non gérés par ce chart) :
+#   - un ingress controller exposé publiquement (ex. ingress-nginx) ;
+#   - cert-manager, avec un ClusterIssuer nommé "letsencrypt-prod" — voir
+#     deploy/cert-manager/cluster-issuer-letsencrypt.yaml ;
+#   - deux enregistrements DNS (A ou CNAME) pointant vers l'adresse publique
+#     de l'ingress controller :
+#       staging-api.open-eidas.eu  -> TSA (API RFC 3161)
+#       staging-pki.open-eidas.eu  -> OpenXPKI (interface, CRL, AIA)
+#
+# Utilisation :
+#   helm install open-eidas deploy/helm/open-eidas \
+#       --namespace open-eidas-staging --create-namespace \
+#       -f deploy/helm/open-eidas/values-staging.yaml
+# ou via deploy/argocd/application-staging.yaml.
+
+tsa:
+  ingress:
+    enabled: true
+    className: nginx
+    host: staging-api.open-eidas.eu
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    tls:
+      - hosts:
+          - staging-api.open-eidas.eu
+        secretName: open-eidas-tsa-tls
+
+openxpki:
+  # Gravée dans les points CRL/AIA du certificat TSU : doit correspondre à
+  # l'hôte ingress ci-dessous pour que la CRL soit vérifiable par des tiers.
+  publicURL: "https://staging-pki.open-eidas.eu"
+  ingress:
+    enabled: true
+    className: nginx
+    host: staging-pki.open-eidas.eu
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    tls:
+      - hosts:
+          - staging-pki.open-eidas.eu
+        secretName: open-eidas-pki-tls

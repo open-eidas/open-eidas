@@ -38,6 +38,47 @@ curl -s -X POST http://localhost:8318/api/v1/timestamp \
 
 Voir [deploy/argocd/application.yaml](../../argocd/application.yaml).
 
+## Déploiement public de démonstration (staging)
+
+`values-staging.yaml` expose la TSA sur `staging-api.open-eidas.eu` et la
+PKI (interface, CRL, AIA) sur `staging-pki.open-eidas.eu`, avec un
+certificat TLS public géré par cert-manager/Let's Encrypt.
+
+Préalables sur le cluster cible (à provisionner séparément, non gérés par ce
+chart) :
+
+1. Un ingress controller exposé publiquement, par exemple :
+   ```bash
+   helm install ingress-nginx ingress-nginx \
+       --repo https://kubernetes.github.io/ingress-nginx \
+       --namespace ingress-nginx --create-namespace
+   ```
+2. [cert-manager](https://cert-manager.io/docs/installation/), puis le
+   `ClusterIssuer` Let's Encrypt :
+   ```bash
+   kubectl apply -f deploy/cert-manager/cluster-issuer-letsencrypt.yaml
+   ```
+   (adapter l'e-mail de contact du `ClusterIssuer` avant application).
+3. Deux enregistrements DNS pointant vers l'adresse publique de l'ingress
+   controller (`kubectl -n ingress-nginx get svc ingress-nginx-controller`) :
+   `staging-api.open-eidas.eu` et `staging-pki.open-eidas.eu`. Le défi
+   HTTP-01 de Let's Encrypt exige que ces noms résolvent déjà vers l'ingress
+   avant la première émission de certificat.
+
+Puis, soit en `helm install` direct :
+
+```bash
+helm install open-eidas deploy/helm/open-eidas \
+    --namespace open-eidas-staging --create-namespace \
+    -f deploy/helm/open-eidas/values-staging.yaml
+```
+
+soit via ArgoCD : [deploy/argocd/application-staging.yaml](../../argocd/application-staging.yaml).
+
+La première émission de certificat TLS par cert-manager peut prendre
+quelques minutes après que l'ingress soit joignable ; suivre avec
+`kubectl -n open-eidas-staging get certificate,challenge`.
+
 ## Architecture du chart
 
 | Ressource | Rôle |
