@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/logo-horizontal-dark.svg">
+    <img alt="Open eIDAS" src="docs/logo/logo-horizontal.svg" width="420">
+  </picture>
+</p>
+
 # Open eIDAS — Les services de confiance eIDAS comme infrastructure ouverte
 
 **Démocratiser la confiance numérique eIDAS dans toute l'économie, de façon sûre, ouverte et sans rente.**

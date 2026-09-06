@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" rx="6" fill="#0B1120" />
+  <defs>
+    <mask id="mask-fav-dark">
+      <rect width="100%" height="100%" fill="#FFFFFF" />
+      <polygon points="19.04,19.55 32.98,5.61 29.62,2.25 15.68,16.19" fill="#000000" />
+    </mask>
+  </defs>
+  <!-- Circular Seal Ring -->
+  <path d="
+    M 16.00 2.40
+    A 13.60 13.60 0 1 0 16.00 29.60
+    A 13.60 13.60 0 1 0 16.00 2.40
+    M 16.00 8.52
+    A 7.48 7.48 0 1 1 16.00 23.48
+    A 7.48 7.48 0 1 1 16.00 8.52
+    Z"
+    fill="#F8FAFC"
+    fill-rule="evenodd"
+    mask="url(#mask-fav-dark)" />
+  <!-- EU Stars -->
+    <polygon points="9.51,23.03 9.83,23.87 10.72,23.91 10.03,24.47 10.26,25.34 9.51,24.85 8.76,25.34 8.99,24.47 8.30,23.91 9.19,23.87" fill="#FBBF24" />
+    <polygon points="6.87,20.00 7.19,20.83 8.08,20.88 7.39,21.44 7.62,22.30 6.87,21.81 6.12,22.30 6.35,21.44 5.66,20.88 6.55,20.83" fill="#FBBF24" />
+    <polygon points="5.56,16.19 5.88,17.03 6.78,17.07 6.08,17.63 6.31,18.50 5.56,18.01 4.81,18.50 5.05,17.63 4.35,17.07 5.24,17.03" fill="#FBBF24" />
+  <!-- Emerging Checkmark -->
+  <path d="M 11.75 15.66 L 15.66 19.57 L 27.05 8.18"
+        fill="none"
+        stroke="#38BDF8"
+        stroke-width="3.40"
+        stroke-linecap="round"
+        stroke-linejoin="round" />
+</svg>

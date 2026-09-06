@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <rect width="200" height="200" rx="24" fill="#0B1120" />
+  <defs>
+    <mask id="mask-icon-dark">
+      <rect width="100%" height="100%" fill="#FFFFFF" />
+      <polygon points="116.49,119.49 198.49,37.49 181.51,20.51 99.51,102.51" fill="#000000" />
+    </mask>
+  </defs>
+  <!-- Circular Seal Ring -->
+  <path d="
+    M 100.00 20.00
+    A 80.00 80.00 0 1 0 100.00 180.00
+    A 80.00 80.00 0 1 0 100.00 20.00
+    M 100.00 56.00
+    A 44.00 44.00 0 1 1 100.00 144.00
+    A 44.00 44.00 0 1 1 100.00 56.00
+    Z"
+    fill="#F8FAFC"
+    fill-rule="evenodd"
+    mask="url(#mask-icon-dark)" />
+  <!-- EU Stars -->
+    <polygon points="61.83,141.36 63.71,146.27 68.96,146.54 64.87,149.85 66.24,154.92 61.83,152.06 57.42,154.92 58.79,149.85 54.70,146.54 59.95,146.27" fill="#FBBF24" />
+    <polygon points="46.31,123.50 48.19,128.41 53.44,128.68 49.35,131.99 50.71,137.07 46.31,134.20 41.90,137.07 43.26,131.99 39.17,128.68 44.43,128.41" fill="#FBBF24" />
+    <polygon points="38.60,101.13 40.48,106.04 45.74,106.31 41.65,109.62 43.01,114.70 38.60,111.83 34.19,114.70 35.56,109.62 31.47,106.31 36.72,106.04" fill="#FBBF24" />
+  <!-- Emerging Checkmark -->
+  <path d="M 75.00 98.00 L 98.00 121.00 L 165.00 54.00"
+        fill="none"
+        stroke="#38BDF8"
+        stroke-width="16.00"
+        stroke-linecap="round"
+        stroke-linejoin="round" />
+</svg>

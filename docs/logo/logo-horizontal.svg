@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 120" width="540" height="120">
+  <defs>
+    <mask id="mask-horiz-light">
+      <rect width="100%" height="100%" fill="#FFFFFF" />
+      <polygon points="74.56,71.30 122.12,23.74 112.28,13.90 64.72,61.46" fill="#000000" />
+    </mask>
+  </defs>
+  <!-- Circular Seal Ring -->
+  <path d="
+    M 65.00 13.60
+    A 46.40 46.40 0 1 0 65.00 106.40
+    A 46.40 46.40 0 1 0 65.00 13.60
+    M 65.00 34.48
+    A 25.52 25.52 0 1 1 65.00 85.52
+    A 25.52 25.52 0 1 1 65.00 34.48
+    Z"
+    fill="#0F2042"
+    fill-rule="evenodd"
+    mask="url(#mask-horiz-light)" />
+  <!-- EU Stars -->
+    <polygon points="42.86,83.99 43.95,86.84 47.00,86.99 44.63,88.91 45.42,91.86 42.86,90.19 40.30,91.86 41.10,88.91 38.72,86.99 41.77,86.84" fill="#FFCC00" />
+    <polygon points="33.86,73.63 34.95,76.48 37.99,76.64 35.62,78.55 36.41,81.50 33.86,79.84 31.30,81.50 32.09,78.55 29.72,76.64 32.77,76.48" fill="#FFCC00" />
+    <polygon points="29.39,60.65 30.48,63.50 33.53,63.66 31.16,65.58 31.95,68.52 29.39,66.86 26.83,68.52 27.62,65.58 25.25,63.66 28.30,63.50" fill="#FFCC00" />
+  <!-- Emerging Checkmark -->
+  <path d="M 50.50 58.84 L 63.84 72.18 L 102.70 33.32"
+        fill="none"
+        stroke="#003399"
+        stroke-width="9.28"
+        stroke-linecap="round"
+        stroke-linejoin="round" />
+  <g transform="translate(135, 0)">
+    <text x="0" y="68" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="44" font-weight="700" letter-spacing="-0.5">
+      <tspan fill="#003399">Open </tspan><tspan fill="#0F2042">eIDAS</tspan>
+    </text>
+    <text x="2" y="92" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#64748B" letter-spacing="3.5">
+      EUROPEAN TRUST SERVICES
+    </text>
+  </g>
+</svg>

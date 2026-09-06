@@ -5,3 +5,6 @@
 
 # Artefacts de build
 /bin/
+
+# Outils locaux
+/.claude/
