@@ -66,3 +66,20 @@ PIN, clé du coffre de données) et stables d'un `helm upgrade` à l'autre.
 {{- define "open-eidas.generatedSecretName" -}}
 {{- printf "%s-generated" (include "open-eidas.fullname" .) -}}
 {{- end -}}
+
+{{/*
+Adresse publique à laquelle un tiers vérifiant un certificat TSU ira
+chercher la CRL et le certificat de la CA émettrice (points CRL/AIA). Priorité
+à une valeur explicite (values.openxpki.publicURL), puis à l'hôte d'ingress
+s'il est activé ; à défaut, le nom DNS interne au cluster — non résoluble de
+l'extérieur, mais qui garde le chart utilisable sans configuration.
+*/}}
+{{- define "open-eidas.pkiPublicURL" -}}
+{{- if .Values.openxpki.publicURL -}}
+{{- .Values.openxpki.publicURL -}}
+{{- else if .Values.openxpki.ingress.enabled -}}
+{{- printf "https://%s" .Values.openxpki.ingress.host -}}
+{{- else -}}
+{{- printf "https://%s-openxpki" (include "open-eidas.fullname" .) -}}
+{{- end -}}
+{{- end -}}

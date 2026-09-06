@@ -81,6 +81,7 @@ Voir `values.yaml` pour la liste complète. Les plus utiles :
 | `tsa.time.policy` | `enforce`, `monitor` ou `disabled` — passer à `monitor` si le cluster n'a pas de sortie UDP/123 |
 | `tsa.ingress.enabled` / `tsa.ingress.host` | Exposition HTTP du service |
 | `tsa.pin` / `auditReplica.password` | Valeurs explicites plutôt que générées aléatoirement |
+| `openxpki.publicURL` | Adresse publique gravée dans les points CRL/AIA du certificat TSU — à fixer si le certificat sera vérifié par des tiers hors du cluster |
 | `mariadb.persistence.size`, `tsa.persistence.*.size`, `auditReplica.persistence.size` | Tailles des volumes persistants |
 
 ## Développement local (kind)

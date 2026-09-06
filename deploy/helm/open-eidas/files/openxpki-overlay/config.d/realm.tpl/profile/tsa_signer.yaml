@@ -33,3 +33,32 @@ extensions:
     basic_constraints:
         critical: 1
         ca: 0
+
+    # Point de distribution de CRL, publié par OpenXPKI lui-même sous
+    # /download (voir apache2-openxpki-site.conf) et vérifié fonctionnel :
+    # ##PKIPUBLICURL## est substitué au démarrage par la même mécanique que
+    # le secret HMAC ou la clé du coffre de données — voir
+    # scripts/bootstrap.sh et le chart Helm.
+    #
+    crl_distribution_points:
+        critical: 0
+        uri:
+            - "##PKIPUBLICURL##/download/[% ISSUER.CN.0.replace('[^\\w-]','_') %].crl"
+
+    # Sans ce bloc, OpenXPKI hérite silencieusement de
+    # config.d/realm.tpl/profile/default.yaml, qui pointe ca_issuers et ocsp
+    # vers pki.example.com/ocsp.example.com (voir
+    # OpenXPKI::Crypt::Profile::_ext_basepath : un profil qui ne déclare pas
+    # du tout la clé extensions.<nom> hérite intégralement du profil par
+    # défaut). Déclarer la clé ici, même vide, masque cet héritage et
+    # supprime l'extension : la hiérarchie de CA jetable de
+    # contrib/sampleconfig.sh importe les clés directement (oxi token add)
+    # sans passer par le workflow d'émission normal, qui est ce qui
+    # déclencherait la publication du certificat de CA sur disque (voir
+    # publishing.yaml, section cacert) — et ce prototype ne fait tourner
+    # aucun répondeur OCSP. Publier des URL qui répondraient 404 serait pire
+    # que n'avoir aucune extension.
+    authority_info_access:
+        critical: 0
+        ca_issuers: ~
+        ocsp: ~

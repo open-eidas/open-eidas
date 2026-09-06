@@ -138,6 +138,14 @@ spec:
               sed -i "s|##ENROLLHMACKEY##|${ENROLL_HMAC_KEY}|" \
                   /etc/openxpki/config.d/realm.tpl/rpc/tsa.yaml
 
+              # Adresse à laquelle qui vérifie un certificat TSU ira chercher
+              # la CRL et le certificat de la CA émettrice (/download, servi
+              # statiquement par OpenXPKI). Sans ingress configuré, ce nom
+              # DNS interne au cluster n'est pas résoluble de l'extérieur —
+              # voir values.openxpki.publicURL pour le fixer explicitement.
+              sed -i "s|##PKIPUBLICURL##|${PKI_PUBLIC_URL}|g" \
+                  /etc/openxpki/config.d/realm.tpl/profile/tsa_signer.yaml
+
               cat > /etc/openxpki/config.d/system/database.yaml <<EOF
               main:
                   type: MariaDB2
@@ -171,6 +179,8 @@ spec:
                 secretKeyRef:
                   name: {{ $generatedSecret }}
                   key: enroll-hmac-key
+            - name: PKI_PUBLIC_URL
+              value: {{ include "open-eidas.pkiPublicURL" . | quote }}
           volumeMounts:
             - name: config
               mountPath: /etc/openxpki

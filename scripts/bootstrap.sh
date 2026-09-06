@@ -62,6 +62,15 @@ export OPENEIDAS_ENROLL_HMAC_KEY="$ENROLL_HMAC_KEY"
 sed -i "s|##ENROLLHMACKEY##|${ENROLL_HMAC_KEY}|" \
     "$CONFIG_DIR/config.d/realm.tpl/rpc/tsa.yaml"
 
+log "Adresse publique de la PKI (points CRL/AIA du certificat TSU)"
+# /download est servi statiquement par OpenXPKI lui-même (voir
+# apache2-openxpki-site.conf) : cette URL fonctionne réellement, à condition
+# que la PKI soit réellement joignable à cette adresse par qui vérifie le
+# certificat. En local, seul https://localhost:8443 l'est.
+PKI_PUBLIC_URL="${OPENEIDAS_PKI_PUBLIC_URL:-https://localhost:8443}"
+sed -i "s|##PKIPUBLICURL##|${PKI_PUBLIC_URL}|g" \
+    "$CONFIG_DIR/config.d/realm.tpl/profile/tsa_signer.yaml"
+
 log "Démarrage de la PKI"
 docker compose up -d --wait pki-web
 

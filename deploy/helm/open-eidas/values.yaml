@@ -66,6 +66,12 @@ openxpki:
     repository: whiterabbitsecurity/openxpki3
     tag: "3.34"
   configRef: community
+  # Adresse publique de la PKI, gravée dans les points de distribution de CRL
+  # et d'accès à la CA émettrice (CDP/AIA) du certificat TSU. Vide = déduite
+  # de l'ingress si activé, sinon du nom DNS interne au cluster (non
+  # résoluble de l'extérieur — à fixer explicitement pour tout déploiement
+  # dont le certificat sera vérifié par des tiers).
+  publicURL: ""
   service:
     webPort: 8443
   resources:

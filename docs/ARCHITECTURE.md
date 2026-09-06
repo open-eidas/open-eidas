@@ -223,7 +223,7 @@ feuille de route de qualification :
 | Enrôlement de la TSU | Authentifié par secret HMAC partagé, auto-approuvé | Approbation par un opérateur RA en plus de l'authentification |
 | Journalisation | Journal chaîné par hachage, contresigné par des TSA tierces publiques et répliqué hors site à chaque scellement | Politique de conservation formalisée, réplication multi-région |
 | Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` | OID sous l'arc PEN de l'association, TSA Policy et Practice Statement publiés |
-| Extensions du certificat TSU | Points CRL/OCSP et OID de politique hérités de la configuration de démonstration amont (`pki.example.com`) | Points de distribution réellement publiés et politique de certification propre |
+| Extensions du certificat TSU | Point de distribution de CRL réellement publié et vérifié (`/download`, servi par OpenXPKI) ; ni AIA ni OCSP, faute de publication du certificat de CA et de répondeur OCSP dans ce bootstrap de démonstration | Publication du certificat de CA, répondeur OCSP exploité, OID de politique de certification propre |
 | Continuité | Instance unique | Redondance active/active, plan de cessation d'activité, séquestre des clés |
 | Audit | Aucun | Évaluation par un organisme accrédité (LSTI, Apave), inscription à la liste de confiance |
 
