@@ -1,0 +1,7 @@
+# Configuration OpenXPKI matérialisée localement par scripts/bootstrap.sh
+/deploy/openxpki/openxpki-config/
+/deploy/openxpki/local/
+/deploy/openxpki/.sampleconfig-done
+
+# Artefacts de build
+/bin/

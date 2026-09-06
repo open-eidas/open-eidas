@@ -1,0 +1,35 @@
+# Profil de certificat de l'unité d'horodatage (TSU) d'Open eIDAS.
+#
+# Le profil suit ETSI EN 319 422 :
+#   - extendedKeyUsage réduit à id-kp-timeStamping et marqué critique ;
+#   - keyUsage limité à la signature (digitalSignature / nonRepudiation) ;
+#   - entité finale stricte (pas d'autorité de certification).
+
+label: Open eIDAS Time-Stamping Unit
+
+style:
+    enroll:
+        subject:
+            dn: CN=[% CN.0 %],OU=Time Stamping Authority,O=Open eIDAS,C=FR
+
+        metadata:
+            entity: "[% cert_subject_parts.CN.0 FILTER lower %]"
+
+validity:
+    notafter: "+01"
+
+digest: sha256
+
+extensions:
+    key_usage:
+        critical: 1
+        digital_signature: 1
+        non_repudiation: 1
+
+    extended_key_usage:
+        critical: 1
+        time_stamping: 1
+
+    basic_constraints:
+        critical: 1
+        ca: 0

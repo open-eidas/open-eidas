@@ -1,0 +1,43 @@
+# Politique d'enrôlement de l'endpoint RPC « tsa ».
+#
+# ATTENTION — configuration de démonstration : l'enrôlement est anonyme et
+# auto-approuvé pour que la pile démarre sans intervention humaine. Une
+# instance destinée à la qualification doit exiger une authentification du
+# demandeur (HMAC, mot de passe de défi ou certificat client) et une
+# approbation par un opérateur RA.
+
+label: Open eIDAS TSU Enrollment
+
+renewal_period: "000060"
+
+policy:
+    # Aucune authentification du demandeur (démonstration uniquement).
+    allow_anon_enroll: 1
+    allow_man_authen: 0
+
+    # Émission immédiate, sans point d'approbation.
+    allow_man_approv: 0
+    allow_eligibility_recheck: 0
+    approval_points: 0
+
+    # Une seule TSU active par sujet ; l'ancien certificat est révoqué lors
+    # d'un renouvellement afin de garder une chaîne de confiance lisible.
+    max_active_certs: 1
+    auto_revoke_existing_certs: 1
+    allow_replace: 1
+
+    # Le service a besoin de la chaîne complète (CA émettrice + racine) pour
+    # la joindre au jeton et la publier sur /api/v1/certificate.
+    export_certificate: fullchain
+
+profile:
+    cert_profile: tsa_signer
+    cert_subject_style: enroll
+
+eligible:
+    initial:
+        value: 1
+    renewal:
+        value: 1
+    onbehalf:
+        value: 1
