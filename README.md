@@ -1,18 +1,25 @@
-# Open eIDAS — l'horodatage qualifié comme infrastructure ouverte
+# Open eIDAS — Les services de confiance eIDAS comme infrastructure ouverte
 
-**Une autorité d'horodatage RFC 3161 libre, automatisable et sans rente.**
+**Démocratiser la confiance numérique eIDAS dans toute l'économie, de façon sûre, ouverte et sans rente.**
 
-La dématérialisation est devenue obligatoire en Europe : facturation
-électronique, archivage à valeur probante, signature de documents. Chacun de
-ces usages a besoin d'une preuve d'antériorité opposable — un jeton
-d'horodatage qualifié. Aujourd'hui, cette brique élémentaire se vend au jeton,
-derrière des contrats annuels, des portails propriétaires et des délais
-d'intégration qui se comptent en semaines. Le même verrou existait pour TLS
-avant Let's Encrypt.
+Le règlement européen eIDAS a posé le cadre juridique de la confiance numérique : horodatage qualifié, signature et cachet électroniques, archivage à valeur probante, envoi recommandé et portefeuilles d'identité numérique (eIDAS 2.0 / EUDI).
 
-Open eIDAS applique le modèle de l'ISRG à l'horodatage : une association à but
-non lucratif, une infrastructure auditable, une API publique, un coût
-d'intégration nul.
+Pourtant, dans la pratique économique, ces briques indispensables restent captives d'un modèle de rente oligopolistique :
+- **Facturation au jeton ou à l'acte**, transformant des obligations légales (facturation électronique obligatoire B2B, archivage légal, contractualisation dématérialisée) en péage privé récurrent ;
+- **Friction technique et contractuelle majeure** : portails fermés, SDK propriétaires, délais d'intégration qui se comptent en semaines ;
+- **Fracture pour l'économie réelle** : là où de grands groupes négocient des volumes, les TPE/PME, éditeurs indépendants et administrations de proximité sont freinés ou contraints de bricoler sans garanties de conformité.
+
+Le même verrou existait pour le chiffrement web avant Let's Encrypt.
+
+**Open eIDAS applique le modèle de l'ISRG à l'écosystème eIDAS** : une gouvernance d'intérêt général à but non lucratif, une infrastructure cryptographique souveraine et auditable, des API ouvertes et standardisées, et un coût d'accès nul ou à prix coûtant. Notre mission est de démocratiser eIDAS dans l'économie de manière rigoureuse et pérenne — sans compromis sur la sécurité.
+
+---
+
+## Notre premier service : l'horodatage qualifié (RFC 3161)
+
+Pour bâtir un édifice de confiance, il faut d'abord maîtriser le temps. L'**horodatage qualifié** est le premier service développé par Open eIDAS : il constitue le socle d'antériorité et d'intégrité temporelle universel, nécessaire à la signature électronique (validité à long terme LTA), au cachet d'entreprise, à la facturation électronique et à l'archivage à valeur probante.
+
+Là où le marché impose des barrières contractuelles, l'intégration Open eIDAS est immédiate :
 
 ```bash
 DIGEST=$(sha256sum facture.pdf | cut -d' ' -f1)
@@ -22,14 +29,15 @@ curl -s -X POST http://localhost:8318/api/v1/timestamp \
      -d "{\"hash\":\"$DIGEST\"}"
 ```
 
-Voilà l'intégration complète. Pas de compte, pas de SDK, pas de bon de
-commande.
+Voilà l'intégration complète. Pas de compte, pas de SDK propriétaire, pas de bon de commande.
+
+La feuille de route d'Open eIDAS étendra progressivement ce socle aux autres services de confiance essentiels : **cachet électronique de personne morale (seal)** automatisable, **validation de signatures qualifiées**, et passerelles d'attestation conformes à eIDAS 2.
 
 ---
 
 ## Ce que fait ce dépôt
 
-Un prototype **fonctionnel et vérifiable** de la pile technique cible :
+Ce dépôt héberge le prototype **fonctionnel et vérifiable** du premier service Open eIDAS — l'autorité d'horodatage (TSA) :
 
 - un service d'horodatage **RFC 3161** écrit en Go, dont la clé de signature
   ne quitte jamais un module cryptographique (**PKCS#11**) ;
@@ -41,12 +49,15 @@ Un prototype **fonctionnel et vérifiable** de la pile technique cible :
 - une **heure traçable jusqu'à UTC** : le service recoupe deux serveurs de
   laboratoires de métrologie (Observatoire de Paris, PTB) et **cesse d'émettre**
   dès que la dérive dépasse le seuil annoncé, comme l'exige ETSI EN 319 421 ;
+- un **journal d'audit chaîné par hachage** : chaque jeton émis, chaque refus
+  et chaque mesure de temps y sont consignés, et toute retouche du journal est
+  détectable — le service refuse même de démarrer sur un journal altéré ;
 - le tout orchestré en `docker compose`, démarrable en une commande.
 
 Ce n'est pas encore une TSA qualifiée : les écarts avec le référentiel eIDAS
 sont listés explicitement dans
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#7-écarts-assumés-du-prototype-vis-à-vis-dune-tsa-qualifiée)
-— HSM certifié, journal d'audit inaltérable, redondance, audit d'un organisme
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#8-écarts-assumés-du-prototype-vis-à-vis-dune-tsa-qualifiée)
+— HSM certifié, horodatage croisé du journal, redondance, audit d'un organisme
 accrédité. Le chiffrage de ce chemin est connu : **70 à 95 k€** pour
 l'infrastructure et l'audit initial.
 
@@ -84,8 +95,14 @@ openssl ts -verify -in facture.tsr -queryfile facture.tsq -CAfile ca.pem
 L'interface d'administration de la PKI est disponible sur
 <https://localhost:8443/webui/> (certificat auto-signé).
 
-Autres cibles : `make test`, `make lint`, `make logs`, `make down`,
-`make purge`.
+### Relire le journal d'audit
+
+```bash
+docker compose exec tsa tsa-server verify-audit
+```
+
+Autres cibles : `make test`, `make lint`, `make audit`, `make logs`,
+`make down`, `make purge`.
 
 ## Documentation
 
@@ -101,6 +118,7 @@ cmd/tsa-server/      point d'entrée : sous-commandes enroll et serve
 internal/tsa/        cœur RFC 3161 : validation, TSTInfo, CMS SignedData
 internal/hsm/        accès PKCS#11 à la clé de signature
 internal/timesource/ surveillance de la traçabilité de l'heure
+internal/audit/      journal d'audit chaîné par hachage
 internal/enroll/     client RPC d'enrôlement OpenXPKI
 internal/httpapi/    endpoints HTTP (RFC 3161 + façade JSON)
 deploy/tsa/          image du service
@@ -108,18 +126,20 @@ deploy/openxpki/     overlay de configuration de la PKI (profil TSU, RPC)
 scripts/             amorçage et démonstration
 ```
 
-## Modèle
+## Modèle & Sûreté
 
-Association à but non lucratif, financée par mécénat d'acteurs de la
-souveraineté numérique. Service gratuit ou à prix coûtant, sans quota
-commercial. Code, politique d'horodatage et rapports d'audit publics.
+- **Gouvernance non lucrative d'intérêt général** : association financée par le mécénat et le soutien d'acteurs de la souveraineté numérique. Service gratuit ou à prix coûtant, sans quota commercial ni rente monopolistique.
+- **Sûreté intransigeante** : aucun compromis sur la sécurité. L'architecture est conçue pour satisfaire rigoureusement les normes ETSI (EN 319 421, EN 319 422, etc.) et les exigences de qualification eIDAS / ANSSI.
+- **Transparence intégrale** : code source libre, politiques de service publiques, traçabilité métrologique documentée et rapports d'audit tiers publiés.
 
 ## Contribuer
 
 Les contributions sont bienvenues, en particulier sur l'intégration de HSM
-certifiés, le journal d'audit inaltérable, la redondance du service et la
-conformité ETSI EN 319 421 / 319 422.
+certifiés, le journal d'audit inaltérable, la redondance du service, la
+conformité ETSI EN 319 421 / 319 422 et le développement des futurs services de confiance.
 
 ## Licence
 
-Apache 2.0 — voir [LICENSE](LICENSE).
+GNU Affero General Public License v3.0 (AGPLv3) — voir [LICENSE](LICENSE).
+
+L'AGPL garantit que toute amélioration apportée à cette infrastructure de confiance partagée reste un bien commun ouvert à tous, y compris lorsqu'elle est opérée en tant que service réseau.

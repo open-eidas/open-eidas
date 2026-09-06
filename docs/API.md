@@ -164,6 +164,20 @@ La vérification atteste que l'empreinte soumise existait avant la date
 
 ---
 
+## Vérification du journal d'audit
+
+Le journal est relisible indépendamment du service :
+
+```bash
+tsa-server verify-audit /var/lib/open-eidas/audit.log
+```
+
+La commande recalcule toute la chaîne de hachage et échoue en nommant
+l'enregistrement fautif si une ligne a été modifiée, supprimée ou intercalée.
+Voir [la section journal d'audit](ARCHITECTURE.md#7-journal-daudit-inaltérable).
+
+---
+
 ## Configuration du service
 
 Toutes les options sont pilotées par variables d'environnement.
@@ -182,6 +196,8 @@ Toutes les options sont pilotées par variables d'environnement.
 | `OPENEIDAS_ACCURACY` | `1s` | Précision annoncée dans le `TSTInfo` |
 | `OPENEIDAS_SIGNING_DIGEST` | `sha256` | Empreinte utilisée pour signer le jeton |
 | `OPENEIDAS_MAX_REQUEST_BYTES` | `65536` | Taille maximale d'une requête |
+| `OPENEIDAS_AUDIT_FILE` | `/var/lib/open-eidas/audit.log` | Journal d'audit chaîné par hachage |
+| `OPENEIDAS_AUDIT_SEAL_INTERVAL` | `1h` | Période de scellement de la tête de chaîne (`0` désactive) |
 | `OPENEIDAS_TIME_POLICY` | `enforce` | `enforce` (refus de signer si l'heure n'est pas traçable), `monitor` ou `disabled` |
 | `OPENEIDAS_TIME_SOURCES` | `ntp.obspm.fr,ptbtime1.ptb.de` | Serveurs de temps de référence, séparés par des virgules |
 | `OPENEIDAS_TIME_MIN_SOURCES` | `2` | Nombre de sources devant répondre pour établir la traçabilité |

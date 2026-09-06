@@ -6,7 +6,7 @@ Démontrer qu'une autorité d'horodatage (TSA) conforme à la RFC 3161, adossée
 une PKI et à un module cryptographique, tient dans une pile reproductible que
 l'on démarre en une commande. Le prototype vise la crédibilité technique
 auprès de financeurs, pas encore la qualification eIDAS : les écarts au
-référentiel sont listés en section 7.
+référentiel sont listés en section 8.
 
 ## 2. Vue d'ensemble
 
@@ -134,7 +134,44 @@ Deux politiques dégradées existent pour le développement : `monitor`
 journalise l'écart sans bloquer l'émission, `disabled` désactive la
 surveillance. Aucune des deux n'est admissible en production.
 
-## 7. Écarts assumés du prototype vis-à-vis d'une TSA qualifiée
+## 7. Journal d'audit inaltérable
+
+Un auditeur ne vérifie pas seulement qu'un jeton est correct : il vérifie que
+le service *était sous contrôle* au moment où il l'a émis, et que la trace de
+cet instant n'a pas été retouchée depuis.
+
+Le service tient donc un journal en JSON Lines dont chaque enregistrement
+porte l'empreinte SHA-256 du précédent. Modifier une ligne, en supprimer une
+ou en intercaler une rompt la chaîne, et la rupture est détectable par
+quiconque relit le fichier — y compris sans accès au service :
+
+```bash
+docker compose exec tsa tsa-server verify-audit
+```
+
+Y sont consignés l'ouverture du journal, chaque jeton émis (numéro de série,
+`genTime`, politique, empreinte soumise, présence d'un nonce), chaque refus
+avec son `failureInfo`, chaque mesure de temps avec l'écart par source, et
+chaque enrôlement de certificat. Le jeton émis est **relu avant d'être
+consigné** : le journal enregistre ce que contient réellement le jeton, pas ce
+que le service croit y avoir mis.
+
+Deux propriétés rendent le dispositif exploitable :
+
+- **Une écriture ratée annule l'émission.** Si le journal ne peut pas être
+  écrit, la requête échoue. Un jeton non tracé ne sort jamais du service.
+- **Un journal altéré empêche le démarrage.** La chaîne est vérifiée
+  intégralement à l'ouverture.
+
+Enfin, la tête de chaîne est **scellée périodiquement**
+(`OPENEIDAS_AUDIT_SEAL_INTERVAL`, une heure par défaut) : la TSU horodate sa
+propre empreinte de tête et le jeton obtenu est inscrit au journal, ce qui
+date son contenu. Ce scellement reste auto-référentiel — il prouve
+l'antériorité vis-à-vis d'un tiers seulement si l'on fait confiance à la TSU.
+Le franchir suppose un horodatage croisé par une autorité tierce et une
+réplication hors site, tous deux hors périmètre du prototype.
+
+## 8. Écarts assumés du prototype vis-à-vis d'une TSA qualifiée
 
 Ces points sont volontairement hors périmètre du MVP et constituent la
 feuille de route de qualification :
@@ -144,7 +181,7 @@ feuille de route de qualification :
 | Module cryptographique | SoftHSM2 (logiciel) | HSM certifié FIPS 140-2 niv. 3 / CC EAL4+ |
 | Source de temps | Surveillance NTP de deux sources UTC(k) avec suspension automatique de l'émission | Réception redondante et indépendante, calibration documentée, journal des mesures conservé et audité |
 | Enrôlement de la TSU | Anonyme et auto-approuvé | Authentification du demandeur et approbation par un opérateur RA |
-| Journalisation | Journaux applicatifs | Journal d'audit inaltérable et horodaté, conservé selon la politique |
+| Journalisation | Journal chaîné par hachage, scellé par la TSU elle-même | Horodatage croisé par une TSA tierce, réplication hors site, politique de conservation |
 | Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` | OID sous l'arc PEN de l'association, TSA Policy et Practice Statement publiés |
 | Extensions du certificat TSU | Points CRL/OCSP et OID de politique hérités de la configuration de démonstration amont (`pki.example.com`) | Points de distribution réellement publiés et politique de certification propre |
 | Continuité | Instance unique | Redondance active/active, plan de cessation d'activité, séquestre des clés |
@@ -154,7 +191,7 @@ Le prototype refuse de démarrer sur les écarts qui rendraient les jetons
 invalides (clé et certificat désaccordés, usage étendu absent, certificat
 expiré) et journalise un avertissement sur les écarts de profil non bloquants.
 
-## 8. Trajectoire vers la production
+## 9. Trajectoire vers la production
 
 1. **Temps.** Passer d'une synchronisation réseau à une réception redondante
    et indépendante, conserver le journal des mesures et faire calibrer la
@@ -163,7 +200,8 @@ expiré) et journalise un avertissement sur les écarts de profil non bloquants.
    déjà compatible.
 3. **Politique.** Publier la TSA Policy et la Practice Statement, obtenir un
    arc OID propre.
-4. **Exploitation.** Journal d'audit chaîné, supervision, deux instances
-   derrière un répartiteur, procédure de révocation testée.
+4. **Exploitation.** Horodatage croisé du journal par une TSA tierce,
+   réplication hors site, supervision, deux instances derrière un
+   répartiteur, procédure de révocation testée.
 5. **Qualification.** Constituer le dossier ANSSI et engager l'audit d'un
    organisme accrédité.

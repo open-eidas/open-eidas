@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/digitorus/timestamp"
+
+	"github.com/open-eidas/tsa/internal/audit"
 )
 
 // oidExtKeyUsage est l'OID de l'extension extendedKeyUsage (2.5.29.37).
@@ -35,6 +37,18 @@ type Rejection struct {
 
 func (r *Rejection) Error() string { return r.Reason }
 
+// record consigne une décision. Une défaillance du journal est fatale pour la
+// requête : un jeton dont l'émission n'est pas tracée n'est pas défendable.
+func (a *Authority) record(event string, data map[string]any) error {
+	if a.opts.Recorder == nil {
+		return nil
+	}
+	if err := a.opts.Recorder.Append(event, data); err != nil {
+		return fmt.Errorf("tsa: journal d'audit: %w", err)
+	}
+	return nil
+}
+
 func reject(failure timestamp.FailureInfo, format string, args ...any) *Rejection {
 	return &Rejection{
 		Status:  timestamp.Rejection,
@@ -51,6 +65,12 @@ type Options struct {
 	Accuracy      time.Duration
 	SigningDigest crypto.Hash
 	Clock         Clock
+	Recorder      Recorder
+}
+
+// Recorder consigne les décisions de l'autorité dans le journal d'audit.
+type Recorder interface {
+	Append(event string, data map[string]any) error
 }
 
 // Clock fournit l'heure à estampiller. Une erreur signifie que l'heure n'est
@@ -142,6 +162,23 @@ func (a *Authority) AcceptedHashes() []crypto.Hash {
 // par une erreur *Rejection ; toute autre erreur relève d'une défaillance
 // interne.
 func (a *Authority) Timestamp(reqDER []byte) ([]byte, error) {
+	respDER, err := a.timestamp(reqDER)
+	if err != nil {
+		var rejection *Rejection
+		if errors.As(err, &rejection) {
+			if recErr := a.record(audit.EventTimestampRejected, map[string]any{
+				"failure_info": rejection.Failure.String(),
+				"reason":       rejection.Reason,
+			}); recErr != nil {
+				return nil, recErr
+			}
+		}
+		return nil, err
+	}
+	return respDER, nil
+}
+
+func (a *Authority) timestamp(reqDER []byte) ([]byte, error) {
 	req, err := timestamp.ParseRequest(reqDER)
 	if err != nil {
 		return nil, reject(timestamp.BadDataFormat, "requête RFC 3161 illisible: %v", err)
@@ -182,6 +219,23 @@ func (a *Authority) Timestamp(reqDER []byte) ([]byte, error) {
 	respDER, err := token.CreateResponseWithOpts(a.opts.Certificate, a.opts.Signer, a.opts.SigningDigest)
 	if err != nil {
 		return nil, fmt.Errorf("tsa: génération du jeton: %w", err)
+	}
+
+	// Le jeton est relu pour consigner exactement ce qu'il contient, et non
+	// ce que le service croit y avoir mis.
+	issued, err := timestamp.ParseResponse(respDER)
+	if err != nil {
+		return nil, fmt.Errorf("tsa: relecture du jeton émis: %w", err)
+	}
+	if err := a.record(audit.EventTimestampGranted, map[string]any{
+		"serial_number":   issued.SerialNumber.String(),
+		"gen_time":        issued.Time.UTC().Format(time.RFC3339Nano),
+		"policy":          issued.Policy.String(),
+		"hash_algorithm":  issued.HashAlgorithm.String(),
+		"message_imprint": fmt.Sprintf("%x", issued.HashedMessage),
+		"nonce":           issued.Nonce != nil,
+	}); err != nil {
+		return nil, err
 	}
 	return respDER, nil
 }

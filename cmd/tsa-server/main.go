@@ -4,13 +4,17 @@
 //
 //	enroll  obtient (ou renouvelle) le certificat de l'unité d'horodatage
 //	        auprès d'OpenXPKI, la clé privée restant dans le HSM ;
-//	serve   expose l'autorité d'horodatage en HTTP.
+//	serve   expose l'autorité d'horodatage en HTTP ;
+//	verify-audit  relit le journal d'audit et contrôle sa chaîne de hachage.
 package main
 
 import (
 	"context"
 	"crypto"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,11 +24,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/digitorus/timestamp"
+	"github.com/open-eidas/tsa/internal/audit"
 	"github.com/open-eidas/tsa/internal/certs"
 	"github.com/open-eidas/tsa/internal/config"
 	"github.com/open-eidas/tsa/internal/enroll"
 	"github.com/open-eidas/tsa/internal/hsm"
 	"github.com/open-eidas/tsa/internal/httpapi"
+
 	"github.com/open-eidas/tsa/internal/timesource"
 	"github.com/open-eidas/tsa/internal/tsa"
 )
@@ -36,7 +43,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: tsa-server <serve|enroll|version>")
+		fmt.Fprintln(os.Stderr, "usage: tsa-server <serve|enroll|verify-audit|version>")
 		os.Exit(2)
 	}
 
@@ -46,6 +53,8 @@ func main() {
 		err = runServe(logger)
 	case "enroll":
 		err = runEnroll(logger)
+	case "verify-audit":
+		err = runVerifyAudit()
 	case "version":
 		fmt.Println(version)
 	default:
@@ -82,6 +91,12 @@ func runServe(logger *slog.Logger) error {
 		return err
 	}
 
+	journal, err := audit.Open(cfg.AuditFile)
+	if err != nil {
+		return err
+	}
+	defer journal.Close()
+
 	clock, err := timesource.New(timesource.Options{
 		Servers:      cfg.TimeSources,
 		Policy:       cfg.TimePolicy,
@@ -91,6 +106,7 @@ func runServe(logger *slog.Logger) error {
 		PollInterval: cfg.TimePoll,
 		Timeout:      cfg.TimeTimeout,
 		Logger:       logger,
+		Recorder:     journal,
 	})
 	if err != nil {
 		return err
@@ -104,6 +120,7 @@ func runServe(logger *slog.Logger) error {
 		Accuracy:      cfg.Accuracy,
 		SigningDigest: cfg.SigningDigest,
 		Clock:         clock,
+		Recorder:      journal,
 	})
 	if err != nil {
 		return err
@@ -131,7 +148,18 @@ func runServe(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	if err := journal.Append(audit.EventOpened, map[string]any{
+		"version":     version,
+		"tsu_subject": leaf.Subject.String(),
+		"tsu_serial":  leaf.SerialNumber.String(),
+		"policy":      cfg.PolicyOID.String(),
+		"time_policy": string(cfg.TimePolicy),
+	}); err != nil {
+		return err
+	}
+
 	clock.Start(ctx)
+	startSealing(ctx, journal, authority, cfg.AuditSealInterval, logger)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -220,6 +248,20 @@ func runEnroll(logger *slog.Logger) error {
 			return fmt.Errorf("écriture de la chaîne d'émission: %w", err)
 		}
 	}
+	journal, err := audit.Open(cfg.AuditFile)
+	if err != nil {
+		return err
+	}
+	defer journal.Close()
+	if err := journal.Append(audit.EventEnrollmentAccepted, map[string]any{
+		"subject":   result.Certificate.Subject.String(),
+		"issuer":    result.Certificate.Issuer.String(),
+		"serial":    result.Certificate.SerialNumber.String(),
+		"not_after": result.Certificate.NotAfter.UTC().Format(time.RFC3339),
+	}); err != nil {
+		return err
+	}
+
 	logger.Info("certificat TSU émis par la PKI",
 		"sujet", result.Certificate.Subject.String(),
 		"emetteur", result.Certificate.Issuer.String(),
@@ -257,4 +299,77 @@ func currentCertUsable(cfg *config.Config, signer crypto.Signer) (bool, string) 
 		return false, fmt.Sprintf("certificat expirant dans %s", remaining.Round(time.Hour))
 	}
 	return true, "valide jusqu'au " + cert.NotAfter.UTC().Format(time.RFC3339)
+}
+
+// startSealing scelle périodiquement la tête de chaîne du journal : la TSU
+// horodate sa propre empreinte, ce qui date le contenu du journal à cet
+// instant. Un horodatage croisé par une TSA tierce reste à ajouter pour
+// qu'un auditeur n'ait pas à se fier au seul service.
+func startSealing(ctx context.Context, journal *audit.Log, authority *tsa.Authority, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		logger.Warn("scellement périodique du journal d'audit désactivé")
+		return
+	}
+	seal := func() {
+		seq, head := journal.Head()
+		digest, err := hex.DecodeString(head)
+		if err != nil || len(digest) != sha256.Size {
+			logger.Error("tête de chaîne inexploitable pour le scellement", "tete", head)
+			return
+		}
+		req, err := (&timestamp.Request{HashAlgorithm: crypto.SHA256, HashedMessage: digest}).Marshal()
+		if err != nil {
+			logger.Error("scellement impossible", "err", err)
+			return
+		}
+		token, err := authority.Timestamp(req)
+		if err != nil {
+			logger.Error("scellement impossible", "err", err)
+			return
+		}
+		if err := journal.Append(audit.EventSealed, map[string]any{
+			"sealed_seq":  seq,
+			"sealed_head": head,
+			"token":       base64.StdEncoding.EncodeToString(token),
+		}); err != nil {
+			logger.Error("scellement non consigné", "err", err)
+			return
+		}
+		logger.Info("journal d'audit scellé", "enregistrements", seq, "tete", head[:16]+"…")
+	}
+
+	go func() {
+		seal()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				seal()
+			}
+		}
+	}()
+}
+
+func runVerifyAudit() error {
+	path := os.Getenv("OPENEIDAS_AUDIT_FILE")
+	if len(os.Args) > 2 {
+		path = os.Args[2]
+	}
+	if path == "" {
+		path = "/var/lib/open-eidas/audit.log"
+	}
+
+	report, err := audit.Verify(path)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("journal      : %s\n", path)
+	fmt.Printf("enregistrements : %d (n° %d à %d)\n", report.Records, report.First, report.Last)
+	fmt.Printf("scellements  : %d\n", report.Seals)
+	fmt.Printf("tête de chaîne : %s\n", report.Head)
+	fmt.Println("chaîne de hachage continue et intègre")
+	return nil
 }

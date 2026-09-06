@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/beevik/ntp"
+
+	"github.com/open-eidas/tsa/internal/audit"
 )
 
 // Policy décrit la conduite à tenir lorsque l'heure n'est plus vérifiable.
@@ -61,6 +63,12 @@ type Options struct {
 	PollInterval time.Duration
 	Timeout      time.Duration
 	Logger       *slog.Logger
+	Recorder     Recorder
+}
+
+// Recorder consigne les mesures de temps dans le journal d'audit.
+type Recorder interface {
+	Append(event string, data map[string]any) error
 }
 
 // Sample est une mesure ponctuelle face à une source de temps.
@@ -194,6 +202,8 @@ func (m *Monitor) poll(ctx context.Context) {
 	m.status = status
 	m.mu.Unlock()
 
+	m.record(status)
+
 	switch {
 	case !status.Traceable && m.opts.Policy == PolicyEnforce:
 		m.logger().Error("heure non traçable : émission de jetons suspendue",
@@ -206,6 +216,32 @@ func (m *Monitor) poll(ctx context.Context) {
 			"ecart", status.OffsetStr, "dispersion", status.SpreadStr)
 	default:
 		m.logger().Info("heure vérifiée", "ecart", status.OffsetStr, "dispersion", status.SpreadStr)
+	}
+}
+
+// record consigne la mesure : c'est cette trace qu'un auditeur relit pour
+// vérifier que l'heure était sous contrôle au moment d'une émission.
+func (m *Monitor) record(status Status) {
+	if m.opts.Recorder == nil {
+		return
+	}
+	sources := make(map[string]any, len(status.Sources))
+	for _, s := range status.Sources {
+		if s.ok() {
+			sources[s.Server] = s.Offset.String()
+		} else {
+			sources[s.Server] = "erreur: " + s.Err
+		}
+	}
+	if err := m.opts.Recorder.Append(audit.EventTimeMeasurement, map[string]any{
+		"traceable":  status.Traceable,
+		"offset":     status.OffsetStr,
+		"spread":     status.SpreadStr,
+		"reason":     status.Reason,
+		"sources":    sources,
+		"max_offset": m.opts.MaxOffset.String(),
+	}); err != nil {
+		m.logger().Error("mesure de temps non consignée au journal d'audit", "err", err)
 	}
 }
 

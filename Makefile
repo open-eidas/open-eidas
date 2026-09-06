@@ -23,6 +23,9 @@ lint: ## Vérifie le formatage et lance go vet
 	$(GO_RUN) sh -c 'test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }'
 	$(GO_RUN) go vet ./...
 
+audit: ## Vérifie la chaîne de hachage du journal d'audit
+	docker compose exec tsa tsa-server verify-audit
+
 logs: ## Suit les journaux de la TSA
 	docker compose logs -f tsa
 
@@ -33,4 +36,4 @@ purge: ## Arrête la pile et supprime les volumes (PKI et token HSM inclus)
 	docker compose down -v
 	rm -f deploy/openxpki/.sampleconfig-done
 
-.PHONY: help up demo test lint logs down purge
+.PHONY: help up demo test lint audit logs down purge

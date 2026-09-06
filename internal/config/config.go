@@ -28,6 +28,9 @@ type Config struct {
 	CertFile  string
 	ChainFile string
 
+	AuditFile         string
+	AuditSealInterval time.Duration
+
 	PolicyOID     asn1.ObjectIdentifier
 	Accuracy      time.Duration
 	SigningDigest crypto.Hash
@@ -61,6 +64,7 @@ func Load() (*Config, error) {
 		PIN:             os.Getenv("OPENEIDAS_PIN"),
 		CertFile:        env("OPENEIDAS_CERT_FILE", "/var/lib/open-eidas/tsu.pem"),
 		ChainFile:       env("OPENEIDAS_CHAIN_FILE", "/var/lib/open-eidas/chain.pem"),
+		AuditFile:       env("OPENEIDAS_AUDIT_FILE", "/var/lib/open-eidas/audit.log"),
 		EnrollEndpoint:  env("OPENEIDAS_ENROLL_ENDPOINT", ""),
 		EnrollCAFile:    env("OPENEIDAS_ENROLL_CA_FILE", ""),
 		SubjectCN:       env("OPENEIDAS_SUBJECT_CN", "Open eIDAS Time-Stamping Unit 1"),
@@ -90,6 +94,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.EnrollInsecure, err = envBool("OPENEIDAS_ENROLL_INSECURE", false); err != nil {
+		return nil, err
+	}
+	if cfg.AuditSealInterval, err = envDuration("OPENEIDAS_AUDIT_SEAL_INTERVAL", time.Hour); err != nil {
 		return nil, err
 	}
 	if cfg.TimeMinSources, err = envInt("OPENEIDAS_TIME_MIN_SOURCES", 2); err != nil {
