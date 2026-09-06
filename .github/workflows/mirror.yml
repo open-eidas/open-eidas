@@ -1,0 +1,38 @@
+name: Mirror to Codeberg and GitLab
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mirror:
+    name: Sync mirror repositories
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push mirror to Codeberg
+        if: "${{ secrets.CODEBERG_TOKEN != '' }}"
+        env:
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+        run: |
+          echo "Mirroring to Codeberg..."
+          git push --prune --tags "https://${CODEBERG_TOKEN}@codeberg.org/open-eidas/${{ github.event.repository.name }}.git" "+refs/heads/*:refs/heads/*"
+
+      - name: Push mirror to GitLab
+        if: "${{ secrets.GITLAB_TOKEN != '' }}"
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_NAMESPACE: ${{ secrets.GITLAB_NAMESPACE || 'open-eidas' }}
+        run: |
+          echo "Mirroring to GitLab (${GITLAB_NAMESPACE})..."
+          git push --prune --tags "https://oauth2:${GITLAB_TOKEN}@gitlab.com/${GITLAB_NAMESPACE}/${{ github.event.repository.name }}.git" "+refs/heads/*:refs/heads/*"
