@@ -173,6 +173,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Amorce la pile (PKI OpenXPKI + TSA)
+        # Les runners GitHub-hébergés ne garantissent pas de sortie UDP/123 vers
+        # les deux serveurs NTP externes exigés par la politique "enforce" ; le
+        # job helm-kind-smoke-test contourne déjà ce même aléa réseau en passant
+        # tsa.time.policy=monitor.
+        env:
+          OPENEIDAS_TIME_POLICY: monitor
         run: ./scripts/bootstrap.sh
 
       - name: Horodate un fichier et vérifie le jeton (openssl ts)
