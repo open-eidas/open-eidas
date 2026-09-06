@@ -188,7 +188,7 @@ Toutes les options sont pilotées par variables d'environnement.
 | `OPENEIDAS_PKCS11_MODULE` | `/usr/lib/softhsm/libsofthsm2.so` | Module PKCS#11 du HSM |
 | `OPENEIDAS_TOKEN_LABEL` | `open-eidas-tsa` | Label du token |
 | `OPENEIDAS_KEY_LABEL` | `tsu-signing-key` | Label de la bi-clé de signature |
-| `OPENEIDAS_PIN` | — (obligatoire) | Code PIN du token |
+| `OPENEIDAS_PIN` | — (obligatoire) | Code PIN du token, 4 à 255 caractères (contrainte SoftHSM) |
 | `OPENEIDAS_KEY_BITS` | `3072` | Taille de clé RSA, minimum 3072 |
 | `OPENEIDAS_CERT_FILE` | `/var/lib/open-eidas/tsu.pem` | Certificat de la TSU |
 | `OPENEIDAS_CHAIN_FILE` | `/var/lib/open-eidas/chain.pem` | Chaîne d'émission |

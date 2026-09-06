@@ -6,6 +6,16 @@ set -eu
 : "${OPENEIDAS_PIN:?OPENEIDAS_PIN est obligatoire}"
 : "${OPENEIDAS_SO_PIN:=${OPENEIDAS_PIN}}"
 
+# SoftHSM refuse silencieusement un PIN hors de cette plage et se rabat sur
+# une invite interactive, ce qui bloquerait le conteneur sans message clair.
+for pin_var in OPENEIDAS_PIN OPENEIDAS_SO_PIN; do
+    eval "pin_len=\${#$pin_var}"
+    if [ "$pin_len" -lt 4 ] || [ "$pin_len" -gt 255 ]; then
+        echo "${pin_var} doit contenir entre 4 et 255 caractères (SoftHSM)" >&2
+        exit 1
+    fi
+done
+
 if ! softhsm2-util --show-slots | grep -q "Label: *${OPENEIDAS_TOKEN_LABEL}"; then
     echo "initialisation du token SoftHSM ${OPENEIDAS_TOKEN_LABEL}"
     softhsm2-util --init-token --free \
