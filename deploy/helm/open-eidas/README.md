@@ -40,6 +40,8 @@ Voir [deploy/argocd/application.yaml](../../argocd/application.yaml).
 
 ## Déploiement public de démonstration (staging)
 
+Guide détaillé pas-à-pas : [docs/STAGING.md](../../../docs/STAGING.md).
+
 `values-staging.yaml` expose la TSA sur `staging-api.open-eidas.eu` et la
 PKI (interface, CRL, AIA) sur `staging-pki.open-eidas.eu`, avec un
 certificat TLS public géré par cert-manager/Let's Encrypt.
