@@ -71,7 +71,7 @@ jobs:
         run: docker run --rm -e OPENEIDAS_PIN=ci openeidas-tsa:ci version
 
       - name: Scan de vulnérabilités (Trivy)
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: openeidas-tsa:ci
           format: table
