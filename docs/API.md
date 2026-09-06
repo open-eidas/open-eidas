@@ -212,6 +212,7 @@ Toutes les options sont pilotées par variables d'environnement.
 | `OPENEIDAS_TIME_POLL` | `5m` | Période d'interrogation des sources |
 | `OPENEIDAS_TIME_TIMEOUT` | `5s` | Délai d'attente par source |
 | `OPENEIDAS_ENROLL_ENDPOINT` | — | URL RPC d'enrôlement OpenXPKI |
+| `OPENEIDAS_ENROLL_HMAC_KEY` | — | Secret partagé authentifiant la demande de certificat (HMAC-SHA256 sur la CSR) |
 | `OPENEIDAS_ENROLL_CA_FILE` | — | Ancre de confiance TLS de la PKI |
 | `OPENEIDAS_ENROLL_INSECURE` | `false` | Désactive la vérification TLS (démonstration seulement) |
 | `OPENEIDAS_ENROLL_TIMEOUT` | `5m` | Délai maximal d'attente d'un certificat |

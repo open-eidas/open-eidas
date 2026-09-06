@@ -220,7 +220,7 @@ feuille de route de qualification :
 |---|---|---|
 | Module cryptographique | SoftHSM2 (logiciel) | HSM certifié FIPS 140-2 niv. 3 / CC EAL4+ |
 | Source de temps | Surveillance NTP de deux sources UTC(k) avec suspension automatique de l'émission | Réception redondante et indépendante, calibration documentée, journal des mesures conservé et audité |
-| Enrôlement de la TSU | Anonyme et auto-approuvé | Authentification du demandeur et approbation par un opérateur RA |
+| Enrôlement de la TSU | Authentifié par secret HMAC partagé, auto-approuvé | Approbation par un opérateur RA en plus de l'authentification |
 | Journalisation | Journal chaîné par hachage, contresigné par des TSA tierces publiques et répliqué hors site à chaque scellement | Politique de conservation formalisée, réplication multi-région |
 | Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` | OID sous l'arc PEN de l'association, TSA Policy et Practice Statement publiés |
 | Extensions du certificat TSU | Points CRL/OCSP et OID de politique hérités de la configuration de démonstration amont (`pki.example.com`) | Points de distribution réellement publiés et politique de certification propre |

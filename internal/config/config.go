@@ -55,6 +55,7 @@ type Config struct {
 	EnrollCAFile   string
 	EnrollInsecure bool
 	EnrollTimeout  time.Duration
+	EnrollHMACKey  string
 	SubjectCN      string
 	SubjectOU      string
 	SubjectO       string
@@ -75,6 +76,7 @@ func Load() (*Config, error) {
 		AuditFile:            env("OPENEIDAS_AUDIT_FILE", "/var/lib/open-eidas/audit.log"),
 		EnrollEndpoint:       env("OPENEIDAS_ENROLL_ENDPOINT", ""),
 		EnrollCAFile:         env("OPENEIDAS_ENROLL_CA_FILE", ""),
+		EnrollHMACKey:        os.Getenv("OPENEIDAS_ENROLL_HMAC_KEY"),
 		SubjectCN:            env("OPENEIDAS_SUBJECT_CN", "Open eIDAS Time-Stamping Unit 1"),
 		SubjectOU:            env("OPENEIDAS_SUBJECT_OU", "Time Stamping Authority"),
 		SubjectO:             env("OPENEIDAS_SUBJECT_O", "Open eIDAS"),

@@ -52,6 +52,16 @@ fi
 log "Application de l'overlay Open eIDAS (profil TSU + endpoint RPC)"
 cp -a "$OVERLAY_DIR/." "$CONFIG_DIR/"
 
+log "Secret d'authentification de l'enrôlement (HMAC)"
+if [ ! -f "$LOCAL_DIR/enroll-hmac.key" ]; then
+    openssl rand -hex 32 > "$LOCAL_DIR/enroll-hmac.key"
+    chmod 600 "$LOCAL_DIR/enroll-hmac.key"
+fi
+ENROLL_HMAC_KEY="$(cat "$LOCAL_DIR/enroll-hmac.key")"
+export OPENEIDAS_ENROLL_HMAC_KEY="$ENROLL_HMAC_KEY"
+sed -i "s|##ENROLLHMACKEY##|${ENROLL_HMAC_KEY}|" \
+    "$CONFIG_DIR/config.d/realm.tpl/rpc/tsa.yaml"
+
 log "Démarrage de la PKI"
 docker compose up -d --wait pki-web
 

@@ -105,6 +105,11 @@ spec:
               value: /var/lib/open-eidas/state/chain.pem
             - name: OPENEIDAS_ENROLL_ENDPOINT
               value: {{ printf "https://%s/rpc/tsa/RequestCertificate" $openxpkiHost | quote }}
+            - name: OPENEIDAS_ENROLL_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $generatedSecret }}
+                  key: enroll-hmac-key
             # Comme en docker-compose, le certificat TLS auto-signé
             # d'OpenXPKI n'est pas vérifiable : acceptable pour cette
             # démonstration, à remplacer par OPENEIDAS_ENROLL_CA_FILE en

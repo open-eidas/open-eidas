@@ -131,6 +131,13 @@ spec:
                   /etc/openxpki/config.d/system/crypto.yaml > /tmp/crypto.yaml
               mv /tmp/crypto.yaml /etc/openxpki/config.d/system/crypto.yaml
 
+              # Authentification de l'enrôlement : même secret que celui
+              # injecté dans le service TSA (voir tsa-deployment.yaml), pour
+              # que sa demande de certificat soit acceptée
+              # (allow_anon_enroll: 0 dans le profil RPC).
+              sed -i "s|##ENROLLHMACKEY##|${ENROLL_HMAC_KEY}|" \
+                  /etc/openxpki/config.d/realm.tpl/rpc/tsa.yaml
+
               cat > /etc/openxpki/config.d/system/database.yaml <<EOF
               main:
                   type: MariaDB2
@@ -159,6 +166,11 @@ spec:
                 secretKeyRef:
                   name: {{ $generatedSecret }}
                   key: svault-key
+            - name: ENROLL_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $generatedSecret }}
+                  key: enroll-hmac-key
           volumeMounts:
             - name: config
               mountPath: /etc/openxpki

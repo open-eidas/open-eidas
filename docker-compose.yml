@@ -147,6 +147,9 @@ services:
       OPENEIDAS_CERT_FILE: /var/lib/open-eidas/state/tsu.pem
       OPENEIDAS_CHAIN_FILE: /var/lib/open-eidas/state/chain.pem
       OPENEIDAS_ENROLL_ENDPOINT: https://pki-web/rpc/tsa/RequestCertificate
+      # Authentifie la demande de certificat auprès de la politique RPC
+      # (allow_anon_enroll: 0) — généré et persisté par scripts/bootstrap.sh.
+      OPENEIDAS_ENROLL_HMAC_KEY: ${OPENEIDAS_ENROLL_HMAC_KEY:-}
       # Le conteneur OpenXPKI génère un certificat TLS auto-signé : acceptable
       # pour la démonstration locale uniquement, à remplacer par une ancre de
       # confiance explicite (OPENEIDAS_ENROLL_CA_FILE) en production.

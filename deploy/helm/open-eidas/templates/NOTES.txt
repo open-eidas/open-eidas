@@ -31,6 +31,6 @@ Relire le journal d'audit :
   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "open-eidas.fullname" . }}-tsa -- tsa-server verify-audit
 
 AVERTISSEMENT : comme le docker-compose de démonstration, ce déploiement
-utilise une hiérarchie de CA jetable, un enrôlement anonyme auto-approuvé et
+utilise une hiérarchie de CA jetable, un enrôlement authentifié par secret partagé et auto-approuvé et
 SoftHSM en lieu d'un HSM certifié. Voir docs/ARCHITECTURE.md pour la liste
 complète des écarts au référentiel eIDAS.

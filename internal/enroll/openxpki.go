@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -32,6 +35,10 @@ type Options struct {
 	Timeout   time.Duration
 	Logger    *slog.Logger
 	UserAgent string
+	// HMACSecret authentifie le demandeur auprès de la politique
+	// d'enrôlement OpenXPKI (allow_anon_enroll: 0) : sans lui, la PKI
+	// n'accepte pas de requête anonyme. Voir computeSignature.
+	HMACSecret string
 }
 
 type Client struct {
@@ -107,15 +114,19 @@ type Result struct {
 // L'appel boucle tant que le workflow est en attente (approbation manuelle,
 // vérification d'éligibilité) jusqu'à expiration du délai configuré.
 func (c *Client) Request(ctx context.Context, signer crypto.Signer, subject Subject) (*Result, error) {
-	csrPEM, err := buildCSR(signer, subject)
+	csrDER, csrPEM, err := buildCSR(signer, subject)
 	if err != nil {
 		return nil, err
+	}
+	var signature string
+	if c.opts.HMACSecret != "" {
+		signature = computeSignature(csrDER, c.opts.HMACSecret)
 	}
 
 	deadline := time.Now().Add(c.opts.Timeout)
 	transactionID := ""
 	for attempt := 1; ; attempt++ {
-		body, err := c.post(ctx, csrPEM, transactionID)
+		body, err := c.post(ctx, csrPEM, signature, transactionID)
 		if err != nil {
 			return nil, err
 		}
@@ -143,10 +154,13 @@ func (c *Client) Request(ctx context.Context, signer crypto.Signer, subject Subj
 	}
 }
 
-func (c *Client) post(ctx context.Context, csrPEM, transactionID string) ([]byte, error) {
+func (c *Client) post(ctx context.Context, csrPEM, signature, transactionID string) ([]byte, error) {
 	form := url.Values{}
 	form.Set("pkcs10", csrPEM)
 	form.Set("comment", "Open eIDAS TSU enrollment")
+	if signature != "" {
+		form.Set("signature", signature)
+	}
 	if transactionID != "" {
 		form.Set("transaction_id", transactionID)
 	}
@@ -287,16 +301,26 @@ func lastTransactionID(body []byte) string {
 	return data.TransactionID
 }
 
-func buildCSR(signer crypto.Signer, subject Subject) (string, error) {
+func buildCSR(signer crypto.Signer, subject Subject) (der []byte, pemStr string, err error) {
 	tmpl := &x509.CertificateRequest{
 		Subject:            subject.pkix(),
 		SignatureAlgorithm: x509.SHA256WithRSA,
 	}
-	der, err := x509.CreateCertificateRequest(rand.Reader, tmpl, signer)
+	der, err = x509.CreateCertificateRequest(rand.Reader, tmpl, signer)
 	if err != nil {
-		return "", fmt.Errorf("enroll: génération de la CSR: %w", err)
+		return nil, "", fmt.Errorf("enroll: génération de la CSR: %w", err)
 	}
-	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})), nil
+	return der, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})), nil
+}
+
+// computeSignature authentifie le CSR pour la politique HMAC d'OpenXPKI.
+// Doit reproduire exactement
+// OpenXPKI::Server::Workflow::Activity::Tools::CalculateRequestHMAC :
+// HMAC-SHA256 hexadécimal des octets DER bruts de la CSR.
+func computeSignature(csrDER []byte, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(csrDER)
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func (c *Client) logger() *slog.Logger {

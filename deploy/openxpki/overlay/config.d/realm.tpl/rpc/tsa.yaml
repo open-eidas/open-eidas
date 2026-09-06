@@ -1,21 +1,29 @@
 # Politique d'enrôlement de l'endpoint RPC « tsa ».
 #
-# ATTENTION — configuration de démonstration : l'enrôlement est anonyme et
-# auto-approuvé pour que la pile démarre sans intervention humaine. Une
-# instance destinée à la qualification doit exiger une authentification du
-# demandeur (HMAC, mot de passe de défi ou certificat client) et une
-# approbation par un opérateur RA.
+# Le demandeur doit prouver la possession du secret partagé
+# ##ENROLLHMACKEY## (HMAC-SHA256 sur le CSR, voir internal/enroll) : sans ce
+# secret, la requête est rejetée avant même d'atteindre le workflow. C'est
+# la seule barrière d'entrée — l'émission reste automatique (approval_points
+# à 0) pour que le service reste auto-hébergeable sans opérateur humain,
+# conformément à la mission d'une API d'horodatage automatisable.
+#
+# ÉCART RESTANT — une instance destinée à la qualification doit en outre
+# soumettre chaque demande à l'approbation d'un opérateur RA
+# (allow_man_approv: 1, approval_points: 1), au prix de perdre
+# l'automatisation complète.
 
 label: Open eIDAS TSU Enrollment
 
 renewal_period: "000060"
 
 policy:
-    # Aucune authentification du demandeur (démonstration uniquement).
-    allow_anon_enroll: 1
+    # L'authentification HMAC ci-dessous remplace l'anonymat : un secret
+    # partagé, pas une identité, mais suffisant pour qu'une clé volée du
+    # secret côté TSA soit le seul moyen d'émettre un certificat frauduleux.
+    allow_anon_enroll: 0
     allow_man_authen: 0
 
-    # Émission immédiate, sans point d'approbation.
+    # Émission immédiate, sans point d'approbation — voir l'écart ci-dessus.
     allow_man_approv: 0
     allow_eligibility_recheck: 0
     approval_points: 0
@@ -29,6 +37,12 @@ policy:
     # Le service a besoin de la chaîne complète (CA émettrice + racine) pour
     # la joindre au jeton et la publier sur /api/v1/certificate.
     export_certificate: fullchain
+
+# Secret partagé pour l'authentification HMAC-SHA256 du CSR (RFC voir
+# OpenXPKI::Server::Workflow::Activity::Tools::CalculateRequestHMAC :
+# hmac_sha256_hex(CSR au format DER, ce secret)). Substitué au démarrage par
+# le même mécanisme que la clé du coffre de données (voir crypto.yaml).
+hmac: "##ENROLLHMACKEY##"
 
 profile:
     cert_profile: tsa_signer

@@ -240,12 +240,13 @@ func runEnroll(logger *slog.Logger) error {
 	}
 
 	client, err := enroll.NewClient(enroll.Options{
-		Endpoint:  cfg.EnrollEndpoint,
-		CAFile:    cfg.EnrollCAFile,
-		Insecure:  cfg.EnrollInsecure,
-		Timeout:   cfg.EnrollTimeout,
-		Logger:    logger,
-		UserAgent: "open-eidas-tsa/" + version,
+		Endpoint:   cfg.EnrollEndpoint,
+		CAFile:     cfg.EnrollCAFile,
+		Insecure:   cfg.EnrollInsecure,
+		Timeout:    cfg.EnrollTimeout,
+		HMACSecret: cfg.EnrollHMACKey,
+		Logger:     logger,
+		UserAgent:  "open-eidas-tsa/" + version,
 	})
 	if err != nil {
 		return err

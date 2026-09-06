@@ -28,6 +28,7 @@ RequestCertificate:
     input:
       - pkcs10
       - comment
+      - signature
     output:
       - cert_identifier
       - certificate

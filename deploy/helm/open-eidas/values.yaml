@@ -8,7 +8,7 @@
 # `helm install` direct.
 #
 # AVERTISSEMENT — comme le docker-compose, ce chart est une démonstration :
-# hiérarchie de CA jetable, enrôlement anonyme auto-approuvé, SoftHSM en lieu
+# hiérarchie de CA jetable, enrôlement authentifié par secret partagé et auto-approuvé, SoftHSM en lieu
 # d'un HSM certifié. Voir docs/ARCHITECTURE.md pour les écarts au référentiel
 # eIDAS et deploy/helm/open-eidas/README.md pour les adaptations nécessaires
 # à un déploiement de production.
