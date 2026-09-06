@@ -9,6 +9,8 @@
 
 [![CI](https://github.com/open-eidas/open-eidas/actions/workflows/ci.yml/badge.svg)](https://github.com/open-eidas/open-eidas/actions/workflows/ci.yml)
 [![Licence AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
+[![Site Web](https://img.shields.io/badge/Site%20Web-open--eidas.eu-003399?style=flat-square)](https://open-eidas.eu)
+[![Contact](https://img.shields.io/badge/Contact-contact%40open--eidas.eu-0F2042?style=flat-square)](mailto:contact@open-eidas.eu)
 
 **Démocratiser la confiance numérique eIDAS dans toute l'économie, de façon sûre, ouverte et sans rente.**
 
@@ -148,6 +150,13 @@ scripts/             amorçage et démonstration
 Les contributions sont bienvenues, en particulier sur l'intégration de HSM
 certifiés, le journal d'audit inaltérable, la redondance du service, la
 conformité ETSI EN 319 421 / 319 422 et le développement des futurs services de confiance.
+
+## Contact & Liens
+ 
+- **Site web officiel :** [https://open-eidas.eu](https://open-eidas.eu)
+- **Contact :** [contact@open-eidas.eu](mailto:contact@open-eidas.eu)
+- **Organisation GitHub :** [github.com/open-eidas](https://github.com/open-eidas)
+- **Code source du site web :** [open-eidas/website](https://github.com/open-eidas/website)
 
 ## Licence
 

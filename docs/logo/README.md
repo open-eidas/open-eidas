@@ -37,6 +37,14 @@ Ce dossier regroupe les déclinaisons vectorielles officielles (SVG) du logo **O
 - [favicon.svg](favicon.svg) : Tracés épaissis et contrastes renforcés pour onglets de navigateur.
 - [favicon-dark.svg](favicon-dark.svg) : Favicon avec fond sombre pour navigateurs en thème clair ou sombre.
 
+### Avatars & Réseaux Sociaux (PNG Haute Définition)
+- [avatar-dark.png](avatar-dark.png) : Avatar officiel carré (512x512) fond sombre `#0B1120`, optimisé pour profil GitHub & masques circulaires.
+- [avatar-dark-1024.png](avatar-dark-1024.png) : Version 1024x1024 haute résolution fond sombre.
+- [avatar-light.png](avatar-light.png) : Avatar officiel carré (512x512) fond blanc / clair.
+- [avatar-light-1024.png](avatar-light-1024.png) : Version 1024x1024 haute résolution fond clair.
+- [logo-horizontal.png](logo-horizontal.png) : Bannière horizontale haute résolution (1200x300) fond clair / transparent.
+- [logo-horizontal-dark.png](logo-horizontal-dark.png) : Bannière horizontale haute résolution (1200x300) fond sombre.
+
 ---
 
 ## 3. Symbolique du design
