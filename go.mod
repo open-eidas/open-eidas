@@ -3,6 +3,7 @@ module github.com/open-eidas/tsa
 go 1.25.0
 
 require (
+	github.com/beevik/ntp v1.5.0
 	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea
 	github.com/eclipse-keypont/crypto11 v1.6.8
 )
@@ -12,4 +13,6 @@ require (
 	github.com/miekg/pkcs11 v1.1.2 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/thales-e-security/pool v0.0.2 // indirect
+	golang.org/x/net v0.44.0 // indirect
+	golang.org/x/sys v0.36.0 // indirect
 )

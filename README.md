@@ -38,12 +38,15 @@ Un prototype **fonctionnel et vérifiable** de la pile technique cible :
   d'horodatage par enrôlement automatisé ;
 - un **HSM logiciel SoftHSM2** parlant le protocole d'un HSM certifié, pour que
   le passage en production soit un changement de configuration, pas de code ;
+- une **heure traçable jusqu'à UTC** : le service recoupe deux serveurs de
+  laboratoires de métrologie (Observatoire de Paris, PTB) et **cesse d'émettre**
+  dès que la dérive dépasse le seuil annoncé, comme l'exige ETSI EN 319 421 ;
 - le tout orchestré en `docker compose`, démarrable en une commande.
 
 Ce n'est pas encore une TSA qualifiée : les écarts avec le référentiel eIDAS
 sont listés explicitement dans
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#6-écarts-assumés-du-prototype-vis-à-vis-dune-tsa-qualifiée)
-— source de temps, HSM certifié, journal d'audit, audit d'un organisme
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#7-écarts-assumés-du-prototype-vis-à-vis-dune-tsa-qualifiée)
+— HSM certifié, journal d'audit inaltérable, redondance, audit d'un organisme
 accrédité. Le chiffrage de ce chemin est connu : **70 à 95 k€** pour
 l'infrastructure et l'audit initial.
 
@@ -97,6 +100,7 @@ Autres cibles : `make test`, `make lint`, `make logs`, `make down`,
 cmd/tsa-server/      point d'entrée : sous-commandes enroll et serve
 internal/tsa/        cœur RFC 3161 : validation, TSTInfo, CMS SignedData
 internal/hsm/        accès PKCS#11 à la clé de signature
+internal/timesource/ surveillance de la traçabilité de l'heure
 internal/enroll/     client RPC d'enrôlement OpenXPKI
 internal/httpapi/    endpoints HTTP (RFC 3161 + façade JSON)
 deploy/tsa/          image du service
@@ -112,8 +116,8 @@ commercial. Code, politique d'horodatage et rapports d'audit publics.
 
 ## Contribuer
 
-Les contributions sont bienvenues, en particulier sur la source de temps
-traçable, l'intégration de HSM certifiés, le journal d'audit inaltérable et la
+Les contributions sont bienvenues, en particulier sur l'intégration de HSM
+certifiés, le journal d'audit inaltérable, la redondance du service et la
 conformité ETSI EN 319 421 / 319 422.
 
 ## Licence

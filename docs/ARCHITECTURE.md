@@ -6,27 +6,30 @@ Démontrer qu'une autorité d'horodatage (TSA) conforme à la RFC 3161, adossée
 une PKI et à un module cryptographique, tient dans une pile reproductible que
 l'on démarre en une commande. Le prototype vise la crédibilité technique
 auprès de financeurs, pas encore la qualification eIDAS : les écarts au
-référentiel sont listés en section 6.
+référentiel sont listés en section 7.
 
 ## 2. Vue d'ensemble
 
 ```
-                  ┌──────────────────────────────────────────────┐
-   client         │                  Open eIDAS                  │
-   (curl,         │                                              │
-    openssl ts,   │   ┌───────────────┐        ┌──────────────┐  │
-    Sign*)        │   │  tsa-server   │  PKCS#11│   SoftHSM2   │  │
-      │ RFC 3161  │   │     (Go)      ├────────▶│  (→ HSM FIPS │  │
-      ├──────────▶│   │               │        │   en prod)   │  │
-      │  :8318    │   └───────┬───────┘        └──────────────┘  │
-      │           │           │ RPC /rpc/tsa/RequestCertificate  │
-      │           │           ▼                                  │
-      │           │   ┌───────────────┐        ┌──────────────┐  │
-      │           │   │   OpenXPKI    │────────│   MariaDB    │  │
-      │           │   │ (root + issu- │        │              │  │
-      │           │   │  ing CA)      │        └──────────────┘  │
-      │           │   └───────────────┘                          │
-                  └──────────────────────────────────────────────┘
+                 ┌───────────────────────────────────────────────┐
+  client         │                  Open eIDAS                   │
+  (curl,         │                                               │
+   openssl ts,   │   ┌───────────────┐  PKCS#11 ┌─────────────┐  │
+   Sign*)        │   │  tsa-server   │─────────▶│  SoftHSM2   │  │
+     │ RFC 3161  │   │     (Go)      │          │ (→ HSM FIPS │  │
+     ├──────────▶│   │               │          │   en prod)  │  │
+     │  :8318    │   └──┬─────────┬──┘          └─────────────┘  │
+     │           │      │         │ RPC /rpc/tsa/RequestCertificate
+     │           │      │         ▼                              │
+     │           │      │  ┌───────────────┐   ┌─────────────┐   │
+     │           │      │  │   OpenXPKI    │───│   MariaDB   │   │
+     │           │      │  │ (root + issu- │   │             │   │
+     │           │      │  │  ing CA)      │   └─────────────┘   │
+     │           │      │  └───────────────┘                     │
+                 └──────┼────────────────────────────────────────┘
+                        │ NTP
+                        ▼
+              UTC(OP) · UTC(PTB)   sources de temps de référence
 ```
 
 Quatre responsabilités séparées :
@@ -101,7 +104,37 @@ Le jeton est une `TimeStampResp` DER contenant un CMS `SignedData` :
 Empreintes acceptées : SHA-256, SHA-384, SHA-512. SHA-1 est refusé avec
 `badAlg`, conformément à ETSI TS 119 312.
 
-## 6. Écarts assumés du prototype vis-à-vis d'une TSA qualifiée
+## 6. Traçabilité de l'heure
+
+Un jeton d'horodatage ne vaut que ce que vaut l'horloge qui l'a produit. ETSI
+EN 319 421 impose que l'heure soit traçable jusqu'à UTC et que la TSA **cesse
+d'émettre** dès qu'elle ne peut plus garantir la précision qu'elle annonce.
+
+Le service interroge donc périodiquement plusieurs serveurs NTP de
+laboratoires de métrologie — par défaut l'Observatoire de Paris (UTC(OP)) et
+la PTB (UTC(PTB)) — et recoupe leurs réponses. L'heure est jugée traçable
+lorsque les quatre conditions suivantes sont réunies :
+
+1. le quorum de sources est joignable (`OPENEIDAS_TIME_MIN_SOURCES`, 2 par défaut) ;
+2. la dérive mesurée reste sous le seuil (`OPENEIDAS_TIME_MAX_OFFSET`, 500 ms) ;
+3. les sources s'accordent entre elles à l'intérieur du même seuil ;
+4. la dernière mesure n'est pas périmée (`OPENEIDAS_TIME_MAX_AGE`, 1 h).
+
+Dès qu'une condition tombe, la politique `enforce` fait refuser chaque
+demande avec le `failureInfo` **`timeNotAvailable`** — une réponse RFC 3161
+parfaitement valide — et `/healthz` bascule en `503`. Le service ne produit
+jamais de jeton dont il ne peut pas défendre la date, ce qui est précisément
+ce qu'un auditeur vient vérifier.
+
+L'état complet des mesures (écart par source, dispersion, strate, temps
+d'aller-retour, horodatage de la dernière synchronisation) est publié sur
+`/healthz` et `/api/v1/policy`, et journalisé à chaque cycle.
+
+Deux politiques dégradées existent pour le développement : `monitor`
+journalise l'écart sans bloquer l'émission, `disabled` désactive la
+surveillance. Aucune des deux n'est admissible en production.
+
+## 7. Écarts assumés du prototype vis-à-vis d'une TSA qualifiée
 
 Ces points sont volontairement hors périmètre du MVP et constituent la
 feuille de route de qualification :
@@ -109,7 +142,7 @@ feuille de route de qualification :
 | Exigence | État du prototype | Cible |
 |---|---|---|
 | Module cryptographique | SoftHSM2 (logiciel) | HSM certifié FIPS 140-2 niv. 3 / CC EAL4+ |
-| Source de temps | Horloge du conteneur | Deux sources UTC(k) traçables, surveillance de dérive, calibration documentée |
+| Source de temps | Surveillance NTP de deux sources UTC(k) avec suspension automatique de l'émission | Réception redondante et indépendante, calibration documentée, journal des mesures conservé et audité |
 | Enrôlement de la TSU | Anonyme et auto-approuvé | Authentification du demandeur et approbation par un opérateur RA |
 | Journalisation | Journaux applicatifs | Journal d'audit inaltérable et horodaté, conservé selon la politique |
 | Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` | OID sous l'arc PEN de l'association, TSA Policy et Practice Statement publiés |
@@ -121,10 +154,11 @@ Le prototype refuse de démarrer sur les écarts qui rendraient les jetons
 invalides (clé et certificat désaccordés, usage étendu absent, certificat
 expiré) et journalise un avertissement sur les écarts de profil non bloquants.
 
-## 7. Trajectoire vers la production
+## 8. Trajectoire vers la production
 
-1. **Temps.** Ajouter un service de surveillance NTP/PTP et refuser de signer
-   si la dérive dépasse la précision annoncée dans le `TSTInfo`.
+1. **Temps.** Passer d'une synchronisation réseau à une réception redondante
+   et indépendante, conserver le journal des mesures et faire calibrer la
+   chaîne de temps.
 2. **HSM.** Remplacer SoftHSM par un module certifié ; le code applicatif est
    déjà compatible.
 3. **Politique.** Publier la TSA Policy et la Practice Statement, obtenir un

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/open-eidas/tsa/internal/timesource"
 )
 
 // Config regroupe l'ensemble des paramètres du service, tous pilotés par
@@ -29,6 +31,14 @@ type Config struct {
 	PolicyOID     asn1.ObjectIdentifier
 	Accuracy      time.Duration
 	SigningDigest crypto.Hash
+
+	TimePolicy     timesource.Policy
+	TimeSources    []string
+	TimeMinSources int
+	TimeMaxOffset  time.Duration
+	TimeMaxAge     time.Duration
+	TimePoll       time.Duration
+	TimeTimeout    time.Duration
 
 	EnrollEndpoint string
 	EnrollCAFile   string
@@ -57,6 +67,7 @@ func Load() (*Config, error) {
 		SubjectOU:       env("OPENEIDAS_SUBJECT_OU", "Time Stamping Authority"),
 		SubjectO:        env("OPENEIDAS_SUBJECT_O", "Open eIDAS"),
 		SubjectC:        env("OPENEIDAS_SUBJECT_C", "FR"),
+		TimeSources:     splitList(env("OPENEIDAS_TIME_SOURCES", "ntp.obspm.fr,ptbtime1.ptb.de")),
 	}
 
 	var err error
@@ -81,6 +92,24 @@ func Load() (*Config, error) {
 	if cfg.EnrollInsecure, err = envBool("OPENEIDAS_ENROLL_INSECURE", false); err != nil {
 		return nil, err
 	}
+	if cfg.TimeMinSources, err = envInt("OPENEIDAS_TIME_MIN_SOURCES", 2); err != nil {
+		return nil, err
+	}
+	if cfg.TimeMaxOffset, err = envDuration("OPENEIDAS_TIME_MAX_OFFSET", 500*time.Millisecond); err != nil {
+		return nil, err
+	}
+	if cfg.TimeMaxAge, err = envDuration("OPENEIDAS_TIME_MAX_AGE", time.Hour); err != nil {
+		return nil, err
+	}
+	if cfg.TimePoll, err = envDuration("OPENEIDAS_TIME_POLL", 5*time.Minute); err != nil {
+		return nil, err
+	}
+	if cfg.TimeTimeout, err = envDuration("OPENEIDAS_TIME_TIMEOUT", 5*time.Second); err != nil {
+		return nil, err
+	}
+	if cfg.TimePolicy, err = timesource.ParsePolicy(env("OPENEIDAS_TIME_POLICY", "enforce")); err != nil {
+		return nil, err
+	}
 	if cfg.PolicyOID, err = parseOID(env("OPENEIDAS_POLICY_OID", "1.3.6.1.4.1.99999.1.1.1")); err != nil {
 		return nil, err
 	}
@@ -91,6 +120,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("OPENEIDAS_PIN est obligatoire (code PIN du token PKCS#11)")
 	}
 	return cfg, nil
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, item := range strings.Split(s, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func parseOID(s string) (asn1.ObjectIdentifier, error) {

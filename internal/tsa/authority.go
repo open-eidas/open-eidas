@@ -50,8 +50,19 @@ type Options struct {
 	Policy        asn1.ObjectIdentifier
 	Accuracy      time.Duration
 	SigningDigest crypto.Hash
-	Clock         func() time.Time
+	Clock         Clock
 }
+
+// Clock fournit l'heure à estampiller. Une erreur signifie que l'heure n'est
+// pas rattachable à UTC dans les limites annoncées : la TSA doit alors
+// refuser de signer plutôt que de produire un jeton non fiable.
+type Clock interface {
+	Now() (time.Time, error)
+}
+
+type systemClock struct{}
+
+func (systemClock) Now() (time.Time, error) { return time.Now(), nil }
 
 type Authority struct {
 	opts Options
@@ -78,7 +89,7 @@ func New(o Options) (*Authority, []Warning, error) {
 		return nil, nil, errors.New("tsa: algorithme d'empreinte de signature indisponible")
 	}
 	if o.Clock == nil {
-		o.Clock = time.Now
+		o.Clock = systemClock{}
 	}
 
 	certPub, err := x509.MarshalPKIXPublicKey(o.Certificate.PublicKey)
@@ -104,7 +115,10 @@ func New(o Options) (*Authority, []Warning, error) {
 	if len(o.Certificate.ExtKeyUsage) > 1 || len(o.Certificate.UnknownExtKeyUsage) > 0 {
 		warnings = append(warnings, "le certificat TSU porte d'autres usages étendus que id-kp-timeStamping")
 	}
-	now := o.Clock()
+	// La validité du certificat se vérifie sur l'heure système : à ce stade
+	// la surveillance n'a pas encore de mesure, et un certificat expiré doit
+	// être détecté même sans traçabilité.
+	now := time.Now()
 	if now.After(o.Certificate.NotAfter) {
 		return nil, nil, fmt.Errorf("tsa: certificat TSU expiré depuis le %s", o.Certificate.NotAfter.Format(time.RFC3339))
 	}
@@ -147,10 +161,15 @@ func (a *Authority) Timestamp(reqDER []byte) ([]byte, error) {
 		}
 	}
 
+	genTime, err := a.opts.Clock.Now()
+	if err != nil {
+		return nil, reject(timestamp.TimeNotAvailable, "source de temps indisponible: %v", err)
+	}
+
 	token := timestamp.Timestamp{
 		HashAlgorithm:     req.HashAlgorithm,
 		HashedMessage:     req.HashedMessage,
-		Time:              a.opts.Clock().UTC().Truncate(time.Second),
+		Time:              genTime.UTC().Truncate(time.Second),
 		Accuracy:          a.opts.Accuracy,
 		Nonce:             req.Nonce,
 		Policy:            a.opts.Policy,

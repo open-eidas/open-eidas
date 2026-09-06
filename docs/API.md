@@ -35,6 +35,7 @@ statut HTTP 200 et un `PKIStatusInfo` de type `rejection` :
 | Cas | `failureInfo` |
 |---|---|
 | Requête ASN.1 illisible, longueur d'empreinte incohérente | `badDataFormat` |
+| Heure non traçable jusqu'à UTC | `timeNotAvailable` |
 | Algorithme d'empreinte refusé (SHA-1 notamment) | `badAlg` |
 | Politique demandée non servie par cette TSA | `unacceptedPolicy` |
 | Extension critique inconnue | `unacceptedExtension` |
@@ -119,8 +120,31 @@ chaîne d'émission. C'est le fichier à passer à `openssl ts -verify`.
 
 ## `GET /healthz` — supervision
 
-`200` avec `{"status":"ok"}` tant que le certificat de la TSU est valide,
-`503` lorsqu'il est expiré.
+`200` tant que le certificat de la TSU est valide et que l'heure reste
+traçable ; `503` si le certificat a expiré ou si la traçabilité de l'heure est
+perdue sous politique `enforce`.
+
+```json
+{
+  "status": "ok",
+  "time_source": {
+    "policy": "enforce",
+    "traceable": true,
+    "offset": "7.633304ms",
+    "spread": "8.3047ms",
+    "last_sync": "2026-09-06T13:30:20Z",
+    "sources": [
+      {"server": "ntp.obspm.fr", "offset": "671.396µs", "rtt": "15.649242ms", "stratum": 2, "at": "..."},
+      {"server": "ptbtime1.ptb.de", "offset": "-7.633304ms", "rtt": "29.35773ms", "stratum": 1, "at": "..."}
+    ]
+  },
+  "version": "dev"
+}
+```
+
+Lorsque l'heure n'est plus traçable, toute demande d'horodatage est refusée
+avec le `failureInfo` `timeNotAvailable` — voir
+[la section traçabilité de l'heure](ARCHITECTURE.md#6-traçabilité-de-lheure).
 
 ---
 
@@ -158,6 +182,13 @@ Toutes les options sont pilotées par variables d'environnement.
 | `OPENEIDAS_ACCURACY` | `1s` | Précision annoncée dans le `TSTInfo` |
 | `OPENEIDAS_SIGNING_DIGEST` | `sha256` | Empreinte utilisée pour signer le jeton |
 | `OPENEIDAS_MAX_REQUEST_BYTES` | `65536` | Taille maximale d'une requête |
+| `OPENEIDAS_TIME_POLICY` | `enforce` | `enforce` (refus de signer si l'heure n'est pas traçable), `monitor` ou `disabled` |
+| `OPENEIDAS_TIME_SOURCES` | `ntp.obspm.fr,ptbtime1.ptb.de` | Serveurs de temps de référence, séparés par des virgules |
+| `OPENEIDAS_TIME_MIN_SOURCES` | `2` | Nombre de sources devant répondre pour établir la traçabilité |
+| `OPENEIDAS_TIME_MAX_OFFSET` | `500ms` | Dérive et désaccord maximaux tolérés |
+| `OPENEIDAS_TIME_MAX_AGE` | `1h` | Ancienneté maximale de la dernière mesure |
+| `OPENEIDAS_TIME_POLL` | `5m` | Période d'interrogation des sources |
+| `OPENEIDAS_TIME_TIMEOUT` | `5s` | Délai d'attente par source |
 | `OPENEIDAS_ENROLL_ENDPOINT` | — | URL RPC d'enrôlement OpenXPKI |
 | `OPENEIDAS_ENROLL_CA_FILE` | — | Ancre de confiance TLS de la PKI |
 | `OPENEIDAS_ENROLL_INSECURE` | `false` | Désactive la vérification TLS (démonstration seulement) |

@@ -20,6 +20,7 @@ import (
 
 	"github.com/digitorus/timestamp"
 
+	"github.com/open-eidas/tsa/internal/timesource"
 	"github.com/open-eidas/tsa/internal/tsa"
 )
 
@@ -28,8 +29,14 @@ const (
 	mimeReply = "application/timestamp-reply"
 )
 
+// TimeSource publie l'état de traçabilité de l'heure du service.
+type TimeSource interface {
+	Status() timesource.Status
+}
+
 type Options struct {
 	Authority       *tsa.Authority
+	TimeSource      TimeSource
 	MaxRequestBytes int64
 	Logger          *slog.Logger
 	Version         string
@@ -188,6 +195,7 @@ func (s *server) handlePolicy(w http.ResponseWriter, _ *http.Request) {
 		"tsu_not_after":    cert.NotAfter.UTC().Format(time.RFC3339),
 		"tsu_serial":       cert.SerialNumber.String(),
 		"rfc3161_endpoint": "/tsa",
+		"time_source":      s.opts.TimeSource.Status(),
 		"version":          s.opts.Version,
 	})
 }
@@ -202,12 +210,23 @@ func (s *server) handleCertificate(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	cert := s.opts.Authority.Certificate()
+	timeStatus := s.opts.TimeSource.Status()
+
 	status := http.StatusOK
 	state := "ok"
-	if time.Now().After(cert.NotAfter) {
+	switch {
+	case time.Now().After(cert.NotAfter):
 		status, state = http.StatusServiceUnavailable, "certificat TSU expiré"
+	case !timeStatus.Traceable && timeStatus.Policy == timesource.PolicyEnforce:
+		status, state = http.StatusServiceUnavailable, "heure non traçable : "+timeStatus.Reason
+	case !timeStatus.Traceable:
+		state = "dégradé — heure non traçable : " + timeStatus.Reason
 	}
-	writeJSON(w, status, map[string]string{"status": state, "version": s.opts.Version})
+	writeJSON(w, status, map[string]any{
+		"status":      state,
+		"time_source": timeStatus,
+		"version":     s.opts.Version,
+	})
 }
 
 func (s *server) readBody(r *http.Request) ([]byte, error) {

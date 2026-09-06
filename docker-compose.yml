@@ -113,6 +113,13 @@ services:
       OPENEIDAS_KEY_BITS: "3072"
       OPENEIDAS_POLICY_OID: ${OPENEIDAS_POLICY_OID:-1.3.6.1.4.1.99999.1.1.1}
       OPENEIDAS_ACCURACY: 1s
+      # Traçabilité de l'heure : le service cesse de signer si la dérive
+      # dépasse le seuil ou si le quorum de sources n'est plus joignable.
+      # Sans accès sortant en UDP/123, basculer sur OPENEIDAS_TIME_POLICY=monitor.
+      OPENEIDAS_TIME_POLICY: ${OPENEIDAS_TIME_POLICY:-enforce}
+      OPENEIDAS_TIME_SOURCES: ${OPENEIDAS_TIME_SOURCES:-ntp.obspm.fr,ptbtime1.ptb.de}
+      OPENEIDAS_TIME_MIN_SOURCES: "2"
+      OPENEIDAS_TIME_MAX_OFFSET: 500ms
       OPENEIDAS_CERT_FILE: /var/lib/open-eidas/state/tsu.pem
       OPENEIDAS_CHAIN_FILE: /var/lib/open-eidas/state/chain.pem
       OPENEIDAS_ENROLL_ENDPOINT: https://pki-web/rpc/tsa/RequestCertificate

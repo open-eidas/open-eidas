@@ -25,6 +25,7 @@ import (
 	"github.com/open-eidas/tsa/internal/enroll"
 	"github.com/open-eidas/tsa/internal/hsm"
 	"github.com/open-eidas/tsa/internal/httpapi"
+	"github.com/open-eidas/tsa/internal/timesource"
 	"github.com/open-eidas/tsa/internal/tsa"
 )
 
@@ -81,6 +82,20 @@ func runServe(logger *slog.Logger) error {
 		return err
 	}
 
+	clock, err := timesource.New(timesource.Options{
+		Servers:      cfg.TimeSources,
+		Policy:       cfg.TimePolicy,
+		MinSources:   cfg.TimeMinSources,
+		MaxOffset:    cfg.TimeMaxOffset,
+		MaxAge:       cfg.TimeMaxAge,
+		PollInterval: cfg.TimePoll,
+		Timeout:      cfg.TimeTimeout,
+		Logger:       logger,
+	})
+	if err != nil {
+		return err
+	}
+
 	authority, warnings, err := tsa.New(tsa.Options{
 		Signer:        signer,
 		Certificate:   leaf,
@@ -88,6 +103,7 @@ func runServe(logger *slog.Logger) error {
 		Policy:        cfg.PolicyOID,
 		Accuracy:      cfg.Accuracy,
 		SigningDigest: cfg.SigningDigest,
+		Clock:         clock,
 	})
 	if err != nil {
 		return err
@@ -98,6 +114,7 @@ func runServe(logger *slog.Logger) error {
 
 	handler := httpapi.New(httpapi.Options{
 		Authority:       authority,
+		TimeSource:      clock,
 		MaxRequestBytes: cfg.MaxRequestBytes,
 		Logger:          logger,
 		Version:         version,
@@ -113,6 +130,8 @@ func runServe(logger *slog.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	clock.Start(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {

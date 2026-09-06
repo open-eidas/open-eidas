@@ -166,3 +166,28 @@ func TestNewRejectsCertificateWithoutTimeStampingEKU(t *testing.T) {
 		t.Fatal("un certificat sans id-kp-timeStamping doit être refusé au démarrage")
 	}
 }
+
+type brokenClock struct{}
+
+func (brokenClock) Now() (time.Time, error) {
+	return time.Time{}, errors.New("aucune source de temps jointe")
+}
+
+func TestTimestampRefusesWhenTimeIsNotTraceable(t *testing.T) {
+	authority := newTestAuthority(t)
+	authority.opts.Clock = brokenClock{}
+	digest := sha256.Sum256([]byte("x"))
+
+	_, err := authority.Timestamp(mustRequest(t, timestamp.Request{
+		HashAlgorithm: crypto.SHA256,
+		HashedMessage: digest[:],
+	}))
+
+	var rejection *Rejection
+	if !errors.As(err, &rejection) {
+		t.Fatalf("un refus était attendu, obtenu: %v", err)
+	}
+	if rejection.Failure != timestamp.TimeNotAvailable {
+		t.Errorf("failureInfo attendu timeNotAvailable, obtenu %v", rejection.Failure)
+	}
+}
