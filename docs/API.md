@@ -200,6 +200,10 @@ Toutes les options sont pilotées par variables d'environnement.
 | `OPENEIDAS_AUDIT_SEAL_INTERVAL` | `1h` | Période de scellement de la tête de chaîne (`0` désactive) |
 | `OPENEIDAS_CROSS_TSA_URLS` | `https://freetsa.org/tsr,http://timestamp.digicert.com` | TSA tierces contresignant chaque scellement, séparées par des virgules |
 | `OPENEIDAS_CROSS_TSA_TIMEOUT` | `15s` | Délai d'attente par TSA tierce |
+| `OPENEIDAS_AUDIT_REPLICA_URL` | — | Base WebDAV où répliquer le journal à chaque scellement (vide = désactivé) |
+| `OPENEIDAS_AUDIT_REPLICA_USER` | — | Utilisateur WebDAV |
+| `OPENEIDAS_AUDIT_REPLICA_PASSWORD` | — | Mot de passe WebDAV |
+| `OPENEIDAS_AUDIT_REPLICA_TIMEOUT` | `30s` | Délai d'attente de la réplication |
 | `OPENEIDAS_TIME_POLICY` | `enforce` | `enforce` (refus de signer si l'heure n'est pas traçable), `monitor` ou `disabled` |
 | `OPENEIDAS_TIME_SOURCES` | `ntp.obspm.fr,ptbtime1.ptb.de` | Serveurs de temps de référence, séparés par des virgules |
 | `OPENEIDAS_TIME_MIN_SOURCES` | `2` | Nombre de sources devant répondre pour établir la traçabilité |

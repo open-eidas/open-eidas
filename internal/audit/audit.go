@@ -31,6 +31,7 @@ const (
 	EventOpened             = "log.opened"
 	EventSealed             = "log.sealed"
 	EventCrossSealed        = "log.cross_sealed"
+	EventReplicated         = "log.replicated"
 	EventTimestampGranted   = "timestamp.granted"
 	EventTimestampRejected  = "timestamp.rejected"
 	EventTimeMeasurement    = "time.measurement"

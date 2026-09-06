@@ -18,7 +18,6 @@ Voir la section « Écarts assumés » de [docs/ARCHITECTURE.md](docs/ARCHITECTU
 pour le détail de chaque point :
 
 - intégration de HSM certifiés (au-delà de SoftHSM2) ;
-- réplication hors site du journal d'audit ;
 - redondance du service et procédure de bascule ;
 - conformité fine à ETSI EN 319 421 / 319 422 ;
 - durcissement de la configuration OpenXPKI de démonstration.

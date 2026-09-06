@@ -32,6 +32,7 @@ import (
 	"github.com/open-eidas/tsa/internal/enroll"
 	"github.com/open-eidas/tsa/internal/hsm"
 	"github.com/open-eidas/tsa/internal/httpapi"
+	"github.com/open-eidas/tsa/internal/replicate"
 
 	"github.com/open-eidas/tsa/internal/timesource"
 	"github.com/open-eidas/tsa/internal/tsa"
@@ -165,8 +166,23 @@ func runServe(logger *slog.Logger) error {
 		Logger:  logger,
 	})
 
+	var replicaClient *replicate.Client
+	if cfg.AuditReplicaURL != "" {
+		replicaClient, err = replicate.New(replicate.Options{
+			URL:      cfg.AuditReplicaURL,
+			Username: cfg.AuditReplicaUser,
+			Password: cfg.AuditReplicaPassword,
+			Timeout:  cfg.AuditReplicaTimeout,
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		logger.Warn("réplication hors site du journal d'audit désactivée (OPENEIDAS_AUDIT_REPLICA_URL non configurée)")
+	}
+
 	clock.Start(ctx)
-	startSealing(ctx, journal, authority, crossClient, cfg.AuditSealInterval, logger)
+	startSealing(ctx, journal, authority, crossClient, replicaClient, cfg.AuditFile, cfg.AuditSealInterval, logger)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -312,7 +328,7 @@ func currentCertUsable(cfg *config.Config, signer crypto.Signer) (bool, string) 
 // horodate sa propre empreinte, ce qui date le contenu du journal à cet
 // instant. Un horodatage croisé par une TSA tierce reste à ajouter pour
 // qu'un auditeur n'ait pas à se fier au seul service.
-func startSealing(ctx context.Context, journal *audit.Log, authority *tsa.Authority, cross *crosstsa.Client, interval time.Duration, logger *slog.Logger) {
+func startSealing(ctx context.Context, journal *audit.Log, authority *tsa.Authority, cross *crosstsa.Client, replica *replicate.Client, auditFile string, interval time.Duration, logger *slog.Logger) {
 	if interval <= 0 {
 		logger.Warn("scellement périodique du journal d'audit désactivé")
 		return
@@ -363,6 +379,33 @@ func startSealing(ctx context.Context, journal *audit.Log, authority *tsa.Author
 			return
 		}
 		logger.Info("journal d'audit contresigné par des TSA tierces", "attestations", len(attestations))
+
+		// La réplication a lieu après le contreseing pour que la copie
+		// distante embarque, elle aussi, la preuve d'antériorité tierce.
+		if replica == nil {
+			return
+		}
+		content, err := os.ReadFile(auditFile)
+		if err != nil {
+			logger.Error("réplication impossible : lecture du journal", "err", err)
+			return
+		}
+		filename := fmt.Sprintf("audit-%s-seq%06d.log", time.Now().UTC().Format("20060102T150405Z"), seq)
+		result, err := replica.Replicate(ctx, filename, content)
+		if err != nil {
+			logger.Error("réplication hors site impossible", "err", err)
+			return
+		}
+		if err := journal.Append(audit.EventReplicated, map[string]any{
+			"sealed_seq": seq,
+			"url":        result.URL,
+			"bytes":      result.Bytes,
+			"sha256":     result.SHA256,
+		}); err != nil {
+			logger.Error("réplication non consignée", "err", err)
+			return
+		}
+		logger.Info("journal d'audit répliqué hors site", "url", result.URL, "octets", result.Bytes)
 	}
 
 	go func() {

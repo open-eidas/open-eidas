@@ -34,6 +34,11 @@ type Config struct {
 	CrossTSAURLs    []string
 	CrossTSATimeout time.Duration
 
+	AuditReplicaURL      string
+	AuditReplicaUser     string
+	AuditReplicaPassword string
+	AuditReplicaTimeout  time.Duration
+
 	PolicyOID     asn1.ObjectIdentifier
 	Accuracy      time.Duration
 	SigningDigest crypto.Hash
@@ -59,23 +64,26 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Listen:          env("OPENEIDAS_LISTEN", ":8318"),
-		ShutdownTimeout: 15 * time.Second,
-		PKCS11Module:    env("OPENEIDAS_PKCS11_MODULE", "/usr/lib/softhsm/libsofthsm2.so"),
-		TokenLabel:      env("OPENEIDAS_TOKEN_LABEL", "open-eidas-tsa"),
-		KeyLabel:        env("OPENEIDAS_KEY_LABEL", "tsu-signing-key"),
-		PIN:             os.Getenv("OPENEIDAS_PIN"),
-		CertFile:        env("OPENEIDAS_CERT_FILE", "/var/lib/open-eidas/tsu.pem"),
-		ChainFile:       env("OPENEIDAS_CHAIN_FILE", "/var/lib/open-eidas/chain.pem"),
-		AuditFile:       env("OPENEIDAS_AUDIT_FILE", "/var/lib/open-eidas/audit.log"),
-		EnrollEndpoint:  env("OPENEIDAS_ENROLL_ENDPOINT", ""),
-		EnrollCAFile:    env("OPENEIDAS_ENROLL_CA_FILE", ""),
-		SubjectCN:       env("OPENEIDAS_SUBJECT_CN", "Open eIDAS Time-Stamping Unit 1"),
-		SubjectOU:       env("OPENEIDAS_SUBJECT_OU", "Time Stamping Authority"),
-		SubjectO:        env("OPENEIDAS_SUBJECT_O", "Open eIDAS"),
-		SubjectC:        env("OPENEIDAS_SUBJECT_C", "FR"),
-		TimeSources:     splitList(env("OPENEIDAS_TIME_SOURCES", "ntp.obspm.fr,ptbtime1.ptb.de")),
-		CrossTSAURLs:    splitList(env("OPENEIDAS_CROSS_TSA_URLS", "https://freetsa.org/tsr,http://timestamp.digicert.com")),
+		Listen:               env("OPENEIDAS_LISTEN", ":8318"),
+		ShutdownTimeout:      15 * time.Second,
+		PKCS11Module:         env("OPENEIDAS_PKCS11_MODULE", "/usr/lib/softhsm/libsofthsm2.so"),
+		TokenLabel:           env("OPENEIDAS_TOKEN_LABEL", "open-eidas-tsa"),
+		KeyLabel:             env("OPENEIDAS_KEY_LABEL", "tsu-signing-key"),
+		PIN:                  os.Getenv("OPENEIDAS_PIN"),
+		CertFile:             env("OPENEIDAS_CERT_FILE", "/var/lib/open-eidas/tsu.pem"),
+		ChainFile:            env("OPENEIDAS_CHAIN_FILE", "/var/lib/open-eidas/chain.pem"),
+		AuditFile:            env("OPENEIDAS_AUDIT_FILE", "/var/lib/open-eidas/audit.log"),
+		EnrollEndpoint:       env("OPENEIDAS_ENROLL_ENDPOINT", ""),
+		EnrollCAFile:         env("OPENEIDAS_ENROLL_CA_FILE", ""),
+		SubjectCN:            env("OPENEIDAS_SUBJECT_CN", "Open eIDAS Time-Stamping Unit 1"),
+		SubjectOU:            env("OPENEIDAS_SUBJECT_OU", "Time Stamping Authority"),
+		SubjectO:             env("OPENEIDAS_SUBJECT_O", "Open eIDAS"),
+		SubjectC:             env("OPENEIDAS_SUBJECT_C", "FR"),
+		TimeSources:          splitList(env("OPENEIDAS_TIME_SOURCES", "ntp.obspm.fr,ptbtime1.ptb.de")),
+		CrossTSAURLs:         splitList(env("OPENEIDAS_CROSS_TSA_URLS", "https://freetsa.org/tsr,http://timestamp.digicert.com")),
+		AuditReplicaURL:      env("OPENEIDAS_AUDIT_REPLICA_URL", ""),
+		AuditReplicaUser:     env("OPENEIDAS_AUDIT_REPLICA_USER", ""),
+		AuditReplicaPassword: os.Getenv("OPENEIDAS_AUDIT_REPLICA_PASSWORD"),
 	}
 
 	var err error
@@ -104,6 +112,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.CrossTSATimeout, err = envDuration("OPENEIDAS_CROSS_TSA_TIMEOUT", 15*time.Second); err != nil {
+		return nil, err
+	}
+	if cfg.AuditReplicaTimeout, err = envDuration("OPENEIDAS_AUDIT_REPLICA_TIMEOUT", 30*time.Second); err != nil {
 		return nil, err
 	}
 	if cfg.TimeMinSources, err = envInt("OPENEIDAS_TIME_MIN_SOURCES", 2); err != nil {

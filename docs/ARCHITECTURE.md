@@ -191,8 +191,25 @@ autorité qui n'a aucun lien avec Open eIDAS.
 
 L'indisponibilité d'une TSA tierce est journalisée mais non bloquante : le
 scellement propre au service continue, et les autres TSA configurées
-prennent le relais. Reste hors périmètre du prototype : la réplication du
-journal hors site.
+prennent le relais.
+
+### Réplication hors site
+
+Un journal chaîné et contresigné ne protège que contre l'altération — pas
+contre la perte de l'instance elle-même (panne disque, compromission,
+suppression accidentelle). À chaque scellement, le service dépose donc une
+copie complète et datée du journal (`audit-<horodatage>-seq<n>.log`) sur un
+serveur **WebDAV** distant (`OPENEIDAS_AUDIT_REPLICA_URL`) : Nextcloud, un
+stockage d'objets exposé en WebDAV, ou tout hébergeur souverain qui l'offre —
+aucun fournisseur particulier n'est imposé.
+
+Chaque copie est un journal complet et vérifiable indépendamment :
+```bash
+tsa-server verify-audit audit-20260906T145600Z-seq000030.log
+```
+retrouve exactement la même chaîne de hachage que sur l'instance d'origine,
+jusqu'au numéro de séquence capturé. L'échec de la réplication est
+journalisé mais non bloquant, comme pour le contreseing tiers.
 
 ## 8. Écarts assumés du prototype vis-à-vis d'une TSA qualifiée
 
@@ -204,7 +221,7 @@ feuille de route de qualification :
 | Module cryptographique | SoftHSM2 (logiciel) | HSM certifié FIPS 140-2 niv. 3 / CC EAL4+ |
 | Source de temps | Surveillance NTP de deux sources UTC(k) avec suspension automatique de l'émission | Réception redondante et indépendante, calibration documentée, journal des mesures conservé et audité |
 | Enrôlement de la TSU | Anonyme et auto-approuvé | Authentification du demandeur et approbation par un opérateur RA |
-| Journalisation | Journal chaîné par hachage, contresigné par des TSA tierces publiques | Réplication hors site, politique de conservation formalisée |
+| Journalisation | Journal chaîné par hachage, contresigné par des TSA tierces publiques et répliqué hors site à chaque scellement | Politique de conservation formalisée, réplication multi-région |
 | Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` | OID sous l'arc PEN de l'association, TSA Policy et Practice Statement publiés |
 | Extensions du certificat TSU | Points CRL/OCSP et OID de politique hérités de la configuration de démonstration amont (`pki.example.com`) | Points de distribution réellement publiés et politique de certification propre |
 | Continuité | Instance unique | Redondance active/active, plan de cessation d'activité, séquestre des clés |
@@ -223,7 +240,7 @@ expiré) et journalise un avertissement sur les écarts de profil non bloquants.
    déjà compatible.
 3. **Politique.** Publier la TSA Policy et la Practice Statement, obtenir un
    arc OID propre.
-4. **Exploitation.** Réplication hors site du journal d'audit, supervision,
-   deux instances derrière un répartiteur, procédure de révocation testée.
+4. **Exploitation.** Supervision, deux instances derrière un répartiteur,
+   procédure de révocation testée.
 5. **Qualification.** Constituer le dossier ANSSI et engager l'audit d'un
    organisme accrédité.
