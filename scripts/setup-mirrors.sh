@@ -166,17 +166,19 @@ for repo in "${REPOS[@]}"; do
   echo "$GITLAB_NAMESPACE" | gh secret set GITLAB_NAMESPACE --repo "open-eidas/$repo"
   echo "  [GitHub] Secrets configurés pour open-eidas/$repo."
 
-done
+  # --- D. SYNCHRONISATION INITIALE ---
+  echo "  [Sync] Synchronisation miroir immédiate pour $repo..."
+  TMP_MIRROR=$(mktemp -d)
+  if git clone --bare "https://github.com/open-eidas/${repo}.git" "$TMP_MIRROR" 2>/dev/null; then
+    git --git-dir="$TMP_MIRROR" push --prune --tags "https://${CODEBERG_TOKEN}@codeberg.org/${CODEBERG_ORG}/${repo}.git" "+refs/heads/*:refs/heads/*" || true
+    git --git-dir="$TMP_MIRROR" push --prune --tags "https://oauth2:${GITLAB_TOKEN}@gitlab.com/${GITLAB_NAMESPACE}/${repo}.git" "+refs/heads/*:refs/heads/*" || true
+    echo "  [Sync] $repo synchronisé avec succès sur Codeberg et GitLab."
+  else
+    echo "  [Sync] Note : Le dépôt github open-eidas/$repo est peut-être encore vide ou non initialisé."
+  fi
+  rm -rf "$TMP_MIRROR"
 
-# 6. Synchronisation miroir initiale du dépôt courant
-CURRENT_REPO=$(basename -s .git "$(git config --get remote.origin.url 2>/dev/null || echo "")")
-if [ -n "$CURRENT_REPO" ]; then
-  echo ""
-  echo "--> Synchronisation miroir immédiate pour le dépôt courant ($CURRENT_REPO)..."
-  git push --prune --tags "https://$CODEBERG_TOKEN@codeberg.org/$CODEBERG_ORG/$CURRENT_REPO.git" "+refs/heads/*:refs/heads/*" || true
-  git push --prune --tags "https://oauth2:$GITLAB_TOKEN@gitlab.com/$GITLAB_NAMESPACE/$CURRENT_REPO.git" "+refs/heads/*:refs/heads/*" || true
-  echo "    Synchronisation miroir initiale terminée !"
-fi
+done
 
 echo ""
 echo "=== Tout est configuré avec succès ! ==="
