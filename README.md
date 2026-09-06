@@ -7,6 +7,9 @@
 
 # Open eIDAS — Les services de confiance eIDAS comme infrastructure ouverte
 
+[![CI](https://github.com/open-eidas/open-eidas/actions/workflows/ci.yml/badge.svg)](https://github.com/open-eidas/open-eidas/actions/workflows/ci.yml)
+[![Licence AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
+
 **Démocratiser la confiance numérique eIDAS dans toute l'économie, de façon sûre, ouverte et sans rente.**
 
 Le règlement européen eIDAS a posé le cadre juridique de la confiance numérique : horodatage qualifié, signature et cachet électroniques, archivage à valeur probante, envoi recommandé et portefeuilles d'identité numérique (eIDAS 2.0 / EUDI).
