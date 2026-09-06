@@ -149,9 +149,14 @@ jobs:
       - name: État des pods et journaux (utile en cas d'échec)
         if: always()
         run: |
-          kubectl -n open-eidas get pods
-          kubectl -n open-eidas logs deploy/open-eidas-openxpki -c bootstrap --tail 100 || true
-          kubectl -n open-eidas logs deploy/open-eidas-tsa --tail 100 || true
+          kubectl -n open-eidas get pods -o wide
+          kubectl -n open-eidas describe pods
+          for c in server client web bootstrap; do
+            echo "=== openxpki / $c ==="
+            kubectl -n open-eidas logs deploy/open-eidas-openxpki -c "$c" --tail 200 || true
+          done
+          echo "=== tsa ==="
+          kubectl -n open-eidas logs deploy/open-eidas-tsa --tail 200 || true
 
   compose-smoke-test:
     name: Amorçage complet + démonstration (docker compose)
