@@ -1,0 +1,181 @@
+{{- $fullname := include "open-eidas.fullname" . -}}
+{{- $name := printf "%s-ocsp" $fullname -}}
+{{- $openxpkiHost := printf "%s-openxpki" $fullname -}}
+{{- $generatedSecret := include "open-eidas.generatedSecretName" . -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-softhsm
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.ocsp.persistence.softhsm.storageClassName }}
+  storageClassName: {{ .Values.ocsp.persistence.softhsm.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ocsp.persistence.softhsm.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-state
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.ocsp.persistence.state.storageClassName }}
+  storageClassName: {{ .Values.ocsp.persistence.state.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ocsp.persistence.state.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
+spec:
+  replicas: {{ .Values.ocsp.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ocsp") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ocsp") | nindent 8 }}
+    spec:
+      containers:
+        - name: ocsp
+          image: "{{ .Values.ocsp.image.repository }}:{{ .Values.ocsp.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ocsp.service.port }}
+          env:
+            - name: OPENEIDAS_LISTEN
+              value: {{ printf ":%d" (.Values.ocsp.service.port | int) | quote }}
+            - name: OPENEIDAS_PIN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $generatedSecret }}
+                  key: ocsp-pin
+            - name: OPENEIDAS_TOKEN_LABEL
+              value: open-eidas-ocsp
+            - name: OPENEIDAS_KEY_LABEL
+              value: ocsp-signing-key
+            - name: OPENEIDAS_KEY_BITS
+              value: "3072"
+            - name: OPENEIDAS_CERT_FILE
+              value: /var/lib/open-eidas/state/ocsp.pem
+            - name: OPENEIDAS_CHAIN_FILE
+              value: /var/lib/open-eidas/state/chain.pem
+            - name: OPENEIDAS_ENROLL_ENDPOINT
+              value: {{ printf "https://%s/rpc/ocsp/RequestCertificate" $openxpkiHost | quote }}
+            - name: OPENEIDAS_ENROLL_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $generatedSecret }}
+                  key: enroll-hmac-key
+            # Comme pour la TSA : certificat TLS auto-signé d'OpenXPKI non
+            # vérifiable en interne au cluster, acceptable pour cette
+            # démonstration.
+            - name: OPENEIDAS_ENROLL_INSECURE
+              value: "true"
+            # Adresse à laquelle CE SERVICE joint la PKI pour interroger sa
+            # CRL — interne au cluster, à ne pas confondre avec
+            # open-eidas.pkiPublicURL (adresse externe gravée dans les
+            # certificats).
+            - name: OPENEIDAS_PKI_INTERNAL_URL
+              value: {{ printf "https://%s" $openxpkiHost | quote }}
+            - name: OPENEIDAS_PKI_INSECURE
+              value: "true"
+          volumeMounts:
+            - name: softhsm
+              mountPath: /var/lib/softhsm/tokens
+            - name: state
+              mountPath: /var/lib/open-eidas/state
+          # Comme pour la TSA : l'enrôlement RPC initial peut prendre
+          # plusieurs minutes (voir tsa-deployment.yaml) avant que
+          # /healthz existe.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.ocsp.resources | nindent 12 }}
+      volumes:
+        - name: softhsm
+          persistentVolumeClaim:
+            claimName: {{ $name }}-softhsm
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ $name }}-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
+spec:
+  selector:
+    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.ocsp.service.port }}
+      targetPort: http
+{{- if .Values.ocsp.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
+  {{- with .Values.ocsp.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ocsp.ingress.className }}
+  ingressClassName: {{ .Values.ocsp.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ocsp.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: {{ .Values.ocsp.service.port }}
+  {{- with .Values.ocsp.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,54 @@
+# Profil de certificat du répondeur OCSP d'Open eIDAS (voir
+# internal/ocspresponder, cmd/ocsp-responder).
+
+label: Open eIDAS OCSP Responder
+
+style:
+    enroll:
+        subject:
+            dn: CN=[% CN.0 %],OU=OCSP Responder,O=Open eIDAS,C=FR
+
+        metadata:
+            entity: "[% cert_subject_parts.CN.0 FILTER lower %]"
+
+validity:
+    # Format relatif OpenXPKI::DateTime : +YYYYMMDD (années, mois, jours) —
+    # 3 mois, pas "+00-03" (le tiret est invalide et fait échouer
+    # silencieusement toute émission avec NICE backend error /
+    # I18N_OPENXPKI_DATETIME_GET_VALIDITY_INVALID_VALIDITY).
+    notafter: "+0003"
+
+digest: sha256
+
+extensions:
+    key_usage:
+        critical:          1
+        digital_signature: 1
+
+    extended_key_usage:
+        critical:     1
+        ocsp_signing: 1
+
+    basic_constraints:
+        critical: 1
+        ca: 0
+
+    # id-pkix-ocsp-nocheck (RFC 6960 §4.2.2.2.1) : dispense les vérificateurs
+    # de contrôler la révocation de ce certificat lui-même, ce qui évite la
+    # dépendance circulaire (un répondeur OCSP ne peut pas attester de sa
+    # propre validité). En contrepartie, sa durée de vie est volontairement
+    # courte (3 mois, renouvelée automatiquement comme la TSU).
+    ocsp_nocheck: 1
+
+    # Comme pour tsa_signer.yaml : sans ce bloc, OpenXPKI hérite
+    # silencieusement des points CRL/AIA de démonstration du profil par
+    # défaut (pki.example.com / ocsp.example.com). ocsp_nocheck ci-dessus
+    # rend ces extensions inutiles sur ce certificat précis.
+    crl_distribution_points:
+        critical: 0
+        uri: []
+
+    authority_info_access:
+        critical: 0
+        ca_issuers: ~
+        ocsp: ~

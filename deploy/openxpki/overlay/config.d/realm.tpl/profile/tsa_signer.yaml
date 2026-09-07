@@ -50,15 +50,20 @@ extensions:
     # vers pki.example.com/ocsp.example.com (voir
     # OpenXPKI::Crypt::Profile::_ext_basepath : un profil qui ne déclare pas
     # du tout la clé extensions.<nom> hérite intégralement du profil par
-    # défaut). Déclarer la clé ici, même vide, masque cet héritage et
-    # supprime l'extension : la hiérarchie de CA jetable de
+    # défaut). Déclarer la clé ici, même vide, masque cet héritage.
+    #
+    # ca_issuers reste supprimé : la hiérarchie de CA jetable de
     # contrib/sampleconfig.sh importe les clés directement (oxi token add)
     # sans passer par le workflow d'émission normal, qui est ce qui
     # déclencherait la publication du certificat de CA sur disque (voir
-    # publishing.yaml, section cacert) — et ce prototype ne fait tourner
-    # aucun répondeur OCSP. Publier des URL qui répondraient 404 serait pire
-    # que n'avoir aucune extension.
+    # publishing.yaml, section cacert). Publier une URL qui répondrait 404
+    # serait pire que n'avoir aucune extension — voir « Publication du
+    # certificat de CA » dans docs/ARCHITECTURE.md.
+    #
+    # ocsp pointe en revanche vers un répondeur réellement fonctionnel
+    # (cmd/ocsp-responder) depuis son ajout ; ##OCSPPUBLICURL## est
+    # substitué au démarrage par le même mécanisme que ##PKIPUBLICURL##.
     authority_info_access:
         critical: 0
         ca_issuers: ~
-        ocsp: ~
+        ocsp: "##OCSPPUBLICURL##/ocsp"

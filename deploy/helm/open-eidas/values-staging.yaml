@@ -1,14 +1,16 @@
 # Surcouche de valeurs pour le déploiement public de démonstration sur
-# staging-api.open-eidas.eu (TSA) / staging-pki.open-eidas.eu (PKI).
+# staging-api.open-eidas.eu (TSA), staging-pki.open-eidas.eu (PKI) et
+# staging-ocsp.open-eidas.eu (répondeur OCSP).
 #
 # Préalables sur le cluster cible (non gérés par ce chart) :
 #   - un ingress controller exposé publiquement (ex. ingress-nginx) ;
 #   - cert-manager, avec un ClusterIssuer nommé "letsencrypt-prod" — voir
 #     deploy/cert-manager/cluster-issuer-letsencrypt.yaml ;
-#   - deux enregistrements DNS (A ou CNAME) pointant vers l'adresse publique
+#   - trois enregistrements DNS (A ou CNAME) pointant vers l'adresse publique
 #     de l'ingress controller :
-#       staging-api.open-eidas.eu  -> TSA (API RFC 3161)
-#       staging-pki.open-eidas.eu  -> OpenXPKI (interface, CRL, AIA)
+#       staging-api.open-eidas.eu   -> TSA (API RFC 3161)
+#       staging-pki.open-eidas.eu   -> OpenXPKI (interface, CRL, AIA ca_issuers)
+#       staging-ocsp.open-eidas.eu  -> répondeur OCSP (AIA ocsp)
 #
 # Utilisation :
 #   helm install open-eidas deploy/helm/open-eidas \
@@ -29,8 +31,8 @@ tsa:
         secretName: open-eidas-tsa-tls
 
 openxpki:
-  # Gravée dans les points CRL/AIA du certificat TSU : doit correspondre à
-  # l'hôte ingress ci-dessous pour que la CRL soit vérifiable par des tiers.
+  # Gravée dans le point CRL du certificat TSU : doit correspondre à l'hôte
+  # ingress ci-dessous pour que la CRL soit vérifiable par des tiers.
   publicURL: "https://staging-pki.open-eidas.eu"
   ingress:
     enabled: true
@@ -42,3 +44,17 @@ openxpki:
       - hosts:
           - staging-pki.open-eidas.eu
         secretName: open-eidas-pki-tls
+
+ocsp:
+  # Gravée dans l'extension AIA (champ "ocsp") du certificat TSU.
+  publicURL: "https://staging-ocsp.open-eidas.eu"
+  ingress:
+    enabled: true
+    className: nginx
+    host: staging-ocsp.open-eidas.eu
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    tls:
+      - hosts:
+          - staging-ocsp.open-eidas.eu
+        secretName: open-eidas-ocsp-tls

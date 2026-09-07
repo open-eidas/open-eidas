@@ -169,6 +169,47 @@ services:
       audit-replica:
         condition: service_healthy
 
+  # Répondeur OCSP (RFC 6960) pour la CA émettrice : OpenXPKI Community
+  # n'en embarque aucun (voir docs/ARCHITECTURE.md). S'appuie sur la CRL
+  # déjà publiée par pki-web plutôt que sur un accès direct à la base
+  # OpenXPKI — voir internal/ocspresponder.
+  ocsp-responder:
+    container_name: openeidas_ocsp_responder
+    build:
+      context: .
+      dockerfile: deploy/ocsp-responder/Dockerfile
+      args:
+        VERSION: ${OPENEIDAS_VERSION:-dev}
+    ports:
+      - "8319:8319"
+    environment:
+      OPENEIDAS_PIN: ${OPENEIDAS_OCSP_PIN:-1234}
+      OPENEIDAS_TOKEN_LABEL: open-eidas-ocsp
+      OPENEIDAS_KEY_LABEL: ocsp-signing-key
+      OPENEIDAS_KEY_BITS: "3072"
+      OPENEIDAS_CERT_FILE: /var/lib/open-eidas/state/ocsp.pem
+      OPENEIDAS_CHAIN_FILE: /var/lib/open-eidas/state/chain.pem
+      OPENEIDAS_ENROLL_ENDPOINT: https://pki-web/rpc/ocsp/RequestCertificate
+      OPENEIDAS_ENROLL_HMAC_KEY: ${OPENEIDAS_ENROLL_HMAC_KEY:-}
+      OPENEIDAS_ENROLL_INSECURE: "true"
+      # Adresse à laquelle CE SERVICE joint la PKI pour interroger sa CRL —
+      # interne au réseau docker-compose, à ne pas confondre avec
+      # OPENEIDAS_PKI_PUBLIC_URL (adresse externe gravée dans les
+      # certificats, substituée côté serveur OpenXPKI par bootstrap.sh).
+      OPENEIDAS_PKI_INTERNAL_URL: https://pki-web
+      OPENEIDAS_PKI_INSECURE: "true"
+    volumes:
+      - ocsptokens:/var/lib/softhsm/tokens
+      - ocspstate:/var/lib/open-eidas/state
+    healthcheck:
+      test: ["CMD", "ocsp-responder", "version"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      pki-web:
+        condition: service_healthy
+
 volumes:
   openxpkidb:
   openxpkidbsocket:
@@ -180,3 +221,5 @@ volumes:
   softhsmtokens:
   tsastate:
   auditreplica:
+  ocsptokens:
+  ocspstate:

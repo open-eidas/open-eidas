@@ -218,3 +218,47 @@ Toutes les options sont pilotées par variables d'environnement.
 | `OPENEIDAS_ENROLL_TIMEOUT` | `5m` | Délai maximal d'attente d'un certificat |
 | `OPENEIDAS_RENEW_BEFORE` | `720h` | Fenêtre de renouvellement anticipé |
 | `OPENEIDAS_SUBJECT_CN` | `Open eIDAS Time-Stamping Unit 1` | `CN` demandé dans la CSR |
+
+## Répondeur OCSP (`ocsp-responder`)
+
+Service séparé (`cmd/ocsp-responder`) répondant aux requêtes OCSP (RFC 6960)
+pour la CA émettrice — voir `docs/ARCHITECTURE.md` §2 et
+`internal/ocspresponder`.
+
+### `POST /ocsp` — requête OCSP
+
+Corps : requête OCSP encodée en DER (`Content-Type: application/ocsp-request`,
+non imposé côté serveur). Réponse : `application/ocsp-response`, DER.
+
+```bash
+openssl ocsp -issuer ca.pem -cert tsu.pem -CAfile ca.pem \
+    -url http://localhost:8319/ocsp -resp_text
+```
+
+### `GET /healthz` — supervision
+
+Répond `200 ok` sans condition — le service ne sert que si son certificat et
+sa clé sont chargés (l'entrypoint bloque tant que l'enrôlement RPC n'a pas
+réussi, voir `deploy/ocsp-responder/entrypoint.sh`).
+
+### Configuration
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `OPENEIDAS_LISTEN` | `:8319` | Adresse d'écoute HTTP |
+| `OPENEIDAS_PKCS11_MODULE` | `/usr/lib/softhsm/libsofthsm2.so` | Module PKCS#11 du HSM |
+| `OPENEIDAS_TOKEN_LABEL` | `open-eidas-ocsp` | Label du token |
+| `OPENEIDAS_KEY_LABEL` | `ocsp-signing-key` | Label de la bi-clé de signature |
+| `OPENEIDAS_PIN` | — (obligatoire) | Code PIN du token |
+| `OPENEIDAS_KEY_BITS` | `3072` | Taille de clé RSA, minimum 3072 |
+| `OPENEIDAS_CERT_FILE` | `/var/lib/open-eidas/ocsp.pem` | Certificat de signature OCSP |
+| `OPENEIDAS_CHAIN_FILE` | `/var/lib/open-eidas/chain.pem` | Chaîne d'émission (l'émetteur, `chain[0]`, sert de référence pour les requêtes) |
+| `OPENEIDAS_ENROLL_ENDPOINT` | — | URL RPC d'enrôlement OpenXPKI (`/rpc/ocsp/RequestCertificate`) |
+| `OPENEIDAS_ENROLL_HMAC_KEY` | — | Même secret partagé que la TSA |
+| `OPENEIDAS_ENROLL_CA_FILE` / `OPENEIDAS_ENROLL_INSECURE` / `OPENEIDAS_ENROLL_TIMEOUT` | — / `false` / `5m` | Identiques à la TSA |
+| `OPENEIDAS_RENEW_BEFORE` | `720h` | Fenêtre de renouvellement anticipé |
+| `OPENEIDAS_SUBJECT_CN` / `_OU` / `_O` / `_C` | `Open eIDAS OCSP Responder 1` / `OCSP Responder` / `Open eIDAS` / `FR` | Sujet demandé dans la CSR |
+| `OPENEIDAS_PKI_INTERNAL_URL` | — (obligatoire) | Adresse à laquelle CE SERVICE joint la PKI pour interroger sa CRL (interne au déploiement — distincte de l'adresse publique gravée dans les certificats) |
+| `OPENEIDAS_PKI_CA_FILE` / `OPENEIDAS_PKI_INSECURE` | — / `false` | Ancre de confiance TLS pour `OPENEIDAS_PKI_INTERNAL_URL`, ou tolérance explicite d'un certificat auto-signé (démonstration) |
+| `OPENEIDAS_OCSP_CRL_REFRESH` | `5m` | Période de rafraîchissement de la CRL |
+| `OPENEIDAS_MAX_REQUEST_BYTES` | `16384` | Taille maximale d'une requête OCSP |

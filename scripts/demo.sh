@@ -4,6 +4,7 @@
 set -euo pipefail
 
 TSA_URL="${TSA_URL:-http://localhost:8318}"
+OCSP_URL="${OCSP_URL:-http://localhost:8319/ocsp}"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
@@ -42,5 +43,17 @@ if openssl ts -verify -in facture.tsr -queryfile facture.tsq -CAfile ca.pem 2>&1
 else
     echo
     echo "La vérification a échoué : la chaîne de confiance n'est pas complète." >&2
+    exit 1
+fi
+
+log "6. Statut de révocation du certificat TSU (OCSP, RFC 6960)"
+if openssl ocsp -issuer ca.pem -cert tsu.pem -CAfile ca.pem -no_nonce \
+    -url "$OCSP_URL" -resp_text 2>&1 | tee ocsp-response.txt | grep -q "tsu.pem: good"; then
+    echo
+    printf '\033[1;32mCertificat TSU non révoqué, attesté par le répondeur OCSP.\033[0m\n'
+else
+    echo
+    cat ocsp-response.txt >&2
+    echo "La vérification OCSP a échoué." >&2
     exit 1
 fi

@@ -89,7 +89,8 @@ quelques minutes après que l'ingress soit joignable ; suivre avec
 | `<release>-openxpki` (Deployment) | Un seul Pod à 4 conteneurs (`server`, `client`, `web`, `bootstrap`) partageant des volumes éphémères — topologie équivalente au docker-compose, sans exiger de PVC `ReadWriteMany` |
 | `<release>-audit-replica` (Deployment) | Serveur WebDAV cible de la réplication du journal d'audit |
 | `<release>-tsa` (Deployment) | Service d'horodatage, avec PVC pour le token SoftHSM et l'état (certificat, journal d'audit) |
-| `<release>-generated` (Secret) | Mots de passe MariaDB, PIN SoftHSM, clé du coffre de données, mot de passe WebDAV, secret HMAC d'enrôlement — générés une fois et stables d'un `helm upgrade` à l'autre (motif `lookup`) |
+| `<release>-ocsp` (Deployment) | Répondeur OCSP (RFC 6960) pour la CA émettrice, absent d'OpenXPKI Community — PVC dédié pour son propre token SoftHSM et son état |
+| `<release>-generated` (Secret) | Mots de passe MariaDB, PIN SoftHSM (un par service signataire), clé du coffre de données, mot de passe WebDAV, secret HMAC d'enrôlement — générés une fois et stables d'un `helm upgrade` à l'autre (motif `lookup`) |
 
 Rien de ce qui vit dans le Pod `openxpki` n'a besoin de survivre à un
 redémarrage : la hiérarchie de CA et ses clés sont stockées chiffrées dans
@@ -123,9 +124,10 @@ Voir `values.yaml` pour la liste complète. Les plus utiles :
 | `tsa.image.repository` / `tsa.image.tag` | Image du service d'horodatage |
 | `tsa.time.policy` | `enforce`, `monitor` ou `disabled` — passer à `monitor` si le cluster n'a pas de sortie UDP/123 |
 | `tsa.ingress.enabled` / `tsa.ingress.host` | Exposition HTTP du service |
-| `tsa.pin` / `auditReplica.password` | Valeurs explicites plutôt que générées aléatoirement |
-| `openxpki.publicURL` | Adresse publique gravée dans les points CRL/AIA du certificat TSU — à fixer si le certificat sera vérifié par des tiers hors du cluster |
-| `mariadb.persistence.size`, `tsa.persistence.*.size`, `auditReplica.persistence.size` | Tailles des volumes persistants |
+| `tsa.pin` / `ocsp.pin` / `auditReplica.password` | Valeurs explicites plutôt que générées aléatoirement |
+| `openxpki.publicURL` | Adresse publique gravée dans le point CRL du certificat TSU — à fixer si le certificat sera vérifié par des tiers hors du cluster |
+| `ocsp.publicURL` / `ocsp.ingress.enabled` / `ocsp.ingress.host` | Adresse publique gravée dans l'extension AIA du certificat TSU, et son exposition HTTP |
+| `mariadb.persistence.size`, `tsa.persistence.*.size`, `ocsp.persistence.*.size`, `auditReplica.persistence.size` | Tailles des volumes persistants |
 
 ## Développement local (kind)
 

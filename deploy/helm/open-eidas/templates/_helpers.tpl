@@ -83,3 +83,19 @@ l'extérieur, mais qui garde le chart utilisable sans configuration.
 {{- printf "https://%s-openxpki" (include "open-eidas.fullname" .) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Adresse publique du répondeur OCSP, gravée dans l'extension AIA du
+certificat TSU. Même logique de priorité que open-eidas.pkiPublicURL. Le
+service n'est jamais exposé en TLS lui-même (terminaison à l'ingress) : le
+repli interne au cluster est donc en http, pas https.
+*/}}
+{{- define "open-eidas.ocspPublicURL" -}}
+{{- if .Values.ocsp.publicURL -}}
+{{- .Values.ocsp.publicURL -}}
+{{- else if .Values.ocsp.ingress.enabled -}}
+{{- printf "https://%s" .Values.ocsp.ingress.host -}}
+{{- else -}}
+{{- printf "http://%s-ocsp:%d" (include "open-eidas.fullname" .) (.Values.ocsp.service.port | int) -}}
+{{- end -}}
+{{- end -}}

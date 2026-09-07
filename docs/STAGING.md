@@ -66,7 +66,7 @@ kubectl -n cert-manager get pods
 
 ## 3. Configurer le DNS
 
-Créer deux enregistrements DNS (A si `EXTERNAL-IP` est une IPv4, CNAME si
+Créer trois enregistrements DNS (A si `EXTERNAL-IP` est une IPv4, CNAME si
 l'hébergeur fournit un nom d'hôte de load-balancer) pointant vers l'adresse
 notée à l'étape 1 :
 
@@ -74,6 +74,7 @@ notée à l'étape 1 :
 |---|---|
 | `staging-api.open-eidas.eu` | `EXTERNAL-IP` de l'étape 1 |
 | `staging-pki.open-eidas.eu` | `EXTERNAL-IP` de l'étape 1 |
+| `staging-ocsp.open-eidas.eu` | `EXTERNAL-IP` de l'étape 1 |
 
 Vérifier la propagation avant de continuer (le défi HTTP-01 de Let's
 Encrypt à l'étape 5 échouera tant que ce n'est pas résolu) :
@@ -81,6 +82,7 @@ Encrypt à l'étape 5 échouera tant que ce n'est pas résolu) :
 ```bash
 dig +short staging-api.open-eidas.eu
 dig +short staging-pki.open-eidas.eu
+dig +short staging-ocsp.open-eidas.eu
 ```
 
 ## 4. Appliquer le ClusterIssuer Let's Encrypt
@@ -147,6 +149,10 @@ openssl ts -verify -in facture.tsr -queryfile facture.tsq -CAfile ca.pem
 curl -sf https://staging-pki.open-eidas.eu/download/*.crl -o staging.crl \
     2>/dev/null || echo "adapter le nom de fichier — voir l'AIA du certificat TSU"
 openssl x509 -in tsu.pem -noout -text | grep -A3 "CRL Distribution"
+
+# Vérifie que le répondeur OCSP répond publiquement pour ce certificat :
+openssl ocsp -issuer ca.pem -cert tsu.pem -CAfile ca.pem -no_nonce \
+    -url https://staging-ocsp.open-eidas.eu/ocsp -resp_text
 ```
 
 ## Dépannage

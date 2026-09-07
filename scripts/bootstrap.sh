@@ -60,7 +60,8 @@ fi
 ENROLL_HMAC_KEY="$(cat "$LOCAL_DIR/enroll-hmac.key")"
 export OPENEIDAS_ENROLL_HMAC_KEY="$ENROLL_HMAC_KEY"
 sed -i "s|##ENROLLHMACKEY##|${ENROLL_HMAC_KEY}|" \
-    "$CONFIG_DIR/config.d/realm.tpl/rpc/tsa.yaml"
+    "$CONFIG_DIR/config.d/realm.tpl/rpc/tsa.yaml" \
+    "$CONFIG_DIR/config.d/realm.tpl/rpc/ocsp.yaml"
 
 log "Adresse publique de la PKI (points CRL/AIA du certificat TSU)"
 # /download est servi statiquement par OpenXPKI lui-même (voir
@@ -69,6 +70,11 @@ log "Adresse publique de la PKI (points CRL/AIA du certificat TSU)"
 # certificat. En local, seul https://localhost:8443 l'est.
 PKI_PUBLIC_URL="${OPENEIDAS_PKI_PUBLIC_URL:-https://localhost:8443}"
 sed -i "s|##PKIPUBLICURL##|${PKI_PUBLIC_URL}|g" \
+    "$CONFIG_DIR/config.d/realm.tpl/profile/tsa_signer.yaml"
+
+log "Adresse publique du répondeur OCSP (extension AIA du certificat TSU)"
+OCSP_PUBLIC_URL="${OPENEIDAS_OCSP_PUBLIC_URL:-http://localhost:8319}"
+sed -i "s|##OCSPPUBLICURL##|${OCSP_PUBLIC_URL}|g" \
     "$CONFIG_DIR/config.d/realm.tpl/profile/tsa_signer.yaml"
 
 log "Démarrage de la PKI"
@@ -87,9 +93,17 @@ fi
 log "Construction et démarrage de l'autorité d'horodatage"
 docker compose up -d --build tsa
 
-log "Attente de la délivrance du certificat de la TSU"
-for _ in $(seq 1 60); do
-    if curl -fsS http://localhost:8318/healthz >/dev/null 2>&1; then
+log "Construction et démarrage du répondeur OCSP"
+docker compose up -d --build ocsp-responder
+
+log "Attente de la délivrance des certificats (TSU + OCSP)"
+# Deux enrôlements concurrents sur une CA fraîchement créée peuvent chacun
+# subir le cycle watchdog de rafraîchissement du token de signature (voir
+# le job helm-kind-smoke-test, jusqu'à 5-6 minutes à eux seuls) : 10 minutes
+# laissent une marge confortable.
+for _ in $(seq 1 120); do
+    if curl -fsS http://localhost:8318/healthz >/dev/null 2>&1 \
+        && curl -fsS http://localhost:8319/healthz >/dev/null 2>&1; then
         curl -fsS http://localhost:8318/api/v1/policy
         echo
         log "Pile opérationnelle — lancez ./scripts/demo.sh"
@@ -98,6 +112,6 @@ for _ in $(seq 1 60); do
     sleep 5
 done
 
-echo "La TSA n'a pas démarré dans le délai imparti. Journaux :" >&2
-docker compose logs --tail 50 tsa >&2
+echo "La TSA ou le répondeur OCSP n'a pas démarré dans le délai imparti. Journaux :" >&2
+docker compose logs --tail 50 tsa ocsp-responder >&2
 exit 1

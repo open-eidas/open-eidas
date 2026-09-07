@@ -32,14 +32,22 @@ référentiel sont listés en section 8.
               UTC(OP) · UTC(PTB)   sources de temps de référence
 ```
 
-Quatre responsabilités séparées :
+Cinq responsabilités séparées :
 
 | Composant | Rôle | Image / langage |
 |---|---|---|
 | `tsa-server` | Service RFC 3161, signature des jetons | Go 1.25, binaire unique |
-| SoftHSM2 | Conservation de la clé privée de la TSU | `softhsm2` (Debian), PKCS#11 |
-| OpenXPKI | Hiérarchie de CA, émission et révocation du certificat TSU | `whiterabbitsecurity/openxpki3:3.34` |
+| `ocsp-responder` | Répondeur OCSP (RFC 6960) pour la CA émettrice ; OpenXPKI Community n'en embarque aucun, voir §8 | Go 1.25, binaire unique |
+| SoftHSM2 | Conservation des clés privées de la TSU et du répondeur OCSP (une par service) | `softhsm2` (Debian), PKCS#11 |
+| OpenXPKI | Hiérarchie de CA, émission et révocation des certificats TSU et OCSP | `whiterabbitsecurity/openxpki3:3.34` |
 | MariaDB | Persistance des workflows et du registre de certificats OpenXPKI | `mariadb:11.4` |
+
+`ocsp-responder` s'enrôle lui-même auprès d'OpenXPKI exactement comme
+`tsa-server` (RPC `/rpc/ocsp/RequestCertificate`, même secret HMAC partagé),
+puis répond aux requêtes OCSP en consultant un instantané de la CRL déjà
+publiée par OpenXPKI (`/download`), rafraîchi périodiquement — plutôt qu'un
+accès direct, plus complexe, à la base OpenXPKI. Voir
+`internal/ocspresponder`.
 
 ## 3. Choix techniques et justification
 
@@ -223,7 +231,7 @@ feuille de route de qualification :
 | Enrôlement de la TSU | Authentifié par secret HMAC partagé, auto-approuvé | Approbation par un opérateur RA en plus de l'authentification |
 | Journalisation | Journal chaîné par hachage, contresigné par des TSA tierces publiques et répliqué hors site à chaque scellement | Politique de conservation formalisée, réplication multi-région |
 | Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` | OID sous l'arc PEN de l'association, TSA Policy et Practice Statement publiés |
-| Extensions du certificat TSU | Point de distribution de CRL réellement publié et vérifié (`/download`, servi par OpenXPKI) ; ni AIA ni OCSP, faute de publication du certificat de CA et de répondeur OCSP dans ce bootstrap de démonstration | Publication du certificat de CA, répondeur OCSP exploité, OID de politique de certification propre |
+| Extensions du certificat TSU | Point de distribution de CRL réellement publié et vérifié (`/download`, servi par OpenXPKI) ; répondeur OCSP fonctionnel (`cmd/ocsp-responder`, OpenXPKI Community n'en embarque aucun) ; `ca_issuers` (AIA) toujours supprimé, faute de publication du certificat de CA dans ce bootstrap de démonstration | Publication du certificat de CA, OID de politique de certification propre |
 | Continuité | Instance unique | Redondance active/active, plan de cessation d'activité, séquestre des clés |
 | Audit | Aucun | Évaluation par un organisme accrédité (LSTI, Apave), inscription à la liste de confiance |
 

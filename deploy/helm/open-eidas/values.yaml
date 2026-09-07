@@ -61,6 +61,38 @@ tsa:
     annotations: {}
     tls: []
 
+ocsp:
+  image:
+    repository: ghcr.io/open-eidas/open-eidas-ocsp-responder
+    tag: "latest"
+  replicaCount: 1
+  service:
+    port: 8319
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { cpu: 250m, memory: 128Mi }
+  persistence:
+    softhsm:
+      size: 128Mi
+      storageClassName: ""
+    state:
+      size: 128Mi
+      storageClassName: ""
+  # PIN du token PKCS#11 dédié à ce service, généré aléatoirement et
+  # conservé dans un Secret si laissé vide (voir templates/secret-generated.yaml).
+  pin: ""
+  # Adresse publique du répondeur, gravée dans l'extension AIA du certificat
+  # TSU. Vide = déduite de l'ingress si activé, sinon du nom DNS interne au
+  # cluster (non résoluble de l'extérieur — à fixer explicitement pour tout
+  # déploiement dont le certificat sera vérifié par des tiers).
+  publicURL: ""
+  ingress:
+    enabled: false
+    className: ""
+    host: ocsp.open-eidas.example
+    annotations: {}
+    tls: []
+
 openxpki:
   image:
     repository: whiterabbitsecurity/openxpki3

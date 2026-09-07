@@ -87,6 +87,9 @@ spec:
               cp /overlay/config.d/realm.tpl/profile/tsa_signer.yaml /etc/openxpki/config.d/realm.tpl/profile/tsa_signer.yaml
               cp /overlay/config.d/realm.tpl/rpc/tsa.yaml /etc/openxpki/config.d/realm.tpl/rpc/tsa.yaml
               cp /overlay/client.d/service/rpc/tsa.yaml /etc/openxpki/client.d/service/rpc/tsa.yaml
+              cp /overlay/config.d/realm.tpl/profile/ocsp_responder.yaml /etc/openxpki/config.d/realm.tpl/profile/ocsp_responder.yaml
+              cp /overlay/config.d/realm.tpl/rpc/ocsp.yaml /etc/openxpki/config.d/realm.tpl/rpc/ocsp.yaml
+              cp /overlay/client.d/service/rpc/ocsp.yaml /etc/openxpki/client.d/service/rpc/ocsp.yaml
           volumeMounts:
             - name: config
               mountPath: /etc/openxpki
@@ -136,7 +139,8 @@ spec:
               # que sa demande de certificat soit acceptée
               # (allow_anon_enroll: 0 dans le profil RPC).
               sed -i "s|##ENROLLHMACKEY##|${ENROLL_HMAC_KEY}|" \
-                  /etc/openxpki/config.d/realm.tpl/rpc/tsa.yaml
+                  /etc/openxpki/config.d/realm.tpl/rpc/tsa.yaml \
+                  /etc/openxpki/config.d/realm.tpl/rpc/ocsp.yaml
 
               # Adresse à laquelle qui vérifie un certificat TSU ira chercher
               # la CRL et le certificat de la CA émettrice (/download, servi
@@ -144,6 +148,11 @@ spec:
               # DNS interne au cluster n'est pas résoluble de l'extérieur —
               # voir values.openxpki.publicURL pour le fixer explicitement.
               sed -i "s|##PKIPUBLICURL##|${PKI_PUBLIC_URL}|g" \
+                  /etc/openxpki/config.d/realm.tpl/profile/tsa_signer.yaml
+
+              # Adresse publique du répondeur OCSP, gravée dans l'extension
+              # AIA du certificat TSU — voir values.ocsp.publicURL.
+              sed -i "s|##OCSPPUBLICURL##|${OCSP_PUBLIC_URL}|g" \
                   /etc/openxpki/config.d/realm.tpl/profile/tsa_signer.yaml
 
               cat > /etc/openxpki/config.d/system/database.yaml <<EOF
@@ -181,6 +190,8 @@ spec:
                   key: enroll-hmac-key
             - name: PKI_PUBLIC_URL
               value: {{ include "open-eidas.pkiPublicURL" . | quote }}
+            - name: OCSP_PUBLIC_URL
+              value: {{ include "open-eidas.ocspPublicURL" . | quote }}
           volumeMounts:
             - name: config
               mountPath: /etc/openxpki
@@ -370,6 +381,12 @@ spec:
                 path: config.d/realm.tpl/rpc/tsa.yaml
               - key: rpc-client-tsa.yaml
                 path: client.d/service/rpc/tsa.yaml
+              - key: ocsp-responder-profile.yaml
+                path: config.d/realm.tpl/profile/ocsp_responder.yaml
+              - key: rpc-server-ocsp.yaml
+                path: config.d/realm.tpl/rpc/ocsp.yaml
+              - key: rpc-client-ocsp.yaml
+                path: client.d/service/rpc/ocsp.yaml
 ---
 apiVersion: v1
 kind: Service

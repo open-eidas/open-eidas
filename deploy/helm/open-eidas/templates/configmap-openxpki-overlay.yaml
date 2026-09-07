@@ -24,3 +24,9 @@ data:
     {{- .Files.Get "files/openxpki-overlay/config.d/realm.tpl/rpc/tsa.yaml" | nindent 4 }}
   rpc-client-tsa.yaml: |
     {{- .Files.Get "files/openxpki-overlay/client.d/service/rpc/tsa.yaml" | nindent 4 }}
+  ocsp-responder-profile.yaml: |
+    {{- .Files.Get "files/openxpki-overlay/config.d/realm.tpl/profile/ocsp_responder.yaml" | nindent 4 }}
+  rpc-server-ocsp.yaml: |
+    {{- .Files.Get "files/openxpki-overlay/config.d/realm.tpl/rpc/ocsp.yaml" | nindent 4 }}
+  rpc-client-ocsp.yaml: |
+    {{- .Files.Get "files/openxpki-overlay/client.d/service/rpc/ocsp.yaml" | nindent 4 }}
