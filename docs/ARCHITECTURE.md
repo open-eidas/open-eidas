@@ -234,10 +234,34 @@ feuille de route de qualification :
 | Extensions du certificat TSU | Point de distribution de CRL, répondeur OCSP (`cmd/ocsp-responder`, absent d'OpenXPKI Community) et certificat de la CA émettrice (AIA `ca_issuers`) tous réellement publiés et vérifiés (`/download`) | OID de politique de certification propre |
 | Continuité | Instance unique | Redondance active/active, plan de cessation d'activité, séquestre des clés |
 | Audit | Aucun | Évaluation par un organisme accrédité (LSTI, Apave), inscription à la liste de confiance |
+| Moteur de CA/RA | OpenXPKI Community — plusieurs comportements internes non documentés découverts par rétro-ingénierie lors de l'ajout du répondeur OCSP et de l'approbation RA (auto-approbation silencieuse malgré `approval_points`, résolution de rôle incohérente entre la CLI privilégiée et une session authentifiée normale) | Voir la note ci-dessous |
 
 Le prototype refuse de démarrer sur les écarts qui rendraient les jetons
 invalides (clé et certificat désaccordés, usage étendu absent, certificat
 expiré) et journalise un avertissement sur les écarts de profil non bloquants.
+
+**Note sur le moteur de CA/RA.** L'intégration d'OpenXPKI a exigé, à
+plusieurs reprises, de rétro-ingénierier son comportement interne faute de
+documentation (voir l'historique de ce dépôt autour de l'ajout du répondeur
+OCSP et de l'activation réelle de l'approbation RA) : un profil de
+certificat mal formé y échoue silencieusement côté moteur NICE plutôt que de
+rejeter la configuration, et le point d'approbation RA était contourné par
+une règle d'éligibilité sans qu'aucune erreur ne le signale. Ce type
+d'opacité est précisément ce qu'un audit eIDAS voudra examiner de près,
+puisqu'il touche à des contrôles documentés (validité du profil de
+certificat, effectivité de l'approbation RA).
+
+Une piste envisagée, non engagée à ce stade : remplacer OpenXPKI par un
+moteur de CA/RA minimal et entièrement maison en Go, sur le modèle de
+`cmd/ocsp-responder`. Le périmètre réel qu'OpenXPKI couvre pour ce projet
+est étroit — émission depuis une CSR (`x509.CreateCertificate`), génération
+de CRL (`x509.CreateRevocationList`, symétrique du code déjà écrit côté
+OCSP), une machine à états d'approbation à un seul workflow — et le
+bénéfice serait un code intégralement écrit et compris par l'équipe, sur le
+même modèle d'auditabilité que la TSA et le répondeur OCSP eux-mêmes,
+au prix d'un chantier de plusieurs semaines et de la responsabilité pleine
+et entière de la correction cryptographique d'un moteur de CA (unicité des
+numéros de série, encodage des extensions, cérémonie de clé racine/émettrice).
 
 ## 9. Trajectoire vers la production
 
