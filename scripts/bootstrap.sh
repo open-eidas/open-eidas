@@ -90,6 +90,24 @@ else
     log "Hiérarchie de CA déjà initialisée"
 fi
 
+log "Publication du certificat de la CA émettrice (extension AIA ca_issuers)"
+# sampleconfig.sh importe la hiérarchie de CA directement (oxi token add)
+# sans passer par le workflow d'émission normal, qui est ce qui
+# déclencherait la publication automatique (publishing.yaml, section
+# cacert) : publié ici explicitement, à chaque exécution (idempotent, et
+# ré-interrogé en direct auprès d'OpenXPKI plutôt que d'un fichier
+# éphémère de sampleconfig.sh, pour rester correct après un redémarrage).
+CA_ALIAS="$(docker compose exec -T -u pkiadm pki-server \
+    oxi token list --realm democa --type certsign | awk '/active:/{print $2; exit}')"
+CA_INFO="$(docker compose exec -T -u pkiadm pki-server \
+    oxi token show --realm democa --alias "$CA_ALIAS" --cert)"
+CA_IDENTIFIER="$(echo "$CA_INFO" | awk -F': ' '/^identifier:/{print $2}')"
+CA_CN="$(echo "$CA_INFO" | sed -n 's/^cert_subject: CN=//p')"
+CA_CN_SAFE="$(echo "$CA_CN" | sed -E 's/[^A-Za-z0-9_-]/_/g')"
+docker compose exec -T -u pkiadm pki-server oxi certificate show --identifier "$CA_IDENTIFIER" --certonly \
+    | docker compose exec -T -u openxpki pki-server sh -c \
+        "openssl x509 -outform der -out /var/www/download/${CA_CN_SAFE}.cer"
+
 log "Construction et démarrage de l'autorité d'horodatage"
 docker compose up -d --build tsa
 

@@ -331,6 +331,23 @@ spec:
                   bash /etc/openxpki/contrib/sampleconfig.sh
               fi
 
+              # sampleconfig.sh importe la hiérarchie de CA directement
+              # (oxi token add) sans passer par le workflow d'émission
+              # normal, qui est ce qui déclencherait la publication
+              # automatique du certificat de CA (publishing.yaml, section
+              # cacert) — publié ici explicitement à chaque démarrage de ce
+              # conteneur (idempotent, réinterrogé en direct auprès
+              # d'OpenXPKI pour rester correct après une recréation du Pod
+              # postérieure à un premier amorçage réussi).
+              echo "publication du certificat de la CA émettrice (extension AIA ca_issuers)"
+              ca_alias=$(oxi token list --realm democa --type certsign | awk '/active:/{print $2; exit}')
+              ca_info=$(oxi token show --realm democa --alias "$ca_alias" --cert)
+              ca_identifier=$(echo "$ca_info" | awk -F': ' '/^identifier:/{print $2}')
+              ca_cn=$(echo "$ca_info" | sed -n 's/^cert_subject: CN=//p')
+              ca_cn_safe=$(echo "$ca_cn" | sed -E 's/[^A-Za-z0-9_-]/_/g')
+              oxi certificate show --identifier "$ca_identifier" --certonly \
+                  | openssl x509 -outform der -out "/var/www/download/${ca_cn_safe}.cer"
+
               echo "amorçage terminé — ce conteneur reste actif pour inspection (kubectl logs)"
               sleep infinity
           volumeMounts:
@@ -342,6 +359,8 @@ spec:
               readOnly: true
             - name: pkiadm-home
               mountPath: /home/pkiadm
+            - name: www-download
+              mountPath: /var/www/download
           readinessProbe:
             exec:
               command: ["test", "-f", "/home/pkiadm/.bootstrap-attempted"]
