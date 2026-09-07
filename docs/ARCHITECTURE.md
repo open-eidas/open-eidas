@@ -262,6 +262,7 @@ même modèle d'auditabilité que la TSA et le répondeur OCSP eux-mêmes,
 au prix d'un chantier de plusieurs semaines et de la responsabilité pleine
 et entière de la correction cryptographique d'un moteur de CA (unicité des
 numéros de série, encodage des extensions, cérémonie de clé racine/émettrice).
+Arbitrage détaillé et plan envisagé : [INDEPENDANCE.md](../INDEPENDANCE.md).
 
 ## 9. Trajectoire vers la production
 
