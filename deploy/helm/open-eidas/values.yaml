@@ -109,6 +109,14 @@ openxpki:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 768Mi }
+  persistence:
+    # CRL et certificat de CA publiés (/download) : contrairement au reste
+    # du Pod openxpki, OpenXPKI ne les republie jamais spontanément une
+    # fois le workflow d'émission terminé, d'où un PVC dédié plutôt qu'un
+    # emptyDir.
+    download:
+      size: 64Mi
+      storageClassName: ""
   # Images utilisées par les conteneurs d'initialisation de la configuration
   # (clonage du dépôt amont, application de l'overlay, génération des secrets
   # locaux au pod).

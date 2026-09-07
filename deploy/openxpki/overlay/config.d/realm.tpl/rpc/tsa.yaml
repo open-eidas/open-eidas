@@ -2,15 +2,17 @@
 #
 # Le demandeur doit prouver la possession du secret partagé
 # ##ENROLLHMACKEY## (HMAC-SHA256 sur le CSR, voir internal/enroll) : sans ce
-# secret, la requête est rejetée avant même d'atteindre le workflow. C'est
-# la seule barrière d'entrée — l'émission reste automatique (approval_points
-# à 0) pour que le service reste auto-hébergeable sans opérateur humain,
-# conformément à la mission d'une API d'horodatage automatisable.
-#
-# ÉCART RESTANT — une instance destinée à la qualification doit en outre
-# soumettre chaque demande à l'approbation d'un opérateur RA
-# (allow_man_approv: 1, approval_points: 1), au prix de perdre
-# l'automatisation complète.
+# secret, la requête est rejetée avant même d'atteindre le workflow. Ce
+# n'est cependant qu'une authentification, pas une décision d'émission :
+# chaque demande reste soumise à l'approbation d'un opérateur RA
+# (allow_man_approv, approval_points) avant que le certificat ne soit
+# délivré — voir scripts/bootstrap.sh (compose) et le conteneur bootstrap
+# du chart Helm pour l'approbation automatisée qui rend cette pile
+# utilisable sans intervention humaine en démonstration/CI, tout en
+# gardant le point d'approbation réellement actif pour un déploiement
+# destiné à la qualification (il suffit alors de ne pas exécuter cette
+# approbation automatique et de la remplacer par une revue humaine réelle
+# via l'interface OpenXPKI).
 
 label: Open eIDAS TSU Enrollment
 
@@ -23,10 +25,12 @@ policy:
     allow_anon_enroll: 0
     allow_man_authen: 0
 
-    # Émission immédiate, sans point d'approbation — voir l'écart ci-dessus.
-    allow_man_approv: 0
+    # Point d'approbation RA obligatoire avant émission — voir le
+    # commentaire d'en-tête pour l'automatisation de cette étape en
+    # démonstration/CI.
+    allow_man_approv: 1
     allow_eligibility_recheck: 0
-    approval_points: 0
+    approval_points: 1
 
     # Une seule TSU active par sujet ; l'ancien certificat est révoqué lors
     # d'un renouvellement afin de garder une chaîne de confiance lisible.
@@ -48,10 +52,17 @@ profile:
     cert_profile: tsa_signer
     cert_subject_style: enroll
 
+# `eligible: value: 1` déclencherait une auto-approbation
+# (OpenXPKI::Server::Workflow::Activity::Tools::EvaluateEligibility puis
+# approve_by_eligiblity, voir workflow/def/certificate_enroll.yaml,
+# state EVALUATE_AUTOAPPROVAL) qui contournerait purement et simplement
+# approval_points ci-dessus. La valeur 0 est ce qui fait réellement
+# atterrir chaque demande en état PENDING, dans l'attente d'un
+# `approve_csr` explicite par un opérateur RA authentifié.
 eligible:
     initial:
-        value: 1
+        value: 0
     renewal:
-        value: 1
+        value: 0
     onbehalf:
-        value: 1
+        value: 0

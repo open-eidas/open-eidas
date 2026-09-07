@@ -1,0 +1,56 @@
+# Endpoint RPC exposé par le frontal OpenXPKI :
+#   POST https://<pki>/rpc/approve/ApproveEnrollment
+#
+# Approuve une demande d'enrôlement (TSU ou répondeur OCSP) déjà soumise et
+# en attente (état PENDING, voir rpc/tsa.yaml et rpc/ocsp.yaml) : reprend le
+# workflow via son transaction_id (mécanisme "pickup", voir
+# workflow/def/check_enrollment.yaml) puis exécute l'activité
+# enroll_approve_csr sans jamais créer de nouveau workflow
+# (execute_action, voir OpenXPKI::Client::Service::RPC::handle_rpc_request).
+# Le préfixe "enroll_" est celui déclaré par workflow/def/certificate_enroll.yaml
+# (head.prefix), toute action ou condition interne à ce workflow en hérite.
+#
+# Authentifié par un compte technique dédié (rôle RA Operator), dont les
+# identifiants sont substitués au démarrage — voir scripts/bootstrap.sh et
+# le conteneur bootstrap du chart Helm — plutôt que par le secret HMAC
+# partagé (celui-ci authentifie le DEMANDEUR d'un certificat, pas
+# l'approbateur : une clé HMAC compromise ne doit pas suffire à
+# auto-approuver ses propres demandes).
+#
+# ÉCART — cette approbation reste automatisée pour que la pile de
+# démonstration/CI s'amorce sans opérateur humain. Un déploiement destiné à
+# la qualification doit remplacer cet appel automatique par une revue
+# humaine réelle (interface OpenXPKI, compte RA Operator nominatif).
+
+global:
+    realm: democa
+
+locale:
+    language: en_US
+
+# Le service RPC se connecte lui-même en tant que ce compte technique pour
+# traiter toute requête sur cet endpoint (voir OpenXPKI::Client::Simple,
+# login de type "passwd" : transmet directement username/password au
+# serveur — pas l'appelant HTTP). ##APPROVERUSERNAME##/##APPROVERPASSWORD##
+# sont substitués au démarrage par la même mécanique que le secret HMAC.
+auth:
+    stack: LocalPassword
+    username: "##APPROVERUSERNAME##"
+    password: "##APPROVERPASSWORD##"
+
+input:
+    allow_raw_post: 1
+    parse_depth: 5
+
+jose: ~
+
+output:
+    use_http_status_codes: 1
+
+ApproveEnrollment:
+    workflow: certificate_enroll
+    pickup:
+        workflow: check_enrollment
+        input:
+          - transaction_id
+    execute_action: enroll_approve_csr

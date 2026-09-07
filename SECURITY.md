@@ -31,7 +31,8 @@ Sont concernés :
 Ne sont pas couverts par cette politique les composants tiers embarqués
 (OpenXPKI, SoftHSM2, MariaDB) : signalez leurs vulnérabilités à leurs projets
 respectifs. Une exposition résultant uniquement de la configuration de
-*démonstration* documentée comme telle (enrôlement anonyme et auto-approuvé,
+*démonstration* documentée comme telle (enrôlement authentifié par secret
+partagé et approuvé automatiquement,
 TLS non vérifié, OID de politique de test) est un écart connu, listé dans
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#8-écarts-assumés-du-prototype-vis-à-vis-dune-tsa-qualifiée) ;
 elle reste toutefois bienvenue à signaler si vous identifiez une aggravation

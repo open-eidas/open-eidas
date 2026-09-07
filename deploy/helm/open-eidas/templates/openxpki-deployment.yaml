@@ -4,10 +4,14 @@ web, bootstrap) partageant des volumes éphémères, plutôt que quatre
 ressources séparées liées par un PVC ReadWriteMany : c'est exactement la
 même topologie logique que le docker-compose de démonstration (qui partage
 un unique répertoire hôte entre ses services), sans exiger de classe de
-stockage RWX. Rien de ce qui vit dans ces volumes n'a besoin de survivre à un
+stockage RWX. La plupart de ce qui vit dans ces volumes n'a pas besoin de survivre à un
 redémarrage du Pod : la hiérarchie de CA et ses clés sont stockées chiffrées
 dans MariaDB (voir config.d/system/crypto.yaml, key_store: OPENXPKI), donc
-persistantes indépendamment de ce Pod.
+persistantes indépendamment de ce Pod. Exception : /var/www/download (CRL,
+certificat de CA), qu'OpenXPKI ne republie jamais spontanément une fois le
+workflow d'émission terminé avec succès — un simple emptyDir y perdrait
+silencieusement la CRL déjà émise à la moindre recréation du Pod. Ce volume
+est donc un PVC dédié plutôt qu'un emptyDir comme les autres.
 
 Le conteneur "bootstrap" attend que le serveur soit prêt puis exécute une
 seule fois contrib/sampleconfig.sh (génération de la hiérarchie de CA de
@@ -19,6 +23,21 @@ même si ce Pod est recréé après un premier amorçage réussi.
 {{- $name := printf "%s-openxpki" $fullname -}}
 {{- $mariadbHost := printf "%s-mariadb" $fullname -}}
 {{- $generatedSecret := include "open-eidas.generatedSecretName" . -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-download
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "openxpki") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.openxpki.persistence.download.storageClassName }}
+  storageClassName: {{ .Values.openxpki.persistence.download.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.openxpki.persistence.download.size }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -90,6 +109,7 @@ spec:
               cp /overlay/config.d/realm.tpl/profile/ocsp_responder.yaml /etc/openxpki/config.d/realm.tpl/profile/ocsp_responder.yaml
               cp /overlay/config.d/realm.tpl/rpc/ocsp.yaml /etc/openxpki/config.d/realm.tpl/rpc/ocsp.yaml
               cp /overlay/client.d/service/rpc/ocsp.yaml /etc/openxpki/client.d/service/rpc/ocsp.yaml
+              cp /overlay/client.d/service/rpc/approve.yaml /etc/openxpki/client.d/service/rpc/approve.yaml
           volumeMounts:
             - name: config
               mountPath: /etc/openxpki
@@ -155,6 +175,12 @@ spec:
               sed -i "s|##OCSPPUBLICURL##|${OCSP_PUBLIC_URL}|g" \
                   /etc/openxpki/config.d/realm.tpl/profile/tsa_signer.yaml
 
+              # Compte technique d'approbation RA (voir le conteneur
+              # bootstrap pour la création de userdb.yaml et la boucle
+              # d'approbation automatique).
+              sed -i "s|##APPROVERUSERNAME##|${APPROVER_USERNAME}|; s|##APPROVERPASSWORD##|${APPROVER_PASSWORD}|" \
+                  /etc/openxpki/client.d/service/rpc/approve.yaml
+
               cat > /etc/openxpki/config.d/system/database.yaml <<EOF
               main:
                   type: MariaDB2
@@ -188,6 +214,13 @@ spec:
                 secretKeyRef:
                   name: {{ $generatedSecret }}
                   key: enroll-hmac-key
+            - name: APPROVER_USERNAME
+              value: "open-eidas-approver"
+            - name: APPROVER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $generatedSecret }}
+                  key: approver-password
             - name: PKI_PUBLIC_URL
               value: {{ include "open-eidas.pkiPublicURL" . | quote }}
             - name: OCSP_PUBLIC_URL
@@ -211,6 +244,12 @@ spec:
               mountPath: /etc/openxpki
             - name: run-openxpkid
               mountPath: /run/openxpkid
+            # auth/connector.yaml (LocalPassword) lit userdb.yaml ici — le
+            # compte technique d'approbation RA écrit par le conteneur
+            # bootstrap (voir plus bas).
+            - name: pkiadm-home
+              mountPath: /home/pkiadm
+              readOnly: true
             - name: var-log-server
               mountPath: /var/log/openxpki
             - name: www-download
@@ -310,6 +349,13 @@ spec:
           env:
             - name: HOME
               value: /home/pkiadm
+            - name: APPROVER_USERNAME
+              value: "open-eidas-approver"
+            - name: APPROVER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $generatedSecret }}
+                  key: approver-password
           command:
             - bash
             - -c
@@ -348,8 +394,34 @@ spec:
               oxi certificate show --identifier "$ca_identifier" --certonly \
                   | openssl x509 -outform der -out "/var/www/download/${ca_cn_safe}.cer"
 
-              echo "amorçage terminé — ce conteneur reste actif pour inspection (kubectl logs)"
-              sleep infinity
+              # Compte technique d'approbation RA — userdb.yaml vit dans ce
+              # conteneur (non persisté par un volume dédié) : régénéré à
+              # chaque démarrage, sans conséquence puisque toujours réécrit
+              # avec le même mot de passe (Secret open-eidas-generated).
+              echo "compte technique d'approbation RA"
+              approver_digest=$(echo -n "${APPROVER_PASSWORD}" | oxi auth password --stdin)
+              cat > /home/pkiadm/userdb.yaml <<EOF
+              ${APPROVER_USERNAME}:
+                  digest: "${approver_digest}"
+                  role: RA Operator
+              EOF
+              chmod 644 /home/pkiadm/userdb.yaml
+
+              echo "amorçage terminé — boucle d'approbation automatique du point RA (voir client.d/service/rpc/approve.yaml)"
+              while true; do
+                  oxi workflow list --realm democa --type certificate_enroll 2>/dev/null \
+                      | awk '/workflow_id:/{id=$2} /workflow_state: PENDING/{print id}' \
+                      | while read -r wf_id; do
+                          [ -n "$wf_id" ] || continue
+                          tid=$(oxi workflow show --realm democa --id "$wf_id" 2>/dev/null \
+                              | sed -n 's/^    transaction_id: //p')
+                          [ -n "$tid" ] || continue
+                          wget -q --no-check-certificate \
+                              --post-data="transaction_id=${tid}" \
+                              -O /dev/null https://localhost:443/rpc/approve/ApproveEnrollment 2>/dev/null || true
+                      done
+                  sleep 10
+              done
           volumeMounts:
             - name: config
               mountPath: /etc/openxpki
@@ -383,7 +455,8 @@ spec:
         - name: run-clientd
           emptyDir: {}
         - name: www-download
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: {{ $name }}-download
         - name: var-log-server
           emptyDir: {}
         - name: var-log-client
@@ -406,6 +479,8 @@ spec:
                 path: config.d/realm.tpl/rpc/ocsp.yaml
               - key: rpc-client-ocsp.yaml
                 path: client.d/service/rpc/ocsp.yaml
+              - key: rpc-client-approve.yaml
+                path: client.d/service/rpc/approve.yaml
 ---
 apiVersion: v1
 kind: Service

@@ -1,6 +1,6 @@
 # Politique d'enrôlement de l'endpoint RPC « ocsp », sur le même modèle que
-# rpc/tsa.yaml : authentification par le même secret HMAC partagé, émission
-# automatique sans approbation humaine (voir l'écart documenté dans
+# rpc/tsa.yaml : authentification par le même secret HMAC partagé, soumise
+# à l'approbation d'un opérateur RA (voir le commentaire d'en-tête de
 # rpc/tsa.yaml, qui s'applique identiquement ici).
 
 label: Open eIDAS OCSP Responder Enrollment
@@ -11,9 +11,9 @@ policy:
     allow_anon_enroll: 0
     allow_man_authen: 0
 
-    allow_man_approv: 0
+    allow_man_approv: 1
     allow_eligibility_recheck: 0
-    approval_points: 0
+    approval_points: 1
 
     max_active_certs: 1
     auto_revoke_existing_certs: 1
@@ -27,10 +27,12 @@ profile:
     cert_profile: ocsp_responder
     cert_subject_style: enroll
 
+# Voir le commentaire correspondant dans rpc/tsa.yaml : value: 0 est requis
+# pour que approval_points ci-dessus ait un effet réel.
 eligible:
     initial:
-        value: 1
+        value: 0
     renewal:
-        value: 1
+        value: 0
     onbehalf:
-        value: 1
+        value: 0

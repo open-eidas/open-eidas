@@ -228,7 +228,7 @@ feuille de route de qualification :
 |---|---|---|
 | Module cryptographique | SoftHSM2 (logiciel) | HSM certifié FIPS 140-2 niv. 3 / CC EAL4+ |
 | Source de temps | Surveillance NTP de deux sources UTC(k) avec suspension automatique de l'émission | Réception redondante et indépendante, calibration documentée, journal des mesures conservé et audité |
-| Enrôlement de la TSU | Authentifié par secret HMAC partagé, auto-approuvé | Approbation par un opérateur RA en plus de l'authentification |
+| Enrôlement de la TSU | Authentifié par secret HMAC partagé ; point d'approbation RA réellement actif (`allow_man_approv`), mais approuvé automatiquement par un compte technique pour que la démonstration/CI s'amorce sans opérateur humain | Revue humaine réelle par un opérateur RA nominatif (interface OpenXPKI), à la place de l'approbation automatisée |
 | Journalisation | Journal chaîné par hachage, contresigné par des TSA tierces publiques et répliqué hors site à chaque scellement | Politique de conservation formalisée, réplication multi-région |
 | Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` | OID sous l'arc PEN de l'association, TSA Policy et Practice Statement publiés |
 | Extensions du certificat TSU | Point de distribution de CRL, répondeur OCSP (`cmd/ocsp-responder`, absent d'OpenXPKI Community) et certificat de la CA émettrice (AIA `ca_issuers`) tous réellement publiés et vérifiés (`/download`) | OID de politique de certification propre |

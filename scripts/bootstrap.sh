@@ -77,8 +77,31 @@ OCSP_PUBLIC_URL="${OPENEIDAS_OCSP_PUBLIC_URL:-http://localhost:8319}"
 sed -i "s|##OCSPPUBLICURL##|${OCSP_PUBLIC_URL}|g" \
     "$CONFIG_DIR/config.d/realm.tpl/profile/tsa_signer.yaml"
 
+log "Compte technique d'approbation RA (point d'approbation manuelle)"
+if [ ! -f "$LOCAL_DIR/approver-password" ]; then
+    openssl rand -base64 32 | tr -d '\n=+/' | head -c 32 > "$LOCAL_DIR/approver-password"
+    chmod 600 "$LOCAL_DIR/approver-password"
+fi
+APPROVER_USERNAME="open-eidas-approver"
+APPROVER_PASSWORD="$(cat "$LOCAL_DIR/approver-password")"
+sed -i "s|##APPROVERUSERNAME##|${APPROVER_USERNAME}|; s|##APPROVERPASSWORD##|${APPROVER_PASSWORD}|" \
+    "$CONFIG_DIR/client.d/service/rpc/approve.yaml"
+
 log "Démarrage de la PKI"
 docker compose up -d --wait pki-web
+
+# userdb.yaml vit dans le HOME du conteneur pki-server (non persisté par un
+# volume dédié, contrairement à config.d) : régénéré à chaque exécution,
+# après coup, plutôt qu'une seule fois — idempotent et sans conséquence
+# puisque toujours réécrit avec le même mot de passe persisté ci-dessus.
+docker compose exec -T -u pkiadm pki-server sh -c \
+    "echo -n '${APPROVER_PASSWORD}' | oxi auth password --stdin" > /tmp/open-eidas-approver-digest.$$
+docker compose exec -T -u pkiadm pki-server sh -c "cat > /home/pkiadm/userdb.yaml && chmod 644 /home/pkiadm/userdb.yaml" <<EOF
+${APPROVER_USERNAME}:
+    digest: "$(cat /tmp/open-eidas-approver-digest.$$)"
+    role: RA Operator
+EOF
+rm -f /tmp/open-eidas-approver-digest.$$
 
 if [ ! -f "$MARKER" ]; then
     log "Génération de la hiérarchie de CA de test (root + issuing)"
@@ -119,7 +142,26 @@ log "Attente de la délivrance des certificats (TSU + OCSP)"
 # subir le cycle watchdog de rafraîchissement du token de signature (voir
 # le job helm-kind-smoke-test, jusqu'à 5-6 minutes à eux seuls) : 10 minutes
 # laissent une marge confortable.
+#
+# Chaque demande atterrit en attente d'approbation (état PENDING, voir
+# rpc/tsa.yaml) : approuvée ici automatiquement via le compte technique RA
+# Operator ci-dessus, pour que la pile de démonstration/CI s'amorce sans
+# opérateur humain — voir client.d/service/rpc/approve.yaml pour l'écart
+# correspondant vis-à-vis d'une approbation par un véritable opérateur.
 for _ in $(seq 1 120); do
+    docker compose exec -T -u pkiadm pki-server \
+        oxi workflow list --realm democa --type certificate_enroll 2>/dev/null \
+        | awk '/workflow_id:/{id=$2} /workflow_state: PENDING/{print id}' \
+        | while read -r wf_id; do
+            [ -n "$wf_id" ] || continue
+            tid="$(docker compose exec -T -u pkiadm pki-server \
+                oxi workflow show --realm democa --id "$wf_id" 2>/dev/null \
+                | sed -n 's/^    transaction_id: //p')"
+            [ -n "$tid" ] || continue
+            curl -sk -X POST -d "transaction_id=${tid}" \
+                https://localhost:8443/rpc/approve/ApproveEnrollment >/dev/null 2>&1 || true
+        done
+
     if curl -fsS http://localhost:8318/healthz >/dev/null 2>&1 \
         && curl -fsS http://localhost:8319/healthz >/dev/null 2>&1; then
         curl -fsS http://localhost:8318/api/v1/policy
