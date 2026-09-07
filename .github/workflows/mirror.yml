@@ -1,9 +1,10 @@
 name: Mirror to Codeberg and GitLab
 
+# Déclenchement automatique (push) temporairement désactivé — le job
+# échouait systématiquement (secrets de mirroring absents/mal configurés).
+# Réactiver en restaurant le déclencheur `push:` ci-dessous une fois le
+# problème réglé.
 on:
-  push:
-    branches: ["**"]
-    tags: ["**"]
   workflow_dispatch:
 
 concurrency:
