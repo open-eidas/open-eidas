@@ -96,7 +96,10 @@ jobs:
             VERSION=${{ github.sha }}
 
       - name: Vérifie que le binaire de la CA démarre
-        run: docker run --rm openeidas-ca:ci version
+        # SoftHSM exige un PIN de 4 à 255 caractères, comme pour la TSA et le
+        # répondeur OCSP ci-dessous : l'entrypoint initialise ses tokens avant
+        # d'exécuter n'importe quelle sous-commande, y compris `version`.
+        run: docker run --rm -e OPENEIDAS_ISSUING_PIN=1234 openeidas-ca:ci version
 
       - name: Scan de vulnérabilités de la CA (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
