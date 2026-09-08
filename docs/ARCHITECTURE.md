@@ -11,43 +11,46 @@ référentiel sont listés en section 8.
 ## 2. Vue d'ensemble
 
 ```
-                 ┌───────────────────────────────────────────────┐
-  client         │                  Open eIDAS                   │
-  (curl,         │                                               │
-   openssl ts,   │   ┌───────────────┐  PKCS#11 ┌─────────────┐  │
-   Sign*)        │   │  tsa-server   │─────────▶│  SoftHSM2   │  │
-     │ RFC 3161  │   │     (Go)      │          │ (→ HSM FIPS │  │
-     ├──────────▶│   │               │          │   en prod)  │  │
-     │  :8318    │   └──┬─────────┬──┘          └─────────────┘  │
-     │           │      │         │ RPC /rpc/tsa/RequestCertificate
-     │           │      │         ▼                              │
-     │           │      │  ┌───────────────┐   ┌─────────────┐   │
-     │           │      │  │   OpenXPKI    │───│   MariaDB   │   │
-     │           │      │  │ (root + issu- │   │             │   │
-     │           │      │  │  ing CA)      │   └─────────────┘   │
-     │           │      │  └───────────────┘                     │
-                 └──────┼────────────────────────────────────────┘
-                        │ NTP
-                        ▼
-              UTC(OP) · UTC(PTB)   sources de temps de référence
+                 ┌──────────────────────────────────────────────────┐
+  client         │                   Open eIDAS                     │
+  (curl,         │                                                  │
+   openssl ts,   │   ┌───────────────┐  PKCS#11 ┌─────────────┐     │
+   Sign*)        │   │  tsa-server   │─────────▶│  SoftHSM2   │     │
+     │ RFC 3161  │   │     (Go)      │          │ (→ HSM FIPS │     │
+     ├──────────▶│   │               │          │   en prod)  │     │
+     │  :8318    │   └──┬─────────┬──┘          └─────────────┘     │
+     │           │      │         │ POST /api/v1/enroll             │
+     │           │      │         ▼                                 │
+     │           │      │  ┌───────────────┐   ┌─────────────┐      │
+     │           │      │  │   ca-server   │───│ PostgreSQL  │      │
+     │  OCSP     │      │  │     (Go)      │   │  (registre) │      │
+     ├──────────▶│   ┌──┴──┤ racine +      │   └─────────────┘      │
+     │  :8319    │   │ocsp │ CA émettrice  │                        │
+     │           │   │ (Go)│    :8320      │──▶ PKCS#11 (2 tokens)  │
+     │           │   └─────┴───────┬───────┘                        │
+     │           │        CRL      │ /download/<CA>.crl, .cer       │
+                 └─────────────────┼────────────────────────────────┘
+                        │ NTP      │
+                        ▼          ▼
+              UTC(OP) · UTC(PTB)   tiers qui vérifient un certificat
 ```
 
-Cinq responsabilités séparées :
+Quatre services, tous écrits et compris par l'équipe :
 
 | Composant | Rôle | Image / langage |
 |---|---|---|
 | `tsa-server` | Service RFC 3161, signature des jetons | Go 1.25, binaire unique |
-| `ocsp-responder` | Répondeur OCSP (RFC 6960) pour la CA émettrice ; OpenXPKI Community n'en embarque aucun, voir §8 | Go 1.25, binaire unique |
-| SoftHSM2 | Conservation des clés privées de la TSU et du répondeur OCSP (une par service) | `softhsm2` (Debian), PKCS#11 |
-| OpenXPKI | Hiérarchie de CA, émission et révocation des certificats TSU et OCSP | `whiterabbitsecurity/openxpki3:3.34` |
-| MariaDB | Persistance des workflows et du registre de certificats OpenXPKI | `mariadb:11.4` |
+| `ca-server` | Autorité de certification et d'enregistrement : cérémonie de clé, émission depuis une CSR, approbation RA, publication de la CRL et du certificat de la CA | Go 1.25, binaire unique |
+| `ocsp-responder` | Répondeur OCSP (RFC 6960) pour la CA émettrice | Go 1.25, binaire unique |
+| SoftHSM2 | Conservation des clés privées (racine, CA émettrice, TSU, répondeur OCSP — un token par rôle) | `softhsm2` (Debian), PKCS#11 |
+| PostgreSQL | Registre de la CA : autorités, certificats émis, demandes d'enrôlement, historique des CRL | `postgres:17-alpine` |
 
-`ocsp-responder` s'enrôle lui-même auprès d'OpenXPKI exactement comme
-`tsa-server` (RPC `/rpc/ocsp/RequestCertificate`, même secret HMAC partagé),
-puis répond aux requêtes OCSP en consultant un instantané de la CRL déjà
-publiée par OpenXPKI (`/download`), rafraîchi périodiquement — plutôt qu'un
-accès direct, plus complexe, à la base OpenXPKI. Voir
-`internal/ocspresponder`.
+`tsa-server` et `ocsp-responder` s'enrôlent auprès de `ca-server` par la même
+API (`POST /api/v1/enroll`, authentifiée par un secret HMAC partagé), en
+demandant chacun son profil. Le répondeur OCSP consulte ensuite la CRL publiée
+par la CA (`/download`), rafraîchie périodiquement — plutôt qu'un accès direct
+au registre : il ne voit ainsi que ce qu'un tiers pourrait voir lui-même. Voir
+`internal/ocspresponder` et [CA.md](CA.md).
 
 ## 3. Choix techniques et justification
 
@@ -64,11 +67,28 @@ protocole qu'un HSM certifié FIPS 140-2 niveau 3 ou Critères Communs. Le
 passage en production se fait en changeant `OPENEIDAS_PKCS11_MODULE` et le
 label du token — aucune ligne de code applicatif à modifier.
 
-**OpenXPKI comme autorité de certification.** Le certificat de la TSU doit
-être émis par une CA distincte, avec un profil contraint et un cycle de vie
-auditable (émission, révocation, publication de CRL). OpenXPKI apporte ces
-workflows sans développement spécifique, et son endpoint RPC permet un
-enrôlement entièrement automatisé.
+**Une autorité de certification écrite en propre.** Le certificat de la TSU
+doit être émis par une CA distincte, avec un profil contraint et un cycle de
+vie auditable. Le projet a d'abord intégré OpenXPKI Community, puis l'a
+remplacé par `cmd/ca-server` : l'intégration avait exigé, à plusieurs
+reprises, de rétro-ingénierier des comportements internes non documentés,
+portant précisément sur les contrôles qu'un audit vient vérifier — validité du
+profil émis, effectivité de l'approbation RA. L'arbitrage complet est dans
+[INDEPENDANCE.md](../INDEPENDANCE.md).
+
+Le périmètre réellement couvert est étroit et le reste : émettre depuis une
+CSR selon un profil compilé, publier une CRL, révoquer, et une machine à états
+d'approbation à un seul workflow. En contrepartie, l'équipe peut expliquer
+chaque règle ligne à ligne à un auditeur, et chaque exigence normative est
+portée par un test exécutable.
+
+**Les règles ETSI définies une seule fois.** `internal/conformance` porte
+chaque exigence technique applicable sous forme de vérification appelable,
+utilisée à trois endroits qui ne peuvent pas diverger : les tests unitaires,
+les gardes d'exécution (le certificat produit est relu depuis son DER et
+re-contrôlé avant d'être délivré), et le rapport `ca-server conformance` qui
+alimente [CONFORMITE-ETSI.md](CONFORMITE-ETSI.md). Une exigence déclarée
+couverte sans mécanisme ni test nommé fait échouer la CI.
 
 **Séparation enrôlement / service.** Le binaire expose deux sous-commandes :
 `enroll` obtient le certificat, `serve` signe les jetons. Le service refuse de
@@ -79,23 +99,36 @@ accès en lecture au certificat.
 
 ## 4. Séquence de démarrage
 
-1. `scripts/bootstrap.sh` clone la configuration OpenXPKI amont, y applique
-   l'overlay Open eIDAS (profil `tsa_signer`, endpoint RPC `tsa`), génère la
-   clé du coffre de données et la clé d'administration CLI.
-2. La pile PKI démarre ; `sampleconfig.sh` crée une hiérarchie à deux niveaux
-   (racine hors ligne + CA émettrice).
-3. Le conteneur TSA initialise son token SoftHSM au premier lancement.
-4. `tsa-server enroll` génère une bi-clé RSA-3072 **dans le token**, produit une
-   CSR signée par cette clé et la soumet à `POST /rpc/tsa/RequestCertificate`.
-   OpenXPKI applique le profil `tsa_signer` et retourne le certificat et sa
-   chaîne, écrits sur le volume d'état.
-5. `tsa-server serve` charge le certificat, vérifie sa cohérence avec la clé du
-   token, puis écoute sur le port 8318.
+1. `scripts/bootstrap.sh` génère et persiste le secret HMAC d'enrôlement.
+2. PostgreSQL démarre ; `ca-server` applique ses migrations, exécute la
+   **cérémonie de clé** (idempotente : deux bi-clés RSA-4096 dans deux tokens
+   PKCS#11 distincts, racine puis CA émettrice, procès-verbal consigné au
+   journal d'audit) et publie une première CRL. Son `/healthz` ne passe qu'une
+   fois cet état servable.
+3. Les conteneurs TSA et OCSP initialisent leur propre token SoftHSM au premier
+   lancement.
+4. `tsa-server enroll` génère une bi-clé RSA-3072 **dans le token**, produit
+   une CSR signée par cette clé et la soumet à
+   `POST /api/v1/enroll` avec son authentifiant HMAC. La demande atterrit en
+   **attente d'approbation** : aucun chemin du code ne mène à l'émission sans
+   décision d'un opérateur identifié. `ocsp-responder enroll` fait de même avec
+   son profil.
+5. Un opérateur RA approuve (`ca-server ra approve <transaction> <opérateur>`).
+   En démonstration et en CI, cette approbation est automatisée sous une
+   identité technique — écart assumé, tracé comme tel au journal (voir
+   [CA.md](CA.md)).
+6. À sa scrutation suivante, chaque service reçoit son certificat et sa chaîne,
+   écrits sur son volume d'état. Le certificat est relu et re-contrôlé côté CA
+   avant d'être délivré.
+7. `tsa-server serve` charge le certificat, vérifie sa cohérence avec la clé du
+   token et sa conformité au profil ETSI, puis écoute sur le port 8318.
 
-L'enrôlement est idempotent : au redémarrage, un certificat encore valide et
-apparié à la clé du HSM est conservé. Le renouvellement se déclenche
-automatiquement dans les 30 jours précédant l'expiration
-(`OPENEIDAS_RENEW_BEFORE`).
+L'enrôlement est idempotent de bout en bout : la CA reconnaît une CSR déjà
+soumise à son empreinte et retrouve la demande existante, et le service
+conserve au redémarrage un certificat encore valide et apparié à la clé du
+HSM. Le renouvellement se déclenche automatiquement dans les 30 jours
+précédant l'expiration (`OPENEIDAS_RENEW_BEFORE`) et révoque le certificat
+précédent avec le motif `superseded`.
 
 ## 5. Structure du jeton produit
 
@@ -221,48 +254,42 @@ journalisé mais non bloquant, comme pour le contreseing tiers.
 
 ## 8. Écarts assumés du prototype vis-à-vis d'une TSA qualifiée
 
-Ces points sont volontairement hors périmètre du MVP et constituent la
-feuille de route de qualification :
+L'état exigence par exigence, avec le mécanisme qui la porte et le test qui le
+vérifie, est dans [CONFORMITE-ETSI.md](CONFORMITE-ETSI.md) — généré depuis
+`internal/conformance`, donc incapable de diverger du code. Le tableau
+ci-dessous en donne la lecture d'ensemble.
 
 | Exigence | État du prototype | Cible |
 |---|---|---|
-| Module cryptographique | SoftHSM2 (logiciel) | HSM certifié FIPS 140-2 niv. 3 / CC EAL4+ |
+| Module cryptographique | SoftHSM2 (logiciel), quatre tokens distincts (racine, CA émettrice, TSU, répondeur OCSP) | HSM certifié FIPS 140-2 niv. 3 / CC EAL4+ ; seul `OPENEIDAS_PKCS11_MODULE` change |
 | Source de temps | Surveillance NTP de deux sources UTC(k) avec suspension automatique de l'émission | Réception redondante et indépendante, calibration documentée, journal des mesures conservé et audité |
-| Enrôlement de la TSU | Authentifié par secret HMAC partagé ; point d'approbation RA réellement actif (`allow_man_approv`), mais approuvé automatiquement par un compte technique pour que la démonstration/CI s'amorce sans opérateur humain | Revue humaine réelle par un opérateur RA nominatif (interface OpenXPKI), à la place de l'approbation automatisée |
-| Journalisation | Journal chaîné par hachage, contresigné par des TSA tierces publiques et répliqué hors site à chaque scellement | Politique de conservation formalisée, réplication multi-région |
+| Cérémonie de clé | Scriptée, idempotente, procès-verbal consigné au journal d'audit (empreintes, opérateur, horodatage) — mais sans double contrôle ni témoin | Double contrôle, témoin indépendant, HSM certifié, racine hors ligne après cérémonie (voir [CA.md](CA.md)) |
+| Approbation RA | Point d'approbation réellement actif : aucun chemin du code ne mène à l'émission sans décision d'un opérateur identifié, consignée en base et au journal. Automatisée sous un compte technique pour que la démonstration/CI s'amorce sans opérateur humain | Revue humaine réelle par un opérateur RA nominatif, à la place de l'approbation automatisée |
+| Journalisation | Journal chaîné par hachage, contresigné par des TSA tierces publiques et répliqué hors site à chaque scellement ; durée de conservation contrôlée au démarrage | Politique de conservation formalisée, réplication multi-région |
 | Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` | OID sous l'arc PEN de l'association, TSA Policy et Practice Statement publiés |
-| Extensions du certificat TSU | Point de distribution de CRL, répondeur OCSP (`cmd/ocsp-responder`, absent d'OpenXPKI Community) et certificat de la CA émettrice (AIA `ca_issuers`) tous réellement publiés et vérifiés (`/download`) | OID de politique de certification propre |
-| Continuité | Instance unique | Redondance active/active, plan de cessation d'activité, séquestre des clés |
+| Profils de certificat | Structures Go compilées et testées ; le certificat émis est relu depuis son DER et re-contrôlé avant délivrance ; CDP, AIA `ca_issuers` et répondeur OCSP réellement publiés et vérifiés | OID de politique de certification propre |
+| Continuité | Instance unique ; registre PostgreSQL sauvegardable, journal répliqué hors site | Redondance active/active, sauvegarde et restauration testées, plan de cessation d'activité engagé (voir [CA.md](CA.md)) |
 | Audit | Aucun | Évaluation par un organisme accrédité (LSTI, Apave), inscription à la liste de confiance |
-| Moteur de CA/RA | OpenXPKI Community — plusieurs comportements internes non documentés découverts par rétro-ingénierie lors de l'ajout du répondeur OCSP et de l'approbation RA (auto-approbation silencieuse malgré `approval_points`, résolution de rôle incohérente entre la CLI privilégiée et une session authentifiée normale) | Voir la note ci-dessous |
 
-Le prototype refuse de démarrer sur les écarts qui rendraient les jetons
-invalides (clé et certificat désaccordés, usage étendu absent, certificat
-expiré) et journalise un avertissement sur les écarts de profil non bloquants.
+Le prototype refuse de démarrer sur les écarts qui rendraient les jetons ou
+les certificats invalides (clé et certificat désaccordés, usage étendu absent
+ou non critique, clé trop courte, certificat expiré, autorité elle-même non
+conforme) et journalise un avertissement sur les écarts non bloquants.
 
-**Note sur le moteur de CA/RA.** L'intégration d'OpenXPKI a exigé, à
-plusieurs reprises, de rétro-ingénierier son comportement interne faute de
-documentation (voir l'historique de ce dépôt autour de l'ajout du répondeur
-OCSP et de l'activation réelle de l'approbation RA) : un profil de
-certificat mal formé y échoue silencieusement côté moteur NICE plutôt que de
-rejeter la configuration, et le point d'approbation RA était contourné par
-une règle d'éligibilité sans qu'aucune erreur ne le signale. Ce type
-d'opacité est précisément ce qu'un audit eIDAS voudra examiner de près,
-puisqu'il touche à des contrôles documentés (validité du profil de
-certificat, effectivité de l'approbation RA).
+**Sur le moteur de CA/RA.** Il n'y en a plus de tiers : `cmd/ca-server` a
+remplacé OpenXPKI Community. Le motif était la difficulté répétée à établir ce
+que le moteur faisait réellement — un profil de certificat mal formé y
+échouait silencieusement à l'émission plutôt qu'au chargement, et le point
+d'approbation RA était contourné par une règle d'éligibilité sans qu'aucune
+erreur ne le signale. Ce type d'opacité porte précisément sur des contrôles
+qu'un audit eIDAS vient examiner. L'arbitrage, le périmètre repris et l'effort
+consenti sont détaillés dans [INDEPENDANCE.md](../INDEPENDANCE.md).
 
-Une piste envisagée, non engagée à ce stade : remplacer OpenXPKI par un
-moteur de CA/RA minimal et entièrement maison en Go, sur le modèle de
-`cmd/ocsp-responder`. Le périmètre réel qu'OpenXPKI couvre pour ce projet
-est étroit — émission depuis une CSR (`x509.CreateCertificate`), génération
-de CRL (`x509.CreateRevocationList`, symétrique du code déjà écrit côté
-OCSP), une machine à états d'approbation à un seul workflow — et le
-bénéfice serait un code intégralement écrit et compris par l'équipe, sur le
-même modèle d'auditabilité que la TSA et le répondeur OCSP eux-mêmes,
-au prix d'un chantier de plusieurs semaines et de la responsabilité pleine
-et entière de la correction cryptographique d'un moteur de CA (unicité des
-numéros de série, encodage des extensions, cérémonie de clé racine/émettrice).
-Arbitrage détaillé et plan envisagé : [INDEPENDANCE.md](../INDEPENDANCE.md).
+Ce que ce remplacement ne supprime pas : la nécessité d'un audit de
+sécurité externe et indépendant — un auditeur scrutera probablement du code
+maison *plus* attentivement, faute d'antécédent — ni les mesures
+organisationnelles (cérémonie sous double contrôle, opérateur RA nominatif,
+CP/CPS publiés), identiques quel que soit le moteur.
 
 ## 9. Trajectoire vers la production
 
@@ -273,7 +300,13 @@ Arbitrage détaillé et plan envisagé : [INDEPENDANCE.md](../INDEPENDANCE.md).
    déjà compatible.
 3. **Politique.** Publier la TSA Policy et la Practice Statement, obtenir un
    arc OID propre.
-4. **Exploitation.** Supervision, deux instances derrière un répartiteur,
-   procédure de révocation testée.
-5. **Qualification.** Constituer le dossier ANSSI et engager l'audit d'un
-   organisme accrédité.
+4. **Cérémonie de clé.** Rejouer la cérémonie sur HSM certifié, sous double
+   contrôle et témoin indépendant, avec procès-verbal contresigné ; retirer
+   ensuite le token de la racine du système (voir [CA.md](CA.md)).
+5. **Autorité d'enregistrement.** Substituer un opérateur RA nominatif à
+   l'approbation automatisée de la démonstration.
+6. **Exploitation.** Supervision, deux instances derrière un répartiteur,
+   sauvegarde et restauration testées, procédure de révocation testée.
+7. **Qualification.** Constituer le dossier ANSSI et engager l'audit d'un
+   organisme accrédité, en s'appuyant sur
+   [CONFORMITE-ETSI.md](CONFORMITE-ETSI.md) comme point d'entrée.

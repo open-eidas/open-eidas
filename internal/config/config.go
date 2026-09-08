@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-eidas/tsa/internal/timesource"
+	"github.com/open-eidas/open-eidas/internal/timesource"
 )
 
 // Config regroupe l'ensemble des paramètres du service, tous pilotés par
@@ -56,11 +56,15 @@ type Config struct {
 	EnrollInsecure bool
 	EnrollTimeout  time.Duration
 	EnrollHMACKey  string
-	SubjectCN      string
-	SubjectOU      string
-	SubjectO       string
-	SubjectC       string
-	RenewBefore    time.Duration
+	// EnrollProfile nomme le profil de certificat demandé à la CA (voir
+	// internal/ca). Il remplace l'ancien couplage à un endpoint RPC dédié
+	// par service.
+	EnrollProfile string
+	// SubjectCN est la seule partie du sujet que le demandeur choisit : unité,
+	// organisation et pays sont imposés par le profil côté autorité, de sorte
+	// qu'un service ne puisse pas se réclamer d'une autre organisation.
+	SubjectCN   string
+	RenewBefore time.Duration
 }
 
 func Load() (*Config, error) {
@@ -77,10 +81,8 @@ func Load() (*Config, error) {
 		EnrollEndpoint:       env("OPENEIDAS_ENROLL_ENDPOINT", ""),
 		EnrollCAFile:         env("OPENEIDAS_ENROLL_CA_FILE", ""),
 		EnrollHMACKey:        os.Getenv("OPENEIDAS_ENROLL_HMAC_KEY"),
+		EnrollProfile:        env("OPENEIDAS_ENROLL_PROFILE", "tsa_signer"),
 		SubjectCN:            env("OPENEIDAS_SUBJECT_CN", "Open eIDAS Time-Stamping Unit 1"),
-		SubjectOU:            env("OPENEIDAS_SUBJECT_OU", "Time Stamping Authority"),
-		SubjectO:             env("OPENEIDAS_SUBJECT_O", "Open eIDAS"),
-		SubjectC:             env("OPENEIDAS_SUBJECT_C", "FR"),
 		TimeSources:          splitList(env("OPENEIDAS_TIME_SOURCES", "ntp.obspm.fr,ptbtime1.ptb.de")),
 		CrossTSAURLs:         splitList(env("OPENEIDAS_CROSS_TSA_URLS", "https://freetsa.org/tsr,http://timestamp.digicert.com")),
 		AuditReplicaURL:      env("OPENEIDAS_AUDIT_REPLICA_URL", ""),

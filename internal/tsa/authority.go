@@ -13,19 +13,9 @@ import (
 
 	"github.com/digitorus/timestamp"
 
-	"github.com/open-eidas/tsa/internal/audit"
+	"github.com/open-eidas/open-eidas/internal/audit"
+	"github.com/open-eidas/open-eidas/internal/conformance"
 )
-
-// oidExtKeyUsage est l'OID de l'extension extendedKeyUsage (2.5.29.37).
-var oidExtKeyUsage = asn1.ObjectIdentifier{2, 5, 29, 37}
-
-// acceptedHashes liste les empreintes acceptées dans un messageImprint.
-// SHA-1 est volontairement refusé : il est proscrit par ETSI TS 119 312.
-var acceptedHashes = map[crypto.Hash]bool{
-	crypto.SHA256: true,
-	crypto.SHA384: true,
-	crypto.SHA512: true,
-}
 
 // Rejection décrit un refus protocolaire : il est converti par la couche HTTP
 // en une TimeStampResp de statut « rejection », qui reste une réponse valide.
@@ -88,13 +78,18 @@ type Authority struct {
 	opts Options
 }
 
-// Warning décrit un écart au profil qualifié détecté au démarrage, sans être
-// bloquant pour un déploiement de démonstration.
+// Warning décrit un écart au profil signalé au démarrage sans être bloquant.
+// Les écarts bloquants, eux, empêchent l'autorité de démarrer : voir
+// internal/conformance, qui porte la distinction une fois pour toutes.
 type Warning string
 
 // New valide la cohérence du matériel cryptographique et construit l'autorité.
-// Les avertissements retournés signalent les écarts au profil ETSI qui
-// empêcheraient une qualification, mais laissent le prototype démarrer.
+//
+// Les règles ETSI appliquées au certificat TSU ne sont pas réécrites ici :
+// elles viennent d'internal/conformance, seul endroit du dépôt où elles sont
+// définies. Un écart bloquant (usage étendu non critique ou surnuméraire, clé
+// trop courte, durée de vie aberrante) empêche le démarrage ; les
+// avertissements sont journalisés.
 func New(o Options) (*Authority, []Warning, error) {
 	if o.Signer == nil {
 		return nil, nil, errors.New("tsa: signer manquant")
@@ -124,16 +119,13 @@ func New(o Options) (*Authority, []Warning, error) {
 		return nil, nil, errors.New("tsa: la clé du token PKCS#11 ne correspond pas au certificat TSU")
 	}
 
-	if !hasTimeStampingEKU(o.Certificate) {
-		return nil, nil, errors.New("tsa: le certificat TSU ne porte pas l'extendedKeyUsage id-kp-timeStamping")
+	findings := conformance.CheckTSUCertificate("certificat TSU", o.Certificate)
+	if err := findings.Err(); err != nil {
+		return nil, nil, fmt.Errorf("tsa: %w", err)
 	}
-
 	var warnings []Warning
-	if !isEKUCritical(o.Certificate) {
-		warnings = append(warnings, "l'extension extendedKeyUsage n'est pas marquée critique (exigée par ETSI EN 319 422)")
-	}
-	if len(o.Certificate.ExtKeyUsage) > 1 || len(o.Certificate.UnknownExtKeyUsage) > 0 {
-		warnings = append(warnings, "le certificat TSU porte d'autres usages étendus que id-kp-timeStamping")
+	for _, f := range findings.Advisories() {
+		warnings = append(warnings, Warning(f.String()))
 	}
 	// La validité du certificat se vérifie sur l'heure système : à ce stade
 	// la surveillance n'a pas encore de mesure, et un certificat expiré doit
@@ -153,9 +145,7 @@ func (a *Authority) Certificate() *x509.Certificate { return a.opts.Certificate 
 func (a *Authority) Chain() []*x509.Certificate     { return a.opts.Chain }
 func (a *Authority) Policy() asn1.ObjectIdentifier  { return a.opts.Policy }
 func (a *Authority) Accuracy() time.Duration        { return a.opts.Accuracy }
-func (a *Authority) AcceptedHashes() []crypto.Hash {
-	return []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512}
-}
+func (a *Authority) AcceptedHashes() []crypto.Hash  { return conformance.AdmittedHashes() }
 
 // Timestamp consomme une TimeStampReq encodée en DER et retourne une
 // TimeStampResp DER de statut « granted ». Un refus protocolaire est signalé
@@ -183,7 +173,7 @@ func (a *Authority) timestamp(reqDER []byte) ([]byte, error) {
 	if err != nil {
 		return nil, reject(timestamp.BadDataFormat, "requête RFC 3161 illisible: %v", err)
 	}
-	if !req.HashAlgorithm.Available() || !acceptedHashes[req.HashAlgorithm] {
+	if !req.HashAlgorithm.Available() || !conformance.HashAdmitted(req.HashAlgorithm) {
 		return nil, reject(timestamp.BadAlgorithm, "algorithme d'empreinte refusé par la politique")
 	}
 	if len(req.HashedMessage) != req.HashAlgorithm.Size() {
@@ -243,22 +233,4 @@ func (a *Authority) timestamp(reqDER []byte) ([]byte, error) {
 // ErrorResponse encode une TimeStampResp de refus exploitable par le client.
 func ErrorResponse(status timestamp.Status, failure timestamp.FailureInfo) ([]byte, error) {
 	return timestamp.CreateErrorResponse(status, failure)
-}
-
-func hasTimeStampingEKU(cert *x509.Certificate) bool {
-	for _, eku := range cert.ExtKeyUsage {
-		if eku == x509.ExtKeyUsageTimeStamping {
-			return true
-		}
-	}
-	return false
-}
-
-func isEKUCritical(cert *x509.Certificate) bool {
-	for _, ext := range cert.Extensions {
-		if ext.Id.Equal(oidExtKeyUsage) {
-			return ext.Critical
-		}
-	}
-	return false
 }

@@ -5,6 +5,7 @@ set -euo pipefail
 
 TSA_URL="${TSA_URL:-http://localhost:8318}"
 OCSP_URL="${OCSP_URL:-http://localhost:8319/ocsp}"
+CA_URL="${CA_URL:-http://localhost:8320}"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
@@ -46,7 +47,26 @@ else
     exit 1
 fi
 
-log "6. Statut de révocation du certificat TSU (OCSP, RFC 6960)"
+log "6. Vérification croisée du certificat TSU avec les outils standards"
+# Le moteur de CA est maison : il ne peut pas se valider avec ses seuls
+# outils. openssl relit ici, indépendamment, ce que la CA a produit.
+openssl verify -CAfile ca.pem -purpose timestampsign tsu.pem
+openssl x509 -in tsu.pem -noout -text \
+    | grep -A 1 -E "X509v3 Extended Key Usage|X509v3 Key Usage|X509v3 CRL Distribution"
+
+log "7. Liste de révocation publiée par la CA"
+CRL_URL="$(openssl x509 -in tsu.pem -noout -text \
+    | grep -A 2 "X509v3 CRL Distribution" | sed -n 's/.*URI://p' | tr -d ' ')"
+echo "point de distribution gravé dans le certificat : ${CRL_URL}"
+# L'URL gravée pointe vers l'adresse publique de la CA ; en local, c'est la
+# même que CA_URL, mais la substitution rend la démonstration utilisable
+# derrière un nom d'hôte différent.
+curl -fsS "${CA_URL}${CRL_URL#*://*/}" -o issuing.crl 2>/dev/null \
+    || curl -fsS "$CRL_URL" -o issuing.crl
+openssl crl -inform DER -in issuing.crl -CAfile ca.pem -noout -text \
+    | sed -n '1,12p'
+
+log "8. Statut de révocation du certificat TSU (OCSP, RFC 6960)"
 if openssl ocsp -issuer ca.pem -cert tsu.pem -CAfile ca.pem -no_nonce \
     -url "$OCSP_URL" -resp_text 2>&1 | tee ocsp-response.txt | grep -q "tsu.pem: good"; then
     echo

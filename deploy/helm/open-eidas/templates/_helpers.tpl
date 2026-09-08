@@ -43,7 +43,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-Labels/nom d'un composant particulier (tsa, openxpki, mariadb, audit-replica).
+Labels/nom d'un composant particulier (tsa, ca, postgres, ocsp, audit-replica).
 */}}
 {{- define "open-eidas.componentName" -}}
 {{- printf "%s-%s" (include "open-eidas.fullname" .context) .component -}}
@@ -61,7 +61,8 @@ app.kubernetes.io/component: {{ .component }}
 
 {{/*
 Nom du Secret contenant les valeurs générées automatiquement (mots de passe,
-PIN, clé du coffre de données) et stables d'un `helm upgrade` à l'autre.
+PIN des tokens, secret HMAC d'enrôlement) et stables d'un `helm upgrade` à
+l'autre.
 */}}
 {{- define "open-eidas.generatedSecretName" -}}
 {{- printf "%s-generated" (include "open-eidas.fullname" .) -}}
@@ -70,18 +71,84 @@ PIN, clé du coffre de données) et stables d'un `helm upgrade` à l'autre.
 {{/*
 Adresse publique à laquelle un tiers vérifiant un certificat TSU ira
 chercher la CRL et le certificat de la CA émettrice (points CRL/AIA). Priorité
-à une valeur explicite (values.openxpki.publicURL), puis à l'hôte d'ingress
-s'il est activé ; à défaut, le nom DNS interne au cluster — non résoluble de
+à une valeur explicite (values.ca.publicURL), puis à l'hôte d'ingress s'il est
+activé ; à défaut, le nom DNS interne au cluster — non résoluble de
 l'extérieur, mais qui garde le chart utilisable sans configuration.
 */}}
 {{- define "open-eidas.pkiPublicURL" -}}
-{{- if .Values.openxpki.publicURL -}}
-{{- .Values.openxpki.publicURL -}}
-{{- else if .Values.openxpki.ingress.enabled -}}
-{{- printf "https://%s" .Values.openxpki.ingress.host -}}
+{{- if .Values.ca.publicURL -}}
+{{- .Values.ca.publicURL -}}
+{{- else if .Values.ca.ingress.enabled -}}
+{{- printf "https://%s" .Values.ca.ingress.host -}}
 {{- else -}}
-{{- printf "https://%s-openxpki" (include "open-eidas.fullname" .) -}}
+{{- printf "http://%s-ca:%d" (include "open-eidas.fullname" .) (.Values.ca.service.port | int) -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Adresse INTERNE de l'API d'enrôlement de la CA, jointe par les services qui
+s'y enrôlent. Distincte de open-eidas.pkiPublicURL, qui est ce que voit un
+tiers vérifiant un certificat.
+*/}}
+{{- define "open-eidas.caInternalURL" -}}
+{{- printf "http://%s-ca:%d" (include "open-eidas.fullname" .) (.Values.ca.service.port | int) -}}
+{{- end -}}
+
+{{/*
+Environnement commun aux conteneurs qui parlent au registre de la CA : le
+service lui-même et celui qui approuve automatiquement les demandes. Défini
+une fois pour que les deux ne puissent pas diverger sur le DSN ou les secrets.
+*/}}
+{{- define "open-eidas.caEnv" -}}
+{{- $ctx := .context -}}
+- name: OPENEIDAS_LISTEN
+  value: {{ printf ":%d" ($ctx.Values.ca.service.port | int) | quote }}
+- name: OPENEIDAS_DB_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .secret }}
+      key: postgres-password
+- name: OPENEIDAS_DB_DSN
+  value: {{ printf "postgres://%s:$(OPENEIDAS_DB_PASSWORD)@%s:5432/%s?sslmode=disable" $ctx.Values.postgres.user .postgres $ctx.Values.postgres.database | quote }}
+- name: OPENEIDAS_ISSUING_PIN
+  valueFrom:
+    secretKeyRef:
+      name: {{ .secret }}
+      key: ca-issuing-pin
+- name: OPENEIDAS_ROOT_PIN
+  valueFrom:
+    secretKeyRef:
+      name: {{ .secret }}
+      key: ca-root-pin
+- name: OPENEIDAS_CA_KEY_BITS
+  value: {{ $ctx.Values.ca.keyBits | quote }}
+- name: OPENEIDAS_ROOT_CN
+  value: {{ $ctx.Values.ca.rootCommonName | quote }}
+- name: OPENEIDAS_ISSUING_CN
+  value: {{ $ctx.Values.ca.issuingCommonName | quote }}
+- name: OPENEIDAS_CA_ORGANIZATION
+  value: {{ $ctx.Values.ca.organization | quote }}
+- name: OPENEIDAS_CA_COUNTRY
+  value: {{ $ctx.Values.ca.country | quote }}
+- name: OPENEIDAS_CEREMONY_OPERATOR
+  value: {{ $ctx.Values.ca.ceremonyOperator | quote }}
+- name: OPENEIDAS_PKI_PUBLIC_URL
+  value: {{ include "open-eidas.pkiPublicURL" $ctx | quote }}
+- name: OPENEIDAS_OCSP_PUBLIC_URL
+  value: {{ include "open-eidas.ocspPublicURL" $ctx | quote }}
+- name: OPENEIDAS_ENROLL_HMAC_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .secret }}
+      key: enroll-hmac-key
+- name: OPENEIDAS_CRL_VALIDITY
+  value: {{ $ctx.Values.ca.crl.validity | quote }}
+- name: OPENEIDAS_CRL_REFRESH
+  value: {{ $ctx.Values.ca.crl.refresh | quote }}
+- name: OPENEIDAS_AUDIT_FILE
+  value: /var/lib/open-eidas/state/ca-audit.log
+- name: OPENEIDAS_AUDIT_RETENTION
+  value: {{ $ctx.Values.ca.audit.retention | quote }}
 {{- end -}}
 
 {{/*

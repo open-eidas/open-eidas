@@ -1,166 +1,68 @@
 #!/usr/bin/env bash
-# Amorce la pile Open eIDAS : configuration OpenXPKI, hiérarchie de CA de
-# test, puis démarrage de l'autorité d'horodatage.
+# Amorce la pile Open eIDAS : base, autorité de certification (cérémonie de
+# clé comprise), autorité d'horodatage et répondeur OCSP.
 #
 # Le script est idempotent : il peut être relancé sans détruire l'existant.
+# La cérémonie de clé ne recrée jamais une hiérarchie déjà enregistrée.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG_DIR="$ROOT/deploy/openxpki/openxpki-config"
-OVERLAY_DIR="$ROOT/deploy/openxpki/overlay"
-LOCAL_DIR="$ROOT/deploy/openxpki/local"
-MARKER="$ROOT/deploy/openxpki/.sampleconfig-done"
-CONFIG_REF="${OXI_CONFIG_REF:-community}"
+LOCAL_DIR="$ROOT/deploy/local"
+
+# Opérateur sous l'identité duquel les approbations RA et la cérémonie sont
+# consignées. C'est un compte technique : la démonstration et la CI doivent
+# s'amorcer sans intervention humaine. Un déploiement destiné à la
+# qualification doit lui substituer un opérateur nominatif — l'écart est
+# visible dans le journal d'audit, précisément parce que cette identité y est
+# consignée telle quelle (voir docs/CA.md).
+OPERATOR="${OPENEIDAS_RA_OPERATOR:-ci-bootstrap}"
 
 log() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
 cd "$ROOT"
-
-log "Récupération de la configuration OpenXPKI (branche ${CONFIG_REF})"
-if [ ! -d "$CONFIG_DIR/.git" ]; then
-    git clone --depth 1 --single-branch --branch "$CONFIG_REF" \
-        https://github.com/openxpki/openxpki-config.git "$CONFIG_DIR"
-else
-    echo "configuration déjà présente dans $CONFIG_DIR"
-fi
-mkdir -p "$CONFIG_DIR/tls" "$LOCAL_DIR"
-
-log "Clé d'authentification de la CLI d'administration"
-if [ ! -f "$LOCAL_DIR/client.key" ]; then
-    openssl ecparam -name prime256v1 -genkey -noout -out "$LOCAL_DIR/client.key"
-    chmod 644 "$LOCAL_DIR/client.key"
-fi
-{
-    echo "# Généré par scripts/bootstrap.sh — clé publique de l'administrateur CLI."
-    echo "auth:"
-    echo "    pkiadm:"
-    echo "        key: |"
-    openssl pkey -in "$LOCAL_DIR/client.key" -pubout | sed 's/^/            /'
-    echo "        role: RA Operator"
-} > "$CONFIG_DIR/config.d/system/cli.yaml"
-
-log "Clé de chiffrement du coffre de données (datavault)"
-if grep -q '##SVAULTKEY##' "$CONFIG_DIR/config.d/system/crypto.yaml"; then
-    SVAULT_KEY="$(openssl rand -hex 32)"
-    sed -i "s|you must put your own 64 characters key here ##SVAULTKEY##|${SVAULT_KEY}|" \
-        "$CONFIG_DIR/config.d/system/crypto.yaml"
-    echo "clé générée — conservez une copie de $CONFIG_DIR/config.d/system/crypto.yaml"
-else
-    echo "clé déjà définie"
-fi
-
-log "Application de l'overlay Open eIDAS (profil TSU + endpoint RPC)"
-cp -a "$OVERLAY_DIR/." "$CONFIG_DIR/"
+mkdir -p "$LOCAL_DIR"
 
 log "Secret d'authentification de l'enrôlement (HMAC)"
 if [ ! -f "$LOCAL_DIR/enroll-hmac.key" ]; then
     openssl rand -hex 32 > "$LOCAL_DIR/enroll-hmac.key"
     chmod 600 "$LOCAL_DIR/enroll-hmac.key"
-fi
-ENROLL_HMAC_KEY="$(cat "$LOCAL_DIR/enroll-hmac.key")"
-export OPENEIDAS_ENROLL_HMAC_KEY="$ENROLL_HMAC_KEY"
-sed -i "s|##ENROLLHMACKEY##|${ENROLL_HMAC_KEY}|" \
-    "$CONFIG_DIR/config.d/realm.tpl/rpc/tsa.yaml" \
-    "$CONFIG_DIR/config.d/realm.tpl/rpc/ocsp.yaml"
-
-log "Adresse publique de la PKI (points CRL/AIA du certificat TSU)"
-# /download est servi statiquement par OpenXPKI lui-même (voir
-# apache2-openxpki-site.conf) : cette URL fonctionne réellement, à condition
-# que la PKI soit réellement joignable à cette adresse par qui vérifie le
-# certificat. En local, seul https://localhost:8443 l'est.
-PKI_PUBLIC_URL="${OPENEIDAS_PKI_PUBLIC_URL:-https://localhost:8443}"
-sed -i "s|##PKIPUBLICURL##|${PKI_PUBLIC_URL}|g" \
-    "$CONFIG_DIR/config.d/realm.tpl/profile/tsa_signer.yaml"
-
-log "Adresse publique du répondeur OCSP (extension AIA du certificat TSU)"
-OCSP_PUBLIC_URL="${OPENEIDAS_OCSP_PUBLIC_URL:-http://localhost:8319}"
-sed -i "s|##OCSPPUBLICURL##|${OCSP_PUBLIC_URL}|g" \
-    "$CONFIG_DIR/config.d/realm.tpl/profile/tsa_signer.yaml"
-
-log "Compte technique d'approbation RA (point d'approbation manuelle)"
-if [ ! -f "$LOCAL_DIR/approver-password" ]; then
-    openssl rand -base64 32 | tr -d '\n=+/' | head -c 32 > "$LOCAL_DIR/approver-password"
-    chmod 600 "$LOCAL_DIR/approver-password"
-fi
-APPROVER_USERNAME="open-eidas-approver"
-APPROVER_PASSWORD="$(cat "$LOCAL_DIR/approver-password")"
-sed -i "s|##APPROVERUSERNAME##|${APPROVER_USERNAME}|; s|##APPROVERPASSWORD##|${APPROVER_PASSWORD}|" \
-    "$CONFIG_DIR/client.d/service/rpc/approve.yaml"
-
-log "Démarrage de la PKI"
-docker compose up -d --wait pki-web
-
-# userdb.yaml vit dans le HOME du conteneur pki-server (non persisté par un
-# volume dédié, contrairement à config.d) : régénéré à chaque exécution,
-# après coup, plutôt qu'une seule fois — idempotent et sans conséquence
-# puisque toujours réécrit avec le même mot de passe persisté ci-dessus.
-docker compose exec -T -u pkiadm pki-server sh -c \
-    "echo -n '${APPROVER_PASSWORD}' | oxi auth password --stdin" > /tmp/open-eidas-approver-digest.$$
-docker compose exec -T -u pkiadm pki-server sh -c "cat > /home/pkiadm/userdb.yaml && chmod 644 /home/pkiadm/userdb.yaml" <<EOF
-${APPROVER_USERNAME}:
-    digest: "$(cat /tmp/open-eidas-approver-digest.$$)"
-    role: RA Operator
-EOF
-rm -f /tmp/open-eidas-approver-digest.$$
-
-if [ ! -f "$MARKER" ]; then
-    log "Génération de la hiérarchie de CA de test (root + issuing)"
-    docker compose exec -u pkiadm pki-server /bin/bash /etc/openxpki/contrib/sampleconfig.sh
-    touch "$MARKER"
-    docker compose restart pki-server pki-client
-    docker compose up -d --wait pki-web
+    echo "secret généré dans $LOCAL_DIR/enroll-hmac.key"
 else
-    log "Hiérarchie de CA déjà initialisée"
+    echo "secret déjà présent"
 fi
+OPENEIDAS_ENROLL_HMAC_KEY="$(cat "$LOCAL_DIR/enroll-hmac.key")"
+export OPENEIDAS_ENROLL_HMAC_KEY
+export OPENEIDAS_CEREMONY_OPERATOR="$OPERATOR"
 
-log "Publication du certificat de la CA émettrice (extension AIA ca_issuers)"
-# sampleconfig.sh importe la hiérarchie de CA directement (oxi token add)
-# sans passer par le workflow d'émission normal, qui est ce qui
-# déclencherait la publication automatique (publishing.yaml, section
-# cacert) : publié ici explicitement, à chaque exécution (idempotent, et
-# ré-interrogé en direct auprès d'OpenXPKI plutôt que d'un fichier
-# éphémère de sampleconfig.sh, pour rester correct après un redémarrage).
-CA_ALIAS="$(docker compose exec -T -u pkiadm pki-server \
-    oxi token list --realm democa --type certsign | awk '/active:/{print $2; exit}')"
-CA_INFO="$(docker compose exec -T -u pkiadm pki-server \
-    oxi token show --realm democa --alias "$CA_ALIAS" --cert)"
-CA_IDENTIFIER="$(echo "$CA_INFO" | awk -F': ' '/^identifier:/{print $2}')"
-CA_CN="$(echo "$CA_INFO" | sed -n 's/^cert_subject: CN=//p')"
-CA_CN_SAFE="$(echo "$CA_CN" | sed -E 's/[^A-Za-z0-9_-]/_/g')"
-docker compose exec -T -u pkiadm pki-server oxi certificate show --identifier "$CA_IDENTIFIER" --certonly \
-    | docker compose exec -T -u openxpki pki-server sh -c \
-        "openssl x509 -outform der -out /var/www/download/${CA_CN_SAFE}.cer"
+log "Démarrage de la base et de l'autorité de certification"
+# Le conteneur ca exécute la cérémonie de clé au démarrage puis publie une
+# première CRL ; son healthcheck ne passe qu'une fois cet état servable.
+docker compose up -d --build --wait db ca
 
-log "Construction et démarrage de l'autorité d'horodatage"
-docker compose up -d --build tsa
+log "Hiérarchie de CA en place"
+docker compose exec -T ca ca-server ra list || true
 
-log "Construction et démarrage du répondeur OCSP"
-docker compose up -d --build ocsp-responder
+log "Démarrage de l'autorité d'horodatage et du répondeur OCSP"
+docker compose up -d --build tsa ocsp-responder
 
-log "Attente de la délivrance des certificats (TSU + OCSP)"
-# Deux enrôlements concurrents sur une CA fraîchement créée peuvent chacun
-# subir le cycle watchdog de rafraîchissement du token de signature (voir
-# le job helm-kind-smoke-test, jusqu'à 5-6 minutes à eux seuls) : 10 minutes
-# laissent une marge confortable.
-#
-# Chaque demande atterrit en attente d'approbation (état PENDING, voir
-# rpc/tsa.yaml) : approuvée ici automatiquement via le compte technique RA
-# Operator ci-dessus, pour que la pile de démonstration/CI s'amorce sans
-# opérateur humain — voir client.d/service/rpc/approve.yaml pour l'écart
-# correspondant vis-à-vis d'une approbation par un véritable opérateur.
-for _ in $(seq 1 120); do
-    docker compose exec -T -u pkiadm pki-server \
-        oxi workflow list --realm democa --type certificate_enroll 2>/dev/null \
-        | awk '/workflow_id:/{id=$2} /workflow_state: PENDING/{print id}' \
-        | while read -r wf_id; do
-            [ -n "$wf_id" ] || continue
-            tid="$(docker compose exec -T -u pkiadm pki-server \
-                oxi workflow show --realm democa --id "$wf_id" 2>/dev/null \
-                | sed -n 's/^    transaction_id: //p')"
-            [ -n "$tid" ] || continue
-            curl -sk -X POST -d "transaction_id=${tid}" \
-                https://localhost:8443/rpc/approve/ApproveEnrollment >/dev/null 2>&1 || true
-        done
+log "Approbation des demandes d'enrôlement et attente des certificats"
+# Chaque demande atterrit en attente d'une décision (état PENDING) : il
+# n'existe aucun chemin d'auto-approbation dans le code (voir
+# internal/raflow). Elle est approuvée ici automatiquement sous l'identité du
+# compte technique ci-dessus, pour que la pile de démonstration s'amorce sans
+# opérateur humain — ce qui reste un écart assumé vis-à-vis d'une revue
+# nominative réelle, tracé comme tel au journal d'audit.
+for _ in $(seq 1 60); do
+    # La liste est capturée AVANT d'itérer : `docker compose exec -T` lit son
+    # entrée standard, et consommerait les lignes restantes s'il était appelé
+    # depuis l'intérieur d'un tube.
+    pending="$(docker compose exec -T ca ca-server ra list PENDING 2>/dev/null \
+        | awk 'NR > 1 && $1 != "(aucune" {print $1}')"
+    for tx in $pending; do
+        echo "approbation de la demande ${tx}"
+        docker compose exec -T ca ca-server ra approve "$tx" "$OPERATOR" \
+            "approbation automatique de la pile de démonstration" </dev/null || true
+    done
 
     if curl -fsS http://localhost:8318/healthz >/dev/null 2>&1 \
         && curl -fsS http://localhost:8319/healthz >/dev/null 2>&1; then
@@ -173,5 +75,5 @@ for _ in $(seq 1 120); do
 done
 
 echo "La TSA ou le répondeur OCSP n'a pas démarré dans le délai imparti. Journaux :" >&2
-docker compose logs --tail 50 tsa ocsp-responder >&2
+docker compose logs --tail 50 ca tsa ocsp-responder >&2
 exit 1

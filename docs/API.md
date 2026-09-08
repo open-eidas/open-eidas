@@ -104,8 +104,8 @@ HTTP 400 (requête invalide) ou 500 (défaillance interne).
   "policy_oid": "1.3.6.1.4.1.99999.1.1.1",
   "accuracy": "1s",
   "accepted_hashes": ["sha256", "sha384", "sha512"],
-  "tsu_subject": "CN=tsa.openxpki.test,OU=Time Stamping Authority,O=Open eIDAS,C=FR",
-  "tsu_issuer": "CN=OpenXPKI Demo Issuing CA ...",
+  "tsu_subject": "CN=Open eIDAS Time-Stamping Unit 1,OU=Time Stamping Authority,O=Open eIDAS,C=FR",
+  "tsu_issuer": "CN=Open eIDAS Issuing CA,O=Open eIDAS,C=FR",
   "tsu_not_after": "2027-09-06T12:00:00Z",
   "tsu_serial": "...",
   "rfc3161_endpoint": "/tsa",
@@ -211,7 +211,8 @@ Toutes les options sont pilotées par variables d'environnement.
 | `OPENEIDAS_TIME_MAX_AGE` | `1h` | Ancienneté maximale de la dernière mesure |
 | `OPENEIDAS_TIME_POLL` | `5m` | Période d'interrogation des sources |
 | `OPENEIDAS_TIME_TIMEOUT` | `5s` | Délai d'attente par source |
-| `OPENEIDAS_ENROLL_ENDPOINT` | — | URL RPC d'enrôlement OpenXPKI |
+| `OPENEIDAS_ENROLL_ENDPOINT` | — | URL de l'API d'enrôlement de la CA (`/api/v1/enroll`) |
+| `OPENEIDAS_ENROLL_PROFILE` | `tsa_signer` | Profil de certificat demandé |
 | `OPENEIDAS_ENROLL_HMAC_KEY` | — | Secret partagé authentifiant la demande de certificat (HMAC-SHA256 sur la CSR) |
 | `OPENEIDAS_ENROLL_CA_FILE` | — | Ancre de confiance TLS de la PKI |
 | `OPENEIDAS_ENROLL_INSECURE` | `false` | Désactive la vérification TLS (démonstration seulement) |
@@ -253,7 +254,8 @@ réussi, voir `deploy/ocsp-responder/entrypoint.sh`).
 | `OPENEIDAS_KEY_BITS` | `3072` | Taille de clé RSA, minimum 3072 |
 | `OPENEIDAS_CERT_FILE` | `/var/lib/open-eidas/ocsp.pem` | Certificat de signature OCSP |
 | `OPENEIDAS_CHAIN_FILE` | `/var/lib/open-eidas/chain.pem` | Chaîne d'émission (l'émetteur, `chain[0]`, sert de référence pour les requêtes) |
-| `OPENEIDAS_ENROLL_ENDPOINT` | — | URL RPC d'enrôlement OpenXPKI (`/rpc/ocsp/RequestCertificate`) |
+| `OPENEIDAS_ENROLL_ENDPOINT` | — | URL de l'API d'enrôlement de la CA (`/api/v1/enroll`) |
+| `OPENEIDAS_ENROLL_PROFILE` | `ocsp_responder` | Profil de certificat demandé |
 | `OPENEIDAS_ENROLL_HMAC_KEY` | — | Même secret partagé que la TSA |
 | `OPENEIDAS_ENROLL_CA_FILE` / `OPENEIDAS_ENROLL_INSECURE` / `OPENEIDAS_ENROLL_TIMEOUT` | — / `false` / `5m` | Identiques à la TSA |
 | `OPENEIDAS_RENEW_BEFORE` | `720h` | Fenêtre de renouvellement anticipé |

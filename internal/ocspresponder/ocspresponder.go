@@ -1,9 +1,10 @@
 // Package ocspresponder implémente un répondeur OCSP (RFC 6960) autonome
-// pour la CA émettrice de la TSU. OpenXPKI Community n'embarque aucun
-// répondeur OCSP : ce service comble cet écart en s'appuyant sur la seule
-// source de vérité déjà publiée par la PKI, la CRL (voir
-// docs/ARCHITECTURE.md), plutôt que d'accéder directement à la base
-// OpenXPKI.
+// pour la CA émettrice de la TSU.
+//
+// Il s'appuie sur la CRL publiée par l'autorité (cmd/ca-server) plutôt que sur
+// un accès direct à son registre : le répondeur ne voit donc que ce qu'un
+// tiers pourrait voir lui-même, et ne peut pas attester d'un statut que la CA
+// n'a pas publié. Voir docs/ARCHITECTURE.md.
 package ocspresponder
 
 import (
@@ -18,24 +19,24 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
-	"regexp"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/ocsp"
+
+	"github.com/open-eidas/open-eidas/internal/certs"
 )
 
-// crlNameFilter reproduit le filtre Template Toolkit du point de
-// distribution de CRL défini dans le profil OpenXPKI
-// (ISSUER.CN.0.replace('[^\w-]','_')), afin de dériver la même URL de CRL
-// sans nécessiter de configuration séparée.
-var crlNameFilter = regexp.MustCompile(`[^\w-]`)
-
-// CRLURL déduit l'URL de la CRL de la CA émettrice à partir de l'adresse
-// publique de la PKI et du nom courant de l'émetteur.
-func CRLURL(pkiPublicURL string, issuer *x509.Certificate) string {
-	name := crlNameFilter.ReplaceAllString(issuer.Subject.CommonName, "_")
-	return fmt.Sprintf("%s/download/%s.crl", pkiPublicURL, name)
+// CRLURL déduit l'URL de la CRL de la CA émettrice à partir de l'adresse à
+// laquelle ce service joint la PKI et du nom courant de l'émetteur.
+//
+// La dérivation du nom de fichier est celle de certs.FileName, la même
+// qu'emploient l'autorité qui grave l'URL dans les extensions CDP et le
+// serveur qui publie le fichier : définie une seule fois, elle ne peut pas
+// diverger entre les trois.
+func CRLURL(pkiInternalURL string, issuer *x509.Certificate) string {
+	return fmt.Sprintf("%s/download/%s.crl", pkiInternalURL,
+		certs.FileName(issuer.Subject.CommonName))
 }
 
 type Options struct {

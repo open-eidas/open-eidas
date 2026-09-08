@@ -1,17 +1,20 @@
 # Valeurs par défaut du chart Open eIDAS.
 #
 # Ce chart reproduit, en Kubernetes, exactement la pile du docker-compose de
-# démonstration : MariaDB, une PKI OpenXPKI (racine + CA émettrice, profil
-# TSU dédié), un serveur WebDAV de réplication du journal d'audit, et le
-# service d'horodatage lui-même. Il est destiné à un déploiement piloté par
-# ArgoCD (voir deploy/argocd/application.yaml) mais s'installe aussi bien en
-# `helm install` direct.
+# démonstration : PostgreSQL, l'autorité de certification maison (racine +
+# CA émettrice, cf. cmd/ca-server), un serveur WebDAV de réplication du
+# journal d'audit, le répondeur OCSP et le service d'horodatage lui-même. Il
+# est destiné à un déploiement piloté par ArgoCD (voir
+# deploy/argocd/application.yaml) mais s'installe aussi bien en `helm install`
+# direct.
 #
 # AVERTISSEMENT — comme le docker-compose, ce chart est une démonstration :
-# hiérarchie de CA jetable, enrôlement authentifié par secret partagé et auto-approuvé, SoftHSM en lieu
-# d'un HSM certifié. Voir docs/ARCHITECTURE.md pour les écarts au référentiel
-# eIDAS et deploy/helm/open-eidas/README.md pour les adaptations nécessaires
-# à un déploiement de production.
+# cérémonie de clé sans double contrôle, approbation RA automatisée sous un
+# compte technique, SoftHSM en lieu d'un HSM certifié. Voir
+# docs/CONFORMITE-ETSI.md pour l'état exigence par exigence,
+# docs/ARCHITECTURE.md pour les écarts au référentiel eIDAS et
+# deploy/helm/open-eidas/README.md pour les adaptations nécessaires à un
+# déploiement de production.
 
 nameOverride: ""
 fullnameOverride: ""
@@ -37,11 +40,11 @@ tsa:
       size: 256Mi
       storageClassName: ""
   policyOID: "1.3.6.1.4.1.99999.1.1.1"
+  # Seul le nom courant est choisi par le service : unité, organisation et
+  # pays sont imposés par le profil côté autorité (internal/ca/profile.go),
+  # de sorte qu'un service ne puisse pas se réclamer d'une autre organisation.
   subject:
     commonName: "Open eIDAS Time-Stamping Unit 1"
-    organizationalUnit: "Time Stamping Authority"
-    organization: "Open eIDAS"
-    country: "FR"
   time:
     policy: enforce # enforce | monitor | disabled
     sources: "ntp.obspm.fr,ptbtime1.ptb.de"
@@ -81,6 +84,9 @@ ocsp:
   # PIN du token PKCS#11 dédié à ce service, généré aléatoirement et
   # conservé dans un Secret si laissé vide (voir templates/secret-generated.yaml).
   pin: ""
+  # Comme pour la TSA, seul le nom courant est choisi par le service.
+  subject:
+    commonName: "Open eIDAS OCSP Responder 1"
   # Adresse publique du répondeur, gravée dans l'extension AIA du certificat
   # TSU. Vide = déduite de l'ingress si activé, sinon du nom DNS interne au
   # cluster (non résoluble de l'extérieur — à fixer explicitement pour tout
@@ -93,35 +99,64 @@ ocsp:
     annotations: {}
     tls: []
 
-openxpki:
+# Autorité de certification et d'enregistrement (cmd/ca-server). Elle
+# remplace OpenXPKI : voir INDEPENDANCE.md.
+ca:
   image:
-    repository: whiterabbitsecurity/openxpki3
-    tag: "3.34"
-  configRef: community
-  # Adresse publique de la PKI, gravée dans les points de distribution de CRL
-  # et d'accès à la CA émettrice (CDP/AIA) du certificat TSU. Vide = déduite
-  # de l'ingress si activé, sinon du nom DNS interne au cluster (non
-  # résoluble de l'extérieur — à fixer explicitement pour tout déploiement
-  # dont le certificat sera vérifié par des tiers).
-  publicURL: ""
+    repository: ghcr.io/open-eidas/open-eidas-ca
+    tag: "latest"
   service:
-    webPort: 8443
+    port: 8320
   resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { cpu: "1", memory: 768Mi }
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { cpu: "1", memory: 512Mi }
   persistence:
-    # CRL et certificat de CA publiés (/download) : contrairement au reste
-    # du Pod openxpki, OpenXPKI ne les republie jamais spontanément une
-    # fois le workflow d'émission terminé, d'où un PVC dédié plutôt qu'un
-    # emptyDir.
-    download:
-      size: 64Mi
+    softhsm:
+      size: 256Mi
       storageClassName: ""
-  # Images utilisées par les conteneurs d'initialisation de la configuration
-  # (clonage du dépôt amont, application de l'overlay, génération des secrets
-  # locaux au pod).
-  gitImage: alpine/git:v2.54.0
-  opensslImage: alpine/openssl:3.5.8
+    state:
+      size: 256Mi
+      storageClassName: ""
+  # Taille des clés d'autorité. Une CA signe des certificats qui lui
+  # survivent : 4096 bits plutôt que le minimum de 3072 exigé par
+  # ETSI TS 119 312 pour les entités finales.
+  keyBits: 4096
+  rootCommonName: "Open eIDAS Root CA"
+  issuingCommonName: "Open eIDAS Issuing CA"
+  organization: "Open eIDAS"
+  country: "FR"
+  # Identité consignée au procès-verbal de cérémonie (ETSI EN 319 411-1
+  # §6.5.1). En production, une personne nommée, pas un compte technique.
+  ceremonyOperator: "ci-bootstrap"
+  crl:
+    # Écart entre thisUpdate et nextUpdate des CRL publiées.
+    validity: 24h
+    # Fréquence de republication : très en deçà de la validité, pour qu'une
+    # CRL ne devienne jamais périmée du seul fait d'un cycle raté.
+    refresh: 1h
+  audit:
+    # Durée de conservation du journal (ETSI EN 319 401 §7.10). Le service
+    # refuse de démarrer en deçà d'un an.
+    retention: 8760h
+  # ÉCART ASSUMÉ — approbation automatique des demandes d'enrôlement, pour
+  # que la démonstration et la CI s'amorcent sans opérateur humain. Le point
+  # d'approbation reste réellement actif : c'est un conteneur nommé qui
+  # décide, sous une identité technique tracée au journal d'audit. Un
+  # déploiement destiné à la qualification pose enabled: false et approuve
+  # par `kubectl exec … ca-server ra approve <transaction> <opérateur>`.
+  autoApprove:
+    enabled: true
+    operator: "ci-bootstrap"
+    intervalSeconds: 5
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { cpu: 100m, memory: 128Mi }
+  # Adresse publique de la CA, gravée dans les points de distribution de CRL
+  # et d'accès au certificat de la CA émettrice (CDP/AIA) des certificats
+  # émis. Vide = déduite de l'ingress si activé, sinon du nom DNS interne au
+  # cluster (non résoluble de l'extérieur — à fixer explicitement pour tout
+  # déploiement dont les certificats seront vérifiés par des tiers).
+  publicURL: ""
   ingress:
     enabled: false
     className: ""
@@ -129,18 +164,18 @@ openxpki:
     annotations: {}
     tls: []
 
-mariadb:
+postgres:
   image:
-    repository: mariadb
-    tag: "11.4"
+    repository: postgres
+    tag: "17-alpine"
   resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { cpu: "1", memory: 1Gi }
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
   persistence:
     size: 1Gi
     storageClassName: ""
-  database: openxpki
-  user: openxpki
+  database: openeidas
+  user: openeidas
 
 auditReplica:
   image:

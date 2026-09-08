@@ -13,7 +13,8 @@ OVHcloud Managed Kubernetes, DigitalOcean, etc.) ou à un `k3s` sur VM.
 
 **Dimensionnement recommandé pour cet usage (démonstration, pas de charge
 réelle)** : un unique nœud, 2 vCPU / 4 Go de RAM suffisent largement (la
-pile complète — MariaDB, OpenXPKI, TSA, réplica d'audit — représente au
+pile complète — PostgreSQL, autorité de certification, TSA, répondeur OCSP,
+réplica d'audit — représente au
 total moins de 2 Go de limites mémoire cumulées, voir `values.yaml`).
 
 ## 0. Outils requis en local
@@ -120,13 +121,14 @@ ArgoCD synchronise alors automatiquement tout changement fusionné dans
 
 ## 6. Suivre l'amorçage
 
-Compter 1 à 6 minutes pour l'amorçage complet (génération de la hiérarchie
-de CA, enrôlement de la TSU — voir `docs/ARCHITECTURE.md` pour le détail du
-cycle watchdog OpenXPKI), puis quelques minutes de plus pour l'émission du
-certificat TLS par cert-manager :
+Compter 1 à 3 minutes pour l'amorçage complet — cérémonie de clé, première
+CRL, puis enrôlement et approbation de la TSU et du répondeur OCSP (voir
+`docs/CA.md`) — puis quelques minutes de plus pour l'émission du certificat
+TLS par cert-manager :
 
 ```bash
 kubectl -n open-eidas-staging get pods -w
+kubectl -n open-eidas-staging logs deploy/open-eidas-ca -c ca -f
 kubectl -n open-eidas-staging get certificate,challenge
 ```
 
@@ -161,11 +163,16 @@ openssl ocsp -issuer ca.pem -cert tsu.pem -CAfile ca.pem -no_nonce \
   DNS pointe bien vers l'ingress (`dig`) et que rien ne bloque le port 80
   entrant depuis Internet (certains hébergeurs filtrent par défaut au
   niveau du security group / firewall cloud, à ouvrir explicitement).
-- **`kubectl wait` ou `helm install` semblent bloqués sur le Pod
-  `openxpki`** : normal jusqu'à 5-6 minutes lors du tout premier
-  amorçage — voir le commentaire dans
-  `.github/workflows/ci.yml` (job `helm-kind-smoke-test`) qui documente ce
-  même comportement observé en CI.
+- **`kubectl wait` ou `helm install` semblent bloqués sur le Pod `ca`** :
+  la cérémonie génère deux bi-clés RSA-4096 dans SoftHSM, ce qui prend
+  jusqu'à quelques minutes sur un nœud modeste. Suivre
+  `kubectl logs deploy/open-eidas-ca -c ca -f`.
+- **La TSA ou le répondeur OCSP restent en attente de certificat** : leur
+  demande attend une décision de l'autorité d'enregistrement. Vérifier que le
+  conteneur d'approbation automatique tourne
+  (`kubectl logs deploy/open-eidas-ca -c ra-autoapprove`), ou approuver à la
+  main si `ca.autoApprove.enabled` est à `false` :
+  `kubectl exec deploy/open-eidas-ca -c ca -- ca-server ra list PENDING`.
 - **La TSA refuse de signer (`heure non traçable`)** : le cluster n'a pas
   de sortie UDP/123 vers les serveurs NTP configurés
   (`tsa.time.policy` / `tsa.time.sources`, voir `values.yaml`) — vérifier
