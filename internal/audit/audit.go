@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,22 @@ const (
 	EventTimestampRejected  = "timestamp.rejected"
 	EventTimeMeasurement    = "time.measurement"
 	EventEnrollmentAccepted = "enrollment.completed"
+)
+
+// Événements consignés par l'autorité de certification (ETSI EN 319 401 §7.10
+// et EN 319 411-1 §6.2.1 : toute décision d'émission doit être imputable).
+// Ils partagent le même journal chaîné que les événements ci-dessus : un
+// auditeur relit une seule chaîne pour l'ensemble du cycle de vie.
+const (
+	EventCAceremony            = "ca.ceremony"
+	EventCARequestReceived     = "ca.request_received"
+	EventCARequestApproved     = "ca.request_approved"
+	EventCARequestRejected     = "ca.request_rejected"
+	EventCACertificateIssued   = "ca.certificate_issued"
+	EventCACertificateRevoked  = "ca.certificate_revoked"
+	EventCACRLPublished        = "ca.crl_published"
+	EventCAIssuanceRefused     = "ca.issuance_refused"
+	EventCAConformanceReported = "ca.conformance_reported"
 )
 
 // Record est une ligne du journal.
@@ -69,12 +86,21 @@ func (r Record) computeHash() (string, error) {
 }
 
 // Log est un journal ouvert en écriture.
+//
+// Plusieurs processus peuvent légitimement écrire dans le même journal : le
+// service de la CA et les commandes d'exploitation lancées à côté
+// (`ca-server ra approve`, `revoke`). Chaque ajout prend donc un verrou de
+// fichier et relit ce qui a pu être écrit entre-temps, de sorte que la chaîne
+// reste continue quel que soit l'ordre des écritures.
 type Log struct {
 	mu   sync.Mutex
 	file *os.File
 	seq  uint64
 	head string
-	now  func() time.Time
+	// offset est la position, en octets, jusqu'à laquelle le journal a été
+	// relu et vérifié par cette instance.
+	offset int64
+	now    func() time.Time
 }
 
 // Open relit et vérifie le journal existant, puis l'ouvre en ajout.
@@ -82,21 +108,58 @@ func Open(path string) (*Log, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("audit: création du répertoire du journal: %w", err)
 	}
-	report, err := Verify(path)
-	if err != nil {
-		return nil, err
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o640)
+	// O_RDWR et non O_WRONLY : l'ajout doit pouvoir relire ce qu'un autre
+	// processus aurait écrit depuis la dernière écriture de celui-ci.
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o640)
 	if err != nil {
 		return nil, fmt.Errorf("audit: ouverture du journal: %w", err)
 	}
-	return &Log{file: file, seq: report.Last, head: report.Head, now: time.Now}, nil
+	l := &Log{file: file, head: GenesisHash, now: time.Now}
+	if err := lockExclusive(file); err != nil {
+		file.Close()
+		return nil, err
+	}
+	err = l.catchUp()
+	_ = unlock(file)
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	return l, nil
+}
+
+// catchUp relit le journal à partir de l'offset déjà vérifié et met à jour la
+// tête de chaîne. Doit être appelé sous le verrou de fichier.
+func (l *Log) catchUp() error {
+	if _, err := l.file.Seek(l.offset, io.SeekStart); err != nil {
+		return fmt.Errorf("audit: positionnement dans le journal: %w", err)
+	}
+	report := Report{Last: l.seq, Head: l.head, Records: l.seq}
+	read, err := scanChain(l.file, &report)
+	if err != nil {
+		return err
+	}
+	l.offset += read
+	l.seq = report.Last
+	l.head = report.Head
+	return nil
 }
 
 // Append ajoute un enregistrement et le synchronise sur disque.
 func (l *Log) Append(event string, data map[string]any) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if err := lockExclusive(l.file); err != nil {
+		return err
+	}
+	defer func() { _ = unlock(l.file) }()
+
+	// Un autre processus a pu écrire depuis notre dernier ajout : la tête de
+	// chaîne est reprise depuis le fichier, jamais supposée.
+	if err := l.catchUp(); err != nil {
+		return err
+	}
 
 	record := Record{
 		Seq:   l.seq + 1,
@@ -115,7 +178,8 @@ func (l *Log) Append(event string, data map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("audit: sérialisation: %w", err)
 	}
-	if _, err := l.file.Write(append(line, '\n')); err != nil {
+	line = append(line, '\n')
+	if _, err := l.file.Write(line); err != nil {
 		return fmt.Errorf("audit: écriture: %w", err)
 	}
 	if err := l.file.Sync(); err != nil {
@@ -124,14 +188,25 @@ func (l *Log) Append(event string, data map[string]any) error {
 
 	l.seq = record.Seq
 	l.head = record.Hash
+	l.offset += int64(len(line))
 	return nil
 }
 
-// Head retourne le numéro et l'empreinte du dernier enregistrement.
-func (l *Log) Head() (uint64, string) {
+// Head retourne le numéro et l'empreinte du dernier enregistrement, en
+// tenant compte de ce qu'un autre processus aurait écrit entre-temps : c'est
+// cette tête de chaîne qui est scellée et contresignée, elle doit couvrir
+// tout le journal, pas seulement les écritures de ce processus.
+func (l *Log) Head() (uint64, string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.seq, l.head
+	if err := lockExclusive(l.file); err != nil {
+		return 0, "", err
+	}
+	defer func() { _ = unlock(l.file) }()
+	if err := l.catchUp(); err != nil {
+		return 0, "", err
+	}
+	return l.seq, l.head, nil
 }
 
 func (l *Log) Close() error { return l.file.Close() }
@@ -159,22 +234,37 @@ func Verify(path string) (Report, error) {
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
+	if _, err := scanChain(file, &report); err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
+// scanChain relit des enregistrements depuis r, contrôle la continuité de la
+// chaîne et met à jour report. Il retourne le nombre d'octets consommés, ce
+// qui permet à un journal ouvert en écriture de reprendre exactement là où il
+// s'était arrêté.
+func scanChain(r io.Reader, report *Report) (int64, error) {
+	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
-	var line uint64
+	var (
+		line uint64
+		read int64
+	)
 	for scanner.Scan() {
 		line++
 		raw := scanner.Bytes()
+		read += int64(len(raw)) + 1 // le saut de ligne consommé par le scanner
 		if len(raw) == 0 {
 			continue
 		}
 		var record Record
 		if err := json.Unmarshal(raw, &record); err != nil {
-			return report, fmt.Errorf("audit: ligne %d illisible: %w", line, err)
+			return read, fmt.Errorf("audit: ligne %d illisible: %w", line, err)
 		}
 		if record.Prev != report.Head {
-			return report, fmt.Errorf("audit: chaîne rompue à l'enregistrement %d: empreinte précédente attendue %s, trouvée %s",
+			return read, fmt.Errorf("audit: chaîne rompue à l'enregistrement %d: empreinte précédente attendue %s, trouvée %s",
 				record.Seq, report.Head, record.Prev)
 		}
 		expected := report.Last + 1
@@ -182,14 +272,14 @@ func Verify(path string) (Report, error) {
 			expected = record.Seq
 		}
 		if record.Seq != expected {
-			return report, fmt.Errorf("audit: numérotation rompue: enregistrement %d attendu, %d trouvé", expected, record.Seq)
+			return read, fmt.Errorf("audit: numérotation rompue: enregistrement %d attendu, %d trouvé", expected, record.Seq)
 		}
 		hash, err := record.computeHash()
 		if err != nil {
-			return report, fmt.Errorf("audit: enregistrement %d: %w", record.Seq, err)
+			return read, fmt.Errorf("audit: enregistrement %d: %w", record.Seq, err)
 		}
 		if hash != record.Hash {
-			return report, fmt.Errorf("audit: enregistrement %d altéré: empreinte %s attendue, %s inscrite",
+			return read, fmt.Errorf("audit: enregistrement %d altéré: empreinte %s attendue, %s inscrite",
 				record.Seq, hash, record.Hash)
 		}
 
@@ -204,7 +294,7 @@ func Verify(path string) (Report, error) {
 		report.Head = record.Hash
 	}
 	if err := scanner.Err(); err != nil {
-		return report, fmt.Errorf("audit: parcours du journal: %w", err)
+		return read, fmt.Errorf("audit: parcours du journal: %w", err)
 	}
-	return report, nil
+	return read, nil
 }

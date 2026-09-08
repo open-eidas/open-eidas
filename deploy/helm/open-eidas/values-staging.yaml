@@ -1,6 +1,6 @@
 # Surcouche de valeurs pour le déploiement public de démonstration sur
-# staging-api.open-eidas.eu (TSA), staging-pki.open-eidas.eu (PKI) et
-# staging-ocsp.open-eidas.eu (répondeur OCSP).
+# staging-api.open-eidas.eu (TSA), staging-pki.open-eidas.eu (autorité de
+# certification) et staging-ocsp.open-eidas.eu (répondeur OCSP).
 #
 # Préalables sur le cluster cible (non gérés par ce chart) :
 #   - un ingress controller exposé publiquement (ex. ingress-nginx) ;
@@ -9,7 +9,8 @@
 #   - trois enregistrements DNS (A ou CNAME) pointant vers l'adresse publique
 #     de l'ingress controller :
 #       staging-api.open-eidas.eu   -> TSA (API RFC 3161)
-#       staging-pki.open-eidas.eu   -> OpenXPKI (interface, CRL, AIA ca_issuers)
+#       staging-pki.open-eidas.eu   -> CA (publication de la CRL et du
+#                                      certificat de la CA émettrice)
 #       staging-ocsp.open-eidas.eu  -> répondeur OCSP (AIA ocsp)
 #
 # Utilisation :
@@ -30,9 +31,10 @@ tsa:
           - staging-api.open-eidas.eu
         secretName: open-eidas-tsa-tls
 
-openxpki:
-  # Gravée dans le point CRL du certificat TSU : doit correspondre à l'hôte
-  # ingress ci-dessous pour que la CRL soit vérifiable par des tiers.
+ca:
+  # Gravée dans les points CRL et AIA des certificats émis : doit correspondre
+  # à l'hôte ingress ci-dessous pour que la CRL et le certificat de la CA
+  # soient réellement récupérables par un tiers qui vérifie.
   publicURL: "https://staging-pki.open-eidas.eu"
   ingress:
     enabled: true

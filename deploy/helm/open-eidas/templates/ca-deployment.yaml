@@ -1,0 +1,207 @@
+{{- $fullname := include "open-eidas.fullname" . -}}
+{{- $name := printf "%s-ca" $fullname -}}
+{{- $postgres := printf "%s-postgres" $fullname -}}
+{{- $generatedSecret := include "open-eidas.generatedSecretName" . -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-softhsm
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.ca.persistence.softhsm.storageClassName }}
+  storageClassName: {{ .Values.ca.persistence.softhsm.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ca.persistence.softhsm.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-state
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.ca.persistence.state.storageClassName }}
+  storageClassName: {{ .Values.ca.persistence.state.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ca.persistence.state.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
+spec:
+  # Une seule instance : les tokens PKCS#11 et le journal d'audit chaîné sont
+  # portés par des volumes ReadWriteOnce, et la clé de l'autorité n'a pas
+  # vocation à être répliquée.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ca") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ca") | nindent 8 }}
+    spec:
+      containers:
+        - name: ca
+          image: "{{ .Values.ca.image.repository }}:{{ .Values.ca.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ca.service.port }}
+          env:
+            {{- include "open-eidas.caEnv" (dict "context" . "postgres" $postgres "secret" $generatedSecret) | nindent 12 }}
+          volumeMounts:
+            - name: softhsm
+              mountPath: /var/lib/softhsm/tokens
+            - name: state
+              mountPath: /var/lib/open-eidas/state
+          # La cérémonie de clé (génération de deux bi-clés RSA-4096 dans
+          # SoftHSM) précède le premier /healthz : quelques minutes de marge.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.ca.resources | nindent 12 }}
+        {{- if .Values.ca.autoApprove.enabled }}
+        # ÉCART ASSUMÉ — approbation automatique des demandes d'enrôlement.
+        #
+        # Le point d'approbation RA est réellement actif : aucun chemin du
+        # code ne mène à l'émission sans une décision identifiée (voir
+        # internal/raflow). Ce conteneur prend cette décision à la place d'un
+        # opérateur humain, sous une identité technique distincte, pour que la
+        # démonstration et la CI s'amorcent seules. L'écart est visible dans
+        # le journal d'audit, précisément parce que cette identité y figure.
+        #
+        # Un déploiement destiné à la qualification pose
+        # ca.autoApprove.enabled=false et approuve par
+        # `kubectl exec … ca-server ra approve <tx> <opérateur>`.
+        #
+        # Il ne monte aucun token PKCS#11 : approuver, c'est décider, pas
+        # signer — l'émission a lieu dans le conteneur ci-dessus.
+        - name: ra-autoapprove
+          image: "{{ .Values.ca.image.repository }}:{{ .Values.ca.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              while true; do
+                ca-server ra list PENDING 2>/dev/null \
+                  | awk 'NR > 1 && $1 != "(aucune" { print $1 }' \
+                  | while read -r tx; do
+                      [ -n "$tx" ] || continue
+                      echo "approbation automatique de la demande ${tx}"
+                      ca-server ra approve "$tx" "{{ .Values.ca.autoApprove.operator }}" \
+                        "approbation automatique de la pile de démonstration" || true
+                    done
+                sleep {{ .Values.ca.autoApprove.intervalSeconds }}
+              done
+          env:
+            {{- include "open-eidas.caEnv" (dict "context" . "postgres" $postgres "secret" $generatedSecret) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.ca.autoApprove.resources | nindent 12 }}
+        {{- end }}
+      volumes:
+        - name: softhsm
+          persistentVolumeClaim:
+            claimName: {{ $name }}-softhsm
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ $name }}-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
+spec:
+  selector:
+    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ca") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.ca.service.port }}
+      targetPort: http
+{{- if .Values.ca.ingress.enabled }}
+---
+# L'ingress n'est pas un confort : les extensions CDP et AIA des certificats
+# émis pointent vers cet hôte, et un tiers qui vérifie un certificat doit
+# pouvoir y récupérer la CRL et le certificat de la CA.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
+  {{- with .Values.ca.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ca.ingress.className }}
+  ingressClassName: {{ .Values.ca.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ca.ingress.host | quote }}
+      http:
+        paths:
+          # Seuls les chemins de publication sont exposés : l'API
+          # d'enrôlement reste interne au cluster, jointe par les services
+          # qui s'y enrôlent.
+          - path: /download
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: {{ .Values.ca.service.port }}
+          - path: /api/v1/ca.pem
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: {{ .Values.ca.service.port }}
+          - path: /api/v1/conformance
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: {{ .Values.ca.service.port }}
+  {{- with .Values.ca.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

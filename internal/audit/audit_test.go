@@ -55,7 +55,9 @@ func TestVerifyAcceptsIntactChain(t *testing.T) {
 	if report.Records != 3 || report.First != 1 || report.Last != 3 {
 		t.Errorf("relecture incohérente: %+v", report)
 	}
-	if _, head := log.Head(); head != report.Head {
+	if _, head, err := log.Head(); err != nil {
+		t.Fatal(err)
+	} else if head != report.Head {
 		t.Error("la tête relue diffère de la tête en mémoire")
 	}
 }
@@ -122,7 +124,10 @@ func TestVerifyDetectsTruncatedAndRewrittenTail(t *testing.T) {
 func TestOpenResumesExistingChain(t *testing.T) {
 	log, path := newLog(t)
 	appendSome(t, log, 2)
-	_, headBefore := log.Head()
+	_, headBefore, err := log.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +138,10 @@ func TestOpenResumesExistingChain(t *testing.T) {
 	}
 	defer reopened.Close()
 
-	seq, head := reopened.Head()
+	seq, head, err := reopened.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if seq != 2 || head != headBefore {
 		t.Fatalf("reprise incorrecte: seq=%d head=%s", seq, head)
 	}
@@ -165,5 +173,51 @@ func TestOpenRefusesTamperedLog(t *testing.T) {
 
 	if _, err := Open(path); err == nil {
 		t.Fatal("un journal altéré ne doit pas pouvoir être rouvert en écriture")
+	}
+}
+
+// Deux processus écrivent légitimement dans le même journal : le service de
+// la CA et les commandes d'exploitation lancées à côté (`ca-server ra
+// approve`). Chacun tenant sa propre idée de la tête de chaîne, les écritures
+// se contrediraient sans verrou de fichier ni relecture — la chaîne serait
+// rompue et le journal inexploitable. Ce test reproduit exactement ce cas.
+func TestDeuxEcrivainsPartagentLaMemeChaine(t *testing.T) {
+	premier, path := newLog(t)
+	defer premier.Close()
+
+	second, err := Open(path)
+	if err != nil {
+		t.Fatalf("ouverture du second écrivain: %v", err)
+	}
+	defer second.Close()
+
+	// Écritures entrelacées, comme le service et la CLI le feraient.
+	for i := 0; i < 3; i++ {
+		if err := premier.Append(EventOpened, map[string]any{"ecrivain": "service", "n": i}); err != nil {
+			t.Fatalf("écriture du service: %v", err)
+		}
+		if err := second.Append(EventCARequestApproved, map[string]any{"ecrivain": "cli", "n": i}); err != nil {
+			t.Fatalf("écriture de la CLI: %v", err)
+		}
+	}
+
+	report, err := Verify(path)
+	if err != nil {
+		t.Fatalf("la chaîne doit rester continue malgré deux écrivains: %v", err)
+	}
+	if report.Records != 6 || report.Last != 6 {
+		t.Fatalf("relecture incohérente: %+v", report)
+	}
+
+	// Chaque écrivain doit voir la tête réelle du journal, pas seulement la
+	// sienne : c'est cette tête qui est scellée et contresignée.
+	for nom, log := range map[string]*Log{"service": premier, "cli": second} {
+		seq, head, err := log.Head()
+		if err != nil {
+			t.Fatalf("%s: %v", nom, err)
+		}
+		if seq != report.Last || head != report.Head {
+			t.Errorf("%s voit seq=%d head=%s, attendu seq=%d head=%s", nom, seq, head, report.Last, report.Head)
+		}
 	}
 }

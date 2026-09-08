@@ -1,15 +1,16 @@
 Open eIDAS a été déployé dans le namespace {{ .Release.Namespace }}.
 
-L'amorçage complet (récupération de la configuration OpenXPKI, génération de
-la hiérarchie de CA de test, enrôlement de la TSU) prend quelques minutes.
+L'amorçage complet (cérémonie de clé, première CRL, enrôlement puis
+approbation de la TSU et du répondeur OCSP) prend quelques minutes.
 Suivez sa progression :
 
   kubectl -n {{ .Release.Namespace }} get pods -w
 
-Le conteneur "bootstrap" du Pod openxpki journalise l'émission de la
-hiérarchie de CA de test :
+Le conteneur "ca" journalise la cérémonie de clé et chaque émission ; le
+conteneur "ra-autoapprove", chaque décision d'approbation :
 
-  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "open-eidas.fullname" . }}-openxpki -c bootstrap -f
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "open-eidas.fullname" . }}-ca -c ca -f
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "open-eidas.fullname" . }}-ca -c ra-autoapprove -f
 
 Une fois {{ include "open-eidas.fullname" . }}-tsa prêt (Ready), exposez le
 service et vérifiez l'horodatage :
@@ -26,11 +27,16 @@ service et vérifiez l'horodatage :
 L'ingress expose également le service sur : http://{{ .Values.tsa.ingress.host }}
 {{- end }}
 
-Relire le journal d'audit :
+Relire les journaux d'audit (chaînés par hachage, l'un et l'autre) :
 
   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "open-eidas.fullname" . }}-tsa -- tsa-server verify-audit
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "open-eidas.fullname" . }}-ca -c ca -- ca-server verify-audit
+
+Consulter la matrice de conformité ETSI telle que cette instance l'applique :
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "open-eidas.fullname" . }}-ca -c ca -- ca-server conformance
 
 AVERTISSEMENT : comme le docker-compose de démonstration, ce déploiement
-utilise une hiérarchie de CA jetable, un enrôlement authentifié par secret partagé et auto-approuvé et
-SoftHSM en lieu d'un HSM certifié. Voir docs/ARCHITECTURE.md pour la liste
-complète des écarts au référentiel eIDAS.
+utilise une cérémonie de clé sans double contrôle, une approbation RA
+automatisée sous un compte technique{{ if not .Values.ca.autoApprove.enabled }} (désactivée sur ce déploiement){{ end }} et SoftHSM en lieu d'un HSM
+certifié. Voir docs/CONFORMITE-ETSI.md pour l'état exigence par exigence.

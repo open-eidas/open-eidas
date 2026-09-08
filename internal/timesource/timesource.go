@@ -21,7 +21,7 @@ import (
 
 	"github.com/beevik/ntp"
 
-	"github.com/open-eidas/tsa/internal/audit"
+	"github.com/open-eidas/open-eidas/internal/audit"
 )
 
 // Policy décrit la conduite à tenir lorsque l'heure n'est plus vérifiable.

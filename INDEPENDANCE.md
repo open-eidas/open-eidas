@@ -1,18 +1,19 @@
 # Indépendance vis-à-vis d'OpenXPKI
 
-Document d'arbitrage : décision de principe et plan envisagé pour
-remplacer OpenXPKI par un moteur de CA/RA maison en Go. **Non engagé à
-la date de rédaction** — la conception détaillée et l'implémentation
-sont volontairement reportées à une session dédiée.
+Document d'arbitrage, puis **compte rendu de réalisation** : la décision de
+remplacer OpenXPKI par un moteur de CA/RA maison en Go a été prise, puis
+exécutée. Ce document conserve l'argumentaire d'origine — un arbitrage se juge
+sur ce qui l'a motivé, pas seulement sur son résultat — et rend compte de ce
+qui a été livré et de ce qui reste ouvert.
 
-## Contexte
+## Contexte (à la date de l'arbitrage)
 
-Le MVP utilise OpenXPKI Community comme moteur de CA (hiérarchie de test,
-profils de certificat, workflow d'enrôlement) derrière la TSA et le
-répondeur OCSP, tous deux entièrement custom (Go). Au fil de deux
-sous-tâches de cette session — l'ajout du répondeur OCSP et l'activation
-réelle de l'approbation RA — plusieurs comportements internes non
-documentés d'OpenXPKI ont dû être découverts par rétro-ingénierie :
+Le MVP utilisait OpenXPKI Community comme moteur de CA (hiérarchie de test,
+profils de certificat, workflow d'enrôlement) derrière la TSA et le répondeur
+OCSP, tous deux entièrement custom (Go). Au fil de deux sous-tâches — l'ajout
+du répondeur OCSP et l'activation réelle de l'approbation RA — plusieurs
+comportements internes non documentés d'OpenXPKI ont dû être découverts par
+rétro-ingénierie :
 
 - un profil de certificat mal formé (`crl_distribution_points.uri` scalaire
   au lieu d'une liste, format de durée relative invalide) échoue
@@ -33,7 +34,7 @@ Ce type d'opacité est précisément ce qu'un audit eIDAS (ETSI EN 319 401 /
 421 / 422, évaluation par un organisme accrédité type LSTI ou Apave) va
 chercher à mettre en défaut, puisqu'il touche à des contrôles documentés
 (validité du profil de certificat émis, effectivité réelle de
-l'approbation RA). Voir aussi `docs/ARCHITECTURE.md` §8.
+l'approbation RA).
 
 ## Argument central retenu
 
@@ -60,60 +61,69 @@ Ce que ça ne supprime pas :
 - la cérémonie de clé de la CA racine/émettrice, les contrôles
   organisationnels, le CP/CPS — identiques quel que soit le moteur choisi.
 
-## Périmètre à reprendre
+## Ce qui a été livré
 
-Ce qu'OpenXPKI rend concrètement à ce projet, et son équivalent envisagé :
-
-| Fonction | OpenXPKI aujourd'hui | Équivalent maison envisagé |
+| Fonction | OpenXPKI auparavant | Réalisation |
 |---|---|---|
-| Émission depuis une CSR | Profil YAML + moteur NICE (Perl) | `x509.CreateCertificate` (stdlib), profil = struct Go testable unitairement |
-| Génération de CRL | `crl_issuance` workflow + connecteur `cdp` | `x509.CreateRevocationList` (stdlib) — symétrique du code déjà écrit côté `internal/ocspresponder` pour le *parsing* |
-| Stockage de la clé de CA | Datavault chiffré en base (MariaDB) | PKCS#11 (`internal/hsm`), même paradigme que TSU et OCSP — un seul mécanisme de gestion de clé au lieu de deux |
-| Enrôlement + approbation RA | Workflow générique `certificate_enroll` (état PENDING, `approval_points`, éligibilité) | Petite machine à états dédiée (HMAC → PENDING → approuvé → émis), un seul workflow au lieu d'un moteur générique |
-| Publication du certificat de CA | Connecteur `cacert-der`/`cacert-pem` (déclenché par le workflow normal, contourné par la hiérarchie jetable — voir `docs/ARCHITECTURE.md`) | Fichier statique servi par un petit handler HTTP |
-| Répondeur OCSP | — | **Déjà fait** (`cmd/ocsp-responder`), aucune dépendance OpenXPKI ici |
-| Interface opérateur RA | WebUI OpenXPKI | CLI d'abord (cohérent avec `tsa-server enroll`/`verify-audit`), UI web si besoin plus tard |
+| Émission depuis une CSR | Profil YAML + moteur NICE (Perl) | `internal/ca` — `x509.CreateCertificate`, profils en structures Go testables unitairement |
+| Génération de CRL | Workflow `crl_issuance` + connecteur `cdp` | `internal/ca` — `x509.CreateRevocationList`, `CRLNumber` monotone servi par la base |
+| Stockage des clés de CA | Datavault chiffré en base (MariaDB) | PKCS#11 (`internal/hsm`), un token par autorité — un seul mécanisme de gestion de clé pour toute la pile |
+| Enrôlement + approbation RA | Workflow générique `certificate_enroll` | `internal/raflow` — une machine à états dédiée (HMAC → PENDING → APPROVED → ISSUED), sans aucun chemin d'auto-approbation |
+| Publication du certificat de CA et de la CRL | Connecteurs `cacert-der`/`cacert-pem`, contournés par la hiérarchie jetable | Servies par `cmd/ca-server` aux mêmes chemins `/download/<CN>.cer` et `.crl` |
+| Répondeur OCSP | — | Déjà fait avant ce chantier (`cmd/ocsp-responder`) |
+| Interface opérateur RA | WebUI OpenXPKI | CLI `ca-server ra list|approve|reject`, cohérente avec `tsa-server enroll`/`verify-audit` |
+| Registre (certificats, demandes, CRL) | MariaDB, schéma OpenXPKI | PostgreSQL, schéma écrit et commenté par ce dépôt (`internal/castore`) |
+
+**Au-delà du périmètre initialement envisagé**, le chantier a produit
+`internal/conformance` : les exigences ETSI applicables rendues exécutables,
+définies une seule fois et utilisées à trois endroits qui ne peuvent pas
+diverger — les tests unitaires, les gardes d'exécution (le certificat produit
+est relu depuis son DER et re-contrôlé avant d'être délivré), et la matrice
+publiée dans [`docs/CONFORMITE-ETSI.md`](docs/CONFORMITE-ETSI.md), générée
+depuis le code et vérifiée en CI.
 
 Conséquence pour le packaging : le Pod OpenXPKI à 4 conteneurs
-(`server`/`client`/`web`/`bootstrap`) et ses contournements de permissions
-Kubernetes (`fsGroup`, vhost Apache recopié, groupe forcé des workers
-Apache — voir `deploy/helm/open-eidas/README.md`) disparaîtraient
-entièrement du chart Helm, de même que la dépendance Perl/MariaDB-comme-
-base-de-CA.
+(`server`/`client`/`web`/`bootstrap`), ses contournements de permissions
+Kubernetes (`fsGroup`, vhost Apache recopié, groupe forcé des workers Apache)
+et la dépendance Perl/MariaDB ont disparu du chart Helm comme du
+docker-compose. La pile ne contient plus que du Go et PostgreSQL.
 
-## Risques du chantier
+## Risques du chantier, et où ils en sont
 
-- **Correction cryptographique d'une CA** : unicité et aléa des numéros de
-  série, encodage correct des extensions, absence de collision de sujet —
-  des exigences que des années d'usage ont déjà éprouvées côté OpenXPKI
-  et qu'il faudra revalider soi-même avec la même rigueur (tests,
-  vérification croisée avec des outils tiers comme `openssl`/`certutil`,
-  a minima).
-- **Aucun antécédent d'audit externe** pour ce code précis — déjà vrai
-  pour la TSA elle-même (évaluée selon ETSI EN 319 421), donc pas une
-  nouvelle catégorie de charge pour le projet, mais un axe d'attention
-  supplémentaire pour l'auditeur.
+- **Correction cryptographique d'une CA** — unicité et aléa des numéros de
+  série, encodage correct des extensions, absence de collision de sujet.
+  Traité par : numéros de série de 128 bits sur `crypto/rand` dont l'unicité
+  est portée par la clé primaire du registre ; relecture systématique du DER
+  produit avant délivrance ; et **vérification croisée avec `openssl`**
+  (`verify`, `crl -verify`, `ts -verify`, `ocsp`) dans `scripts/demo.sh` et en
+  CI — un moteur maison ne se valide pas avec ses seuls outils. Le risque
+  résiduel n'est pas nul : il justifie l'audit externe ci-dessous.
+- **Aucun antécédent d'audit externe** pour ce code précis — inchangé, et
+  déjà vrai pour la TSA elle-même. La matrice de conformité est conçue comme
+  le point d'entrée d'un tel audit.
 
-## Effort estimé (ordre de grandeur)
+## Ce qui reste ouvert
 
-- `internal/ca` (émission, profil, numérotation de série) : 1 à 2 semaines
-- Machine à états d'enrôlement/approbation + endpoint RPC/HTTP : ~1 semaine
-- Service de génération de CRL : 2 à 3 jours (mirroir du travail OCSP)
-- Interface CLI d'approbation RA : 2 à 3 jours
-- Outillage de cérémonie de clé racine/émettrice + procédure documentée : 3 à 5 jours
-- Migration du docker-compose et du chart Helm (suppression des 4 conteneurs OpenXPKI) : quelques jours
-- Vérification de bout en bout avec la même rigueur que le reste de ce dépôt (docker-compose + kind, CI)
+Les écarts subsistants sont ceux que le remplacement du moteur ne pouvait pas
+lever, et qui figurent comme tels dans la matrice :
 
-Total approximatif : 4 à 6 semaines de travail concentré — du même ordre
-que le temps déjà investi cette session à percer les internals
-d'OpenXPKI, mais qui élimine la classe de problème plutôt que de la
-documenter comme écart permanent.
+- **SoftHSM2** en lieu d'un HSM certifié (le code applicatif est déjà
+  compatible : seul `OPENEIDAS_PKCS11_MODULE` change) ;
+- **cérémonie de clé** sans double contrôle ni témoin indépendant ;
+- **approbation RA automatisée** sous un compte technique en démonstration et
+  en CI — le point d'approbation est réellement actif, mais la décision n'est
+  pas encore prise par un opérateur humain nominatif ;
+- **CP/CPS** non publiés, OID de politique encore de test ;
+- **audit par un organisme accrédité** non engagé ;
+- **continuité** : instance unique, sauvegarde et restauration non encore
+  testées de bout en bout.
 
-## Prochaine étape
+Procédures et cibles correspondantes : [`docs/CA.md`](docs/CA.md).
 
-Session dédiée pour :
-1. Concevoir en détail `internal/ca` (structures, API, choix de
-   persistance pour l'état du workflow d'enrôlement).
-2. Valider ce plan avant tout code (mode Plan).
-3. Implémenter, tester (docker-compose + kind, comme pour la TSA et
-   l'OCSP), migrer le packaging, documenter.
+## Suite
+
+1. Sauvegarde et restauration du registre et des tokens, testées.
+2. Cérémonie de clé rejouée sur HSM certifié, sous double contrôle.
+3. Substitution d'un opérateur RA nominatif à l'approbation automatisée.
+4. Rédaction du CP/CPS et obtention d'un arc OID propre.
+5. Audit externe, en s'appuyant sur `docs/CONFORMITE-ETSI.md`.

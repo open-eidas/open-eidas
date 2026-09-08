@@ -1,6 +1,5 @@
 {{- $fullname := include "open-eidas.fullname" . -}}
 {{- $name := printf "%s-tsa" $fullname -}}
-{{- $openxpkiHost := printf "%s-openxpki" $fullname -}}
 {{- $auditReplicaHost := printf "%s-audit-replica" $fullname -}}
 {{- $generatedSecret := include "open-eidas.generatedSecretName" . -}}
 apiVersion: v1
@@ -104,34 +103,25 @@ spec:
             - name: OPENEIDAS_CHAIN_FILE
               value: /var/lib/open-eidas/state/chain.pem
             - name: OPENEIDAS_ENROLL_ENDPOINT
-              value: {{ printf "https://%s/rpc/tsa/RequestCertificate" $openxpkiHost | quote }}
+              value: {{ printf "%s/api/v1/enroll" (include "open-eidas.caInternalURL" .) | quote }}
+            - name: OPENEIDAS_ENROLL_PROFILE
+              value: tsa_signer
             - name: OPENEIDAS_ENROLL_HMAC_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ $generatedSecret }}
                   key: enroll-hmac-key
-            # Comme en docker-compose, le certificat TLS auto-signé
-            # d'OpenXPKI n'est pas vérifiable : acceptable pour cette
-            # démonstration, à remplacer par OPENEIDAS_ENROLL_CA_FILE en
-            # production (voir values.tsa.enrollCAConfigMap dans le README
-            # du chart pour brancher une ancre de confiance explicite).
-            - name: OPENEIDAS_ENROLL_INSECURE
-              value: "true"
+            # Seul le nom courant est demandé : unité, organisation et pays
+            # sont imposés par le profil côté autorité.
             - name: OPENEIDAS_SUBJECT_CN
               value: {{ .Values.tsa.subject.commonName | quote }}
-            - name: OPENEIDAS_SUBJECT_OU
-              value: {{ .Values.tsa.subject.organizationalUnit | quote }}
-            - name: OPENEIDAS_SUBJECT_O
-              value: {{ .Values.tsa.subject.organization | quote }}
-            - name: OPENEIDAS_SUBJECT_C
-              value: {{ .Values.tsa.subject.country | quote }}
           volumeMounts:
             - name: softhsm
               mountPath: /var/lib/softhsm/tokens
             - name: state
               mountPath: /var/lib/open-eidas/state
-          # Le serveur HTTP ne démarre qu'une fois l'enrôlement RPC auprès
-          # d'OpenXPKI réussi (jusqu'à 60 tentatives à 10 s d'intervalle,
+          # Le serveur HTTP ne démarre qu'une fois l'enrôlement auprès de la
+          # CA réussi (jusqu'à 60 tentatives à 10 s d'intervalle,
           # voir deploy/tsa/entrypoint.sh) : sans startupProbe, la
           # livenessProbe tuerait le conteneur avant même que /healthz
           # existe, pendant cette attente pourtant normale.

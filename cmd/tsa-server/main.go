@@ -5,7 +5,8 @@
 //	enroll  obtient (ou renouvelle) le certificat de l'unité d'horodatage
 //	        auprès d'OpenXPKI, la clé privée restant dans le HSM ;
 //	serve   expose l'autorité d'horodatage en HTTP ;
-//	verify-audit  relit le journal d'audit et contrôle sa chaîne de hachage.
+//	verify-audit  relit le journal d'audit et contrôle sa chaîne de hachage ;
+//	conformance   produit la matrice de conformité ETSI du système.
 package main
 
 import (
@@ -25,17 +26,18 @@ import (
 	"time"
 
 	"github.com/digitorus/timestamp"
-	"github.com/open-eidas/tsa/internal/audit"
-	"github.com/open-eidas/tsa/internal/certs"
-	"github.com/open-eidas/tsa/internal/config"
-	"github.com/open-eidas/tsa/internal/crosstsa"
-	"github.com/open-eidas/tsa/internal/enroll"
-	"github.com/open-eidas/tsa/internal/hsm"
-	"github.com/open-eidas/tsa/internal/httpapi"
-	"github.com/open-eidas/tsa/internal/replicate"
+	"github.com/open-eidas/open-eidas/internal/audit"
+	"github.com/open-eidas/open-eidas/internal/certs"
+	"github.com/open-eidas/open-eidas/internal/config"
+	"github.com/open-eidas/open-eidas/internal/conformance"
+	"github.com/open-eidas/open-eidas/internal/crosstsa"
+	"github.com/open-eidas/open-eidas/internal/enroll"
+	"github.com/open-eidas/open-eidas/internal/hsm"
+	"github.com/open-eidas/open-eidas/internal/httpapi"
+	"github.com/open-eidas/open-eidas/internal/replicate"
 
-	"github.com/open-eidas/tsa/internal/timesource"
-	"github.com/open-eidas/tsa/internal/tsa"
+	"github.com/open-eidas/open-eidas/internal/timesource"
+	"github.com/open-eidas/open-eidas/internal/tsa"
 )
 
 var version = "dev"
@@ -45,7 +47,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: tsa-server <serve|enroll|verify-audit|version>")
+		fmt.Fprintln(os.Stderr, "usage: tsa-server <serve|enroll|verify-audit|conformance|version>")
 		os.Exit(2)
 	}
 
@@ -57,6 +59,11 @@ func main() {
 		err = runEnroll(logger)
 	case "verify-audit":
 		err = runVerifyAudit()
+	case "conformance":
+		// La même matrice que ca-server : elle décrit le système entier, pas
+		// ce seul binaire, et doit donc être consultable depuis n'importe
+		// lequel des trois services.
+		err = conformance.WriteReport(os.Stdout, os.Stderr, version, hasFlag(os.Args[2:], "--markdown"))
 	case "version":
 		fmt.Println(version)
 	default:
@@ -241,6 +248,7 @@ func runEnroll(logger *slog.Logger) error {
 
 	client, err := enroll.NewClient(enroll.Options{
 		Endpoint:   cfg.EnrollEndpoint,
+		Profile:    cfg.EnrollProfile,
 		CAFile:     cfg.EnrollCAFile,
 		Insecure:   cfg.EnrollInsecure,
 		Timeout:    cfg.EnrollTimeout,
@@ -255,12 +263,7 @@ func runEnroll(logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.EnrollTimeout)
 	defer cancel()
 
-	result, err := client.Request(ctx, signer, enroll.Subject{
-		CommonName:         cfg.SubjectCN,
-		OrganizationalUnit: cfg.SubjectOU,
-		Organization:       cfg.SubjectO,
-		Country:            cfg.SubjectC,
-	})
+	result, err := client.Request(ctx, signer, enroll.Subject{CommonName: cfg.SubjectCN})
 	if err != nil {
 		return err
 	}
@@ -335,7 +338,11 @@ func startSealing(ctx context.Context, journal *audit.Log, authority *tsa.Author
 		return
 	}
 	seal := func() {
-		seq, head := journal.Head()
+		seq, head, err := journal.Head()
+		if err != nil {
+			logger.Error("lecture de la tête de chaîne impossible", "err", err)
+			return
+		}
 		digest, err := hex.DecodeString(head)
 		if err != nil || len(digest) != sha256.Size {
 			logger.Error("tête de chaîne inexploitable pour le scellement", "tete", head)
@@ -443,4 +450,14 @@ func runVerifyAudit() error {
 	fmt.Printf("tête de chaîne : %s\n", report.Head)
 	fmt.Println("chaîne de hachage continue et intègre")
 	return nil
+}
+
+// hasFlag cherche un drapeau parmi les arguments restants.
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
 }

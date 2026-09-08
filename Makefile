@@ -23,8 +23,18 @@ lint: ## Vérifie le formatage et lance go vet
 	$(GO_RUN) sh -c 'test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }'
 	$(GO_RUN) go vet ./...
 
-audit: ## Vérifie la chaîne de hachage du journal d'audit
+audit: ## Vérifie la chaîne de hachage des journaux d'audit (TSA et CA)
 	docker compose exec tsa tsa-server verify-audit
+	docker compose exec ca ca-server verify-audit
+
+conformance: ## Produit la matrice de conformité ETSI (échec sur écart bloquant)
+	$(GO_RUN) go run ./cmd/ca-server conformance
+
+conformance-doc: ## Régénère docs/CONFORMITE-ETSI.md depuis internal/conformance
+	$(GO_RUN) go run ./cmd/ca-server conformance --markdown > docs/CONFORMITE-ETSI.md
+
+ra: ## Liste les demandes d'enrôlement en attente de décision
+	docker compose exec ca ca-server ra list PENDING
 
 helm-lint: ## Vérifie le chart Helm (lint + rendu complet)
 	helm lint deploy/helm/open-eidas
@@ -36,8 +46,7 @@ logs: ## Suit les journaux de la TSA
 down: ## Arrête la pile en conservant les volumes
 	docker compose down
 
-purge: ## Arrête la pile et supprime les volumes (PKI et token HSM inclus)
+purge: ## Arrête la pile et supprime les volumes (registre de CA et tokens HSM inclus)
 	docker compose down -v
-	rm -f deploy/openxpki/.sampleconfig-done
 
-.PHONY: help up demo test lint audit helm-lint logs down purge
+.PHONY: help up demo test lint audit conformance conformance-doc ra helm-lint logs down purge

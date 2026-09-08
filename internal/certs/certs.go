@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 )
 
 // LoadFile lit un fichier PEM et retourne tous les certificats qu'il contient.
@@ -67,4 +68,19 @@ func WriteFile(path string, certs []*x509.Certificate) error {
 		}
 	}
 	return f.Close()
+}
+
+// safeFileName remplace tout caractère hors [A-Za-z0-9_-] par un souligné.
+var safeFileName = regexp.MustCompile(`[^\w-]`)
+
+// FileName dérive d'un nom courant (CN) le nom de fichier sous lequel la CA
+// publie son certificat et sa CRL, par exemple
+// « Open eIDAS Issuing CA » → « Open_eIDAS_Issuing_CA ».
+//
+// Cette dérivation est celle qu'emploient à la fois l'émetteur (qui grave
+// l'URL dans les extensions CDP/AIA), le serveur qui publie les fichiers, et
+// le répondeur OCSP qui va chercher la CRL : elle doit rester définie à un
+// seul endroit, faute de quoi les trois divergent silencieusement.
+func FileName(commonName string) string {
+	return safeFileName.ReplaceAllString(commonName, "_")
 }

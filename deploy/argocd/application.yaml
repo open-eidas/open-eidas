@@ -37,11 +37,11 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
-    # Le Secret des valeurs générées (mots de passe, PIN SoftHSM, clé du
-    # coffre de données) est produit par le chart via le motif `lookup` :
-    # ArgoCD doit tolérer sa dérive apparente d'un diff à l'autre plutôt que
-    # de le recréer, sous peine de rendre les données déjà écrites
-    # (base MariaDB, token SoftHSM) inaccessibles.
+    # Le Secret des valeurs générées (mot de passe PostgreSQL, PIN des tokens
+    # SoftHSM, secret HMAC d'enrôlement) est produit par le chart via le motif
+    # `lookup` : ArgoCD doit tolérer sa dérive apparente d'un diff à l'autre
+    # plutôt que de le recréer, sous peine de rendre inaccessibles les données
+    # déjà écrites — et, pour les tokens de la CA, la hiérarchie entière.
     retry:
       limit: 5
       backoff:

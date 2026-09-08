@@ -1,6 +1,5 @@
 {{- $fullname := include "open-eidas.fullname" . -}}
 {{- $name := printf "%s-ocsp" $fullname -}}
-{{- $openxpkiHost := printf "%s-openxpki" $fullname -}}
 {{- $generatedSecret := include "open-eidas.generatedSecretName" . -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -75,34 +74,31 @@ spec:
               value: /var/lib/open-eidas/state/ocsp.pem
             - name: OPENEIDAS_CHAIN_FILE
               value: /var/lib/open-eidas/state/chain.pem
+            - name: OPENEIDAS_SUBJECT_CN
+              value: {{ .Values.ocsp.subject.commonName | quote }}
             - name: OPENEIDAS_ENROLL_ENDPOINT
-              value: {{ printf "https://%s/rpc/ocsp/RequestCertificate" $openxpkiHost | quote }}
+              value: {{ printf "%s/api/v1/enroll" (include "open-eidas.caInternalURL" .) | quote }}
+            - name: OPENEIDAS_ENROLL_PROFILE
+              value: ocsp_responder
             - name: OPENEIDAS_ENROLL_HMAC_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ $generatedSecret }}
                   key: enroll-hmac-key
-            # Comme pour la TSA : certificat TLS auto-signé d'OpenXPKI non
-            # vérifiable en interne au cluster, acceptable pour cette
-            # démonstration.
-            - name: OPENEIDAS_ENROLL_INSECURE
-              value: "true"
-            # Adresse à laquelle CE SERVICE joint la PKI pour interroger sa
+            # Adresse à laquelle CE SERVICE joint la CA pour interroger sa
             # CRL — interne au cluster, à ne pas confondre avec
             # open-eidas.pkiPublicURL (adresse externe gravée dans les
             # certificats).
             - name: OPENEIDAS_PKI_INTERNAL_URL
-              value: {{ printf "https://%s" $openxpkiHost | quote }}
-            - name: OPENEIDAS_PKI_INSECURE
-              value: "true"
+              value: {{ include "open-eidas.caInternalURL" . | quote }}
           volumeMounts:
             - name: softhsm
               mountPath: /var/lib/softhsm/tokens
             - name: state
               mountPath: /var/lib/open-eidas/state
-          # Comme pour la TSA : l'enrôlement RPC initial peut prendre
-          # plusieurs minutes (voir tsa-deployment.yaml) avant que
-          # /healthz existe.
+          # Comme pour la TSA : la demande d'enrôlement attend l'approbation
+          # d'un opérateur RA, ce qui peut prendre un temps arbitraire (voir
+          # tsa-deployment.yaml) avant que /healthz existe.
           startupProbe:
             httpGet:
               path: /healthz

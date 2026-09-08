@@ -31,22 +31,20 @@ type Config struct {
 	EnrollInsecure bool
 	EnrollTimeout  time.Duration
 	EnrollHMACKey  string
-	SubjectCN      string
-	SubjectOU      string
-	SubjectO       string
-	SubjectC       string
-	RenewBefore    time.Duration
+	// EnrollProfile nomme le profil demandé à la CA. Seul le CN est choisi
+	// par le demandeur ; le reste du sujet est imposé par le profil.
+	EnrollProfile string
+	SubjectCN     string
+	RenewBefore   time.Duration
 
 	// PKIInternalURL sert à dériver l'URL de la CRL de la CA émettrice à
 	// interroger (voir ocspresponder.CRLURL). C'est l'adresse à laquelle CE
-	// SERVICE joint OpenXPKI — typiquement interne au réseau du conteneur/
-	// cluster — et non l'adresse publique gravée dans les certificats
-	// (celle-ci est substituée côté serveur OpenXPKI, sans rapport avec ce
-	// binaire).
+	// SERVICE joint l'autorité — typiquement interne au réseau du conteneur ou
+	// du cluster — et non l'adresse publique gravée dans les certificats
+	// (OPENEIDAS_PKI_PUBLIC_URL, côté ca-server).
 	PKIInternalURL string
-	// PKIInsecure tolère le certificat TLS auto-signé d'OpenXPKI en
-	// démonstration locale, comme OPENEIDAS_ENROLL_INSECURE pour
-	// l'enrôlement.
+	// PKIInsecure tolère un certificat TLS non vérifiable en démonstration
+	// locale, comme OPENEIDAS_ENROLL_INSECURE pour l'enrôlement.
 	PKIInsecure bool
 	PKICAFile   string
 	CRLRefresh  time.Duration
@@ -65,10 +63,8 @@ func loadConfig() (*Config, error) {
 		EnrollEndpoint:  env("OPENEIDAS_ENROLL_ENDPOINT", ""),
 		EnrollCAFile:    env("OPENEIDAS_ENROLL_CA_FILE", ""),
 		EnrollHMACKey:   os.Getenv("OPENEIDAS_ENROLL_HMAC_KEY"),
+		EnrollProfile:   env("OPENEIDAS_ENROLL_PROFILE", "ocsp_responder"),
 		SubjectCN:       env("OPENEIDAS_SUBJECT_CN", "Open eIDAS OCSP Responder 1"),
-		SubjectOU:       env("OPENEIDAS_SUBJECT_OU", "OCSP Responder"),
-		SubjectO:        env("OPENEIDAS_SUBJECT_O", "Open eIDAS"),
-		SubjectC:        env("OPENEIDAS_SUBJECT_C", "FR"),
 		PKIInternalURL:  env("OPENEIDAS_PKI_INTERNAL_URL", ""),
 		PKICAFile:       env("OPENEIDAS_PKI_CA_FILE", ""),
 	}

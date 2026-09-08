@@ -1,14 +1,14 @@
 // Command ocsp-responder répond aux requêtes OCSP (RFC 6960) pour la CA
-// émettrice de la TSU. OpenXPKI Community n'embarque aucun répondeur OCSP ;
-// ce service comble cet écart en s'appuyant sur la CRL déjà publiée par la
-// PKI plutôt que sur un accès direct à sa base — voir docs/ARCHITECTURE.md
-// et internal/ocspresponder.
+// émettrice de la TSU, en s'appuyant sur la CRL publiée par l'autorité
+// (cmd/ca-server) plutôt que sur un accès direct à son registre — voir
+// docs/ARCHITECTURE.md et internal/ocspresponder.
 //
-// Deux sous-commandes, sur le même modèle que tsa-server :
+// Sous-commandes, sur le même modèle que tsa-server :
 //
-//	enroll  obtient (ou renouvelle) le certificat de signature OCSP auprès
-//	        d'OpenXPKI, la clé privée restant dans le HSM ;
-//	serve   expose le répondeur en HTTP.
+//	enroll       obtient (ou renouvelle) le certificat de signature OCSP
+//	             auprès de la CA, la clé privée restant dans le HSM ;
+//	serve        expose le répondeur en HTTP ;
+//	conformance  produit la matrice de conformité ETSI du système.
 package main
 
 import (
@@ -25,10 +25,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/open-eidas/tsa/internal/certs"
-	"github.com/open-eidas/tsa/internal/enroll"
-	"github.com/open-eidas/tsa/internal/hsm"
-	"github.com/open-eidas/tsa/internal/ocspresponder"
+	"github.com/open-eidas/open-eidas/internal/certs"
+	"github.com/open-eidas/open-eidas/internal/conformance"
+	"github.com/open-eidas/open-eidas/internal/enroll"
+	"github.com/open-eidas/open-eidas/internal/hsm"
+	"github.com/open-eidas/open-eidas/internal/ocspresponder"
 )
 
 var version = "dev"
@@ -38,7 +39,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: ocsp-responder <serve|enroll|version>")
+		fmt.Fprintln(os.Stderr, "usage: ocsp-responder <serve|enroll|conformance|version>")
 		os.Exit(2)
 	}
 
@@ -48,6 +49,11 @@ func main() {
 		err = runServe(logger)
 	case "enroll":
 		err = runEnroll(logger)
+	case "conformance":
+		// La même matrice que ca-server : elle décrit le système entier, pas
+		// ce seul binaire, et doit donc être consultable depuis n'importe
+		// lequel des trois services.
+		err = conformance.WriteReport(os.Stdout, os.Stderr, version, hasFlag(os.Args[2:], "--markdown"))
 	case "version":
 		fmt.Println(version)
 	default:
@@ -187,6 +193,7 @@ func runEnroll(logger *slog.Logger) error {
 
 	client, err := enroll.NewClient(enroll.Options{
 		Endpoint:   cfg.EnrollEndpoint,
+		Profile:    cfg.EnrollProfile,
 		CAFile:     cfg.EnrollCAFile,
 		Insecure:   cfg.EnrollInsecure,
 		Timeout:    cfg.EnrollTimeout,
@@ -201,12 +208,7 @@ func runEnroll(logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.EnrollTimeout)
 	defer cancel()
 
-	result, err := client.Request(ctx, signer, enroll.Subject{
-		CommonName:         cfg.SubjectCN,
-		OrganizationalUnit: cfg.SubjectOU,
-		Organization:       cfg.SubjectO,
-		Country:            cfg.SubjectC,
-	})
+	result, err := client.Request(ctx, signer, enroll.Subject{CommonName: cfg.SubjectCN})
 	if err != nil {
 		return err
 	}
@@ -284,4 +286,14 @@ func currentCertUsable(cfg *Config, signer crypto.Signer) (bool, string) {
 		return false, fmt.Sprintf("certificat expirant dans %s", remaining.Round(time.Hour))
 	}
 	return true, "valide jusqu'au " + cert.NotAfter.UTC().Format(time.RFC3339)
+}
+
+// hasFlag cherche un drapeau parmi les arguments restants.
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
 }

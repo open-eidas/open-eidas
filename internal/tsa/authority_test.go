@@ -10,6 +10,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,22 +19,68 @@ import (
 
 var testPolicy = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1, 1, 1}
 
-func newTestAuthority(t *testing.T) *Authority {
+// testKey est générée une seule fois pour tout le paquet : RSA-3072 est le
+// minimum admis par ETSI TS 119 312, et son coût de génération n'a pas à être
+// payé à chaque test.
+var (
+	testKeyOnce sync.Once
+	testKeyRSA  *rsa.PrivateKey
+)
+
+func sharedKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	testKeyOnce.Do(func() {
+		key, err := rsa.GenerateKey(rand.Reader, 3072)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testKeyRSA = key
+	})
+	return testKeyRSA
+}
+
+// testCertificate produit un certificat TSU réellement conforme au profil
+// ETSI EN 319 421 §7.7.2 : c'est ce que la CA du projet émet, et c'est donc
+// sur ce matériel que la TSA doit être exercée.
+func testCertificate(t *testing.T, key *rsa.PrivateKey, eku ...asn1.ObjectIdentifier) *x509.Certificate {
+	t.Helper()
+	if len(eku) == 0 {
+		eku = []asn1.ObjectIdentifier{{1, 3, 6, 1, 5, 5, 7, 3, 8}} // id-kp-timeStamping
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial.SetBit(serial, 127, 1)
+
+	spki, err := x509.MarshalPKIXPublicKey(key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(spki)
+
+	ekuValue, err := asn1.Marshal(eku)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "Test TSU"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageContentCommitment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
 		BasicConstraintsValid: true,
+		SubjectKeyId:          sum[:20],
+		AuthorityKeyId:        sum[:20],
+		// extendedKeyUsage doit être marqué critique : crypto/x509 ne le
+		// permet pas via le champ ExtKeyUsage, d'où l'extension explicite.
+		ExtraExtensions: []pkix.Extension{{
+			Id:       asn1.ObjectIdentifier{2, 5, 29, 37},
+			Critical: true,
+			Value:    ekuValue,
+		}},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +88,13 @@ func newTestAuthority(t *testing.T) *Authority {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return cert
+}
+
+func newTestAuthority(t *testing.T) *Authority {
+	t.Helper()
+	key := sharedKey(t)
+	cert := testCertificate(t, key)
 	authority, _, err := New(Options{
 		Signer:        key,
 		Certificate:   cert,
@@ -136,26 +190,13 @@ func TestTimestampRejectsForeignPolicy(t *testing.T) {
 	}
 }
 
+// Le certificat de test est par ailleurs entièrement conforme : seul l'usage
+// étendu diffère, de sorte que le refus prouve bien la règle visée et non un
+// autre écart au passage.
 func TestNewRejectsCertificateWithoutTimeStampingEKU(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "Not a TSU"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
+	key := sharedKey(t)
+	serverAuth := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1}
+	cert := testCertificate(t, key, serverAuth)
 
 	if _, _, err := New(Options{
 		Signer:        key,

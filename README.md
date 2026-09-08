@@ -53,9 +53,15 @@ Ce dépôt héberge le prototype **fonctionnel et vérifiable** du premier servi
 
 - un service d'horodatage **RFC 3161** écrit en Go, dont la clé de signature
   ne quitte jamais un module cryptographique (**PKCS#11**) ;
-- une **PKI OpenXPKI** complète — racine, CA émettrice, profil de certificat
-  contraint à `id-kp-timeStamping` — qui délivre le certificat de l'unité
-  d'horodatage par enrôlement automatisé ;
+- une **autorité de certification écrite en propre** — racine, CA émettrice,
+  profils compilés et testés, approbation RA effective, publication de la CRL
+  et réponses OCSP — qui délivre le certificat de l'unité d'horodatage par
+  enrôlement automatisé ;
+- une **matrice de conformité ETSI** générée depuis le code
+  ([docs/CONFORMITE-ETSI.md](docs/CONFORMITE-ETSI.md)) : chaque exigence
+  applicable est portée par un mécanisme identifié et un test exécutable, ou
+  déclarée comme écart avec sa cible — la CI échoue si une ligne perd l'un
+  des deux ;
 - un **HSM logiciel SoftHSM2** parlant le protocole d'un HSM certifié, pour que
   le passage en production soit un changement de configuration, pas de code ;
 - une **heure traçable jusqu'à UTC** : le service recoupe deux serveurs de
@@ -69,7 +75,9 @@ Ce dépôt héberge le prototype **fonctionnel et vérifiable** du premier servi
 Ce n'est pas encore une TSA qualifiée : les écarts avec le référentiel eIDAS
 sont listés explicitement dans
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#8-écarts-assumés-du-prototype-vis-à-vis-dune-tsa-qualifiée)
-— HSM certifié, réplication du journal hors site, redondance, audit d'un
+et, exigence par exigence, dans
+[docs/CONFORMITE-ETSI.md](docs/CONFORMITE-ETSI.md) — HSM certifié, cérémonie
+de clé sous double contrôle, opérateur RA nominatif, redondance, audit d'un
 organisme accrédité. Le chiffrage de ce chemin est connu : **70 à 95 k€** pour
 l'infrastructure et l'audit initial.
 
@@ -81,14 +89,20 @@ Prérequis : Docker avec le plugin Compose, `git`, `openssl`, `curl`.
 git clone https://github.com/open-eidas/open-eidas.git
 cd open-eidas
 
-make up      # amorce la PKI, émet le certificat TSU, démarre la TSA
+make up      # amorce la CA, émet les certificats TSU et OCSP, démarre la pile
 make demo    # horodate un fichier et vérifie le jeton avec openssl ts
 ```
 
-`make up` est idempotent et prend quelques minutes au premier lancement : il
-récupère la configuration OpenXPKI amont, génère une hiérarchie de CA de test,
-crée la bi-clé RSA-3072 dans le token SoftHSM, puis obtient le certificat de
-l'unité d'horodatage via l'endpoint RPC de la PKI.
+`make up` est idempotent et prend quelques minutes au premier lancement :
+l'essentiel du temps est la génération des bi-clés dans les tokens SoftHSM
+(racine et CA émettrice en RSA-4096, TSU et répondeur OCSP en RSA-3072). La
+cérémonie de clé est rejouée à chaque démarrage sans jamais recréer de
+hiérarchie existante.
+
+Chaque demande de certificat attend l'approbation d'un opérateur
+d'enregistrement : `make up` l'accorde automatiquement sous un compte
+technique pour que la démonstration s'amorce seule — écart assumé, tracé comme
+tel au journal d'audit (voir [docs/CA.md](docs/CA.md)).
 
 ### Vérifier un jeton avec les outils standards
 
@@ -140,17 +154,22 @@ Voir [deploy/helm/open-eidas/README.md](deploy/helm/open-eidas/README.md) et
 ## Structure du dépôt
 
 ```
-cmd/tsa-server/      point d'entrée : sous-commandes enroll et serve
-internal/tsa/        cœur RFC 3161 : validation, TSTInfo, CMS SignedData
-internal/hsm/        accès PKCS#11 à la clé de signature
-internal/timesource/ surveillance de la traçabilité de l'heure
-internal/audit/      journal d'audit chaîné par hachage
-internal/crosstsa/   contreseing du journal par des TSA tierces publiques
-internal/enroll/     client RPC d'enrôlement OpenXPKI
-internal/httpapi/    endpoints HTTP (RFC 3161 + façade JSON)
-deploy/tsa/          image du service
-deploy/openxpki/     overlay de configuration de la PKI (profil TSU, RPC)
-scripts/             amorçage et démonstration
+cmd/tsa-server/       point d'entrée de la TSA : enroll, serve, verify-audit
+cmd/ca-server/        autorité de certification : ceremony, serve, ra, revoke
+cmd/ocsp-responder/   répondeur OCSP (RFC 6960)
+internal/tsa/         cœur RFC 3161 : validation, TSTInfo, CMS SignedData
+internal/conformance/ exigences ETSI sous forme exécutable, et la matrice
+internal/ca/          moteur d'émission : profils, cérémonie, CRL
+internal/raflow/      machine à états d'enrôlement et d'approbation RA
+internal/castore/     registre de la CA (PostgreSQL, et mémoire pour les tests)
+internal/hsm/         accès PKCS#11 aux clés de signature
+internal/timesource/  surveillance de la traçabilité de l'heure
+internal/audit/       journal d'audit chaîné par hachage
+internal/crosstsa/    contreseing du journal par des TSA tierces publiques
+internal/enroll/      client d'enrôlement auprès de la CA
+internal/httpapi/     endpoints HTTP (RFC 3161 + façade JSON)
+deploy/               images des trois services, chart Helm
+scripts/              amorçage et démonstration
 ```
 
 ## Modèle & Sûreté

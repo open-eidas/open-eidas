@@ -1,100 +1,68 @@
-# Pile de démonstration Open eIDAS : PKI OpenXPKI + autorité d'horodatage.
+# Pile de démonstration Open eIDAS : autorité de certification, autorité
+# d'horodatage et répondeur OCSP — trois binaires Go, une base PostgreSQL.
 #
-# La configuration d'OpenXPKI est matérialisée par scripts/bootstrap.sh dans
-# deploy/openxpki/openxpki-config (clone du dépôt amont + overlay Open eIDAS).
-x-openxpki: &openxpki
-  image: whiterabbitsecurity/openxpki3:3.34
+# Il n'y a plus de moteur de PKI tiers : le remplacement d'OpenXPKI par
+# cmd/ca-server (voir INDEPENDANCE.md) a fait disparaître quatre conteneurs
+# Perl, MariaDB et les contournements de permissions qui allaient avec.
 
 services:
   db:
     container_name: openeidas_db
-    image: mariadb:11.4
-    command: --default-authentication-plugin=mysql_native_password
-    user: mysql:mysql
+    image: postgres:17-alpine
     environment:
-      MYSQL_DATABASE: openxpki
-      MYSQL_USER: openxpki
-      MYSQL_PASSWORD: openxpki
-      MYSQL_ROOT_PASSWORD: topsecret
+      POSTGRES_DB: openeidas
+      POSTGRES_USER: openeidas
+      POSTGRES_PASSWORD: ${OPENEIDAS_DB_PASSWORD:-openeidas}
     volumes:
-      - openxpkidb:/var/lib/mysql
-      - openxpkidbsocket:/var/run/mysqld/
-      - ./deploy/openxpki/openxpki-config/contrib/sql/mariadb-backend-schema.sql:/docker-entrypoint-initdb.d/01-backend.sql:ro
-      - ./deploy/openxpki/openxpki-config/contrib/sql/mariadb-frontend-schema.sql:/docker-entrypoint-initdb.d/02-frontend.sql:ro
+      - cadb:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD-SHELL", "pg_isready -U openeidas -d openeidas"]
       interval: 5s
       timeout: 3s
       retries: 20
 
-  pki-server:
-    <<: *openxpki
-    container_name: openeidas_pki_server
-    command: /usr/bin/openxpkictl start server --nd
-    user: openxpki:openxpki
-    group_add:
-      - openxpkiclient
-    tmpfs:
-      - /tmp
+  # Autorité de certification et d'enregistrement. Le conteneur exécute la
+  # cérémonie de clé au démarrage (idempotente), puis sert l'API d'enrôlement,
+  # le certificat de la CA et la CRL.
+  ca:
+    container_name: openeidas_ca
+    build:
+      context: .
+      dockerfile: deploy/ca-server/Dockerfile
+      args:
+        VERSION: ${OPENEIDAS_VERSION:-dev}
+    ports:
+      - "8320:8320"
+    environment:
+      OPENEIDAS_DB_DSN: postgres://openeidas:${OPENEIDAS_DB_PASSWORD:-openeidas}@db:5432/openeidas?sslmode=disable
+      OPENEIDAS_ISSUING_PIN: ${OPENEIDAS_CA_PIN:-1234}
+      OPENEIDAS_ROOT_PIN: ${OPENEIDAS_CA_ROOT_PIN:-1234}
+      OPENEIDAS_CA_KEY_BITS: "4096"
+      # Adresse publique gravée dans les extensions CDP et AIA des certificats
+      # émis : elle doit être joignable par qui vérifie un certificat. En
+      # local, seul http://localhost:8320 l'est.
+      OPENEIDAS_PKI_PUBLIC_URL: ${OPENEIDAS_PKI_PUBLIC_URL:-http://localhost:8320}
+      OPENEIDAS_OCSP_PUBLIC_URL: ${OPENEIDAS_OCSP_PUBLIC_URL:-http://localhost:8319}
+      # Authentifie les demandes d'enrôlement — généré et persisté par
+      # scripts/bootstrap.sh, partagé avec la TSA et le répondeur OCSP.
+      OPENEIDAS_ENROLL_HMAC_KEY: ${OPENEIDAS_ENROLL_HMAC_KEY:-}
+      # Identité consignée au procès-verbal de cérémonie (ETSI EN 319 411-1
+      # §6.5.1). En production, une personne nommée, pas un compte technique.
+      OPENEIDAS_CEREMONY_OPERATOR: ${OPENEIDAS_CEREMONY_OPERATOR:-ci-bootstrap}
+      OPENEIDAS_CRL_VALIDITY: 24h
+      OPENEIDAS_CRL_REFRESH: 1h
+      OPENEIDAS_AUDIT_FILE: /var/lib/open-eidas/state/ca-audit.log
+      OPENEIDAS_AUDIT_RETENTION: ${OPENEIDAS_AUDIT_RETENTION:-8760h}
     volumes:
-      - ./deploy/openxpki/openxpki-config:/etc/openxpki
-      - ./deploy/openxpki/local/client.key:/home/pkiadm/.oxi/client.key:ro
-      - openxpkilog:/var/log/openxpki
-      - openxpkisocket:/run/openxpkid
-      - openxpkidbsocket:/var/run/mysqld/
-      - openxpkidownload:/var/www/download
+      - catokens:/var/lib/softhsm/tokens
+      - castate:/var/lib/open-eidas/state
     healthcheck:
-      test: /usr/bin/openxpkictl status server
+      test: ["CMD", "ca-server", "healthcheck"]
       interval: 5s
       timeout: 3s
-      retries: 20
+      retries: 30
     depends_on:
       db:
-        condition: service_healthy
-
-  pki-client:
-    <<: *openxpki
-    container_name: openeidas_pki_client
-    command: /usr/bin/openxpkictl start client --nd
-    user: openxpkiclient:openxpkiclient
-    group_add:
-      - www-data
-    tmpfs:
-      - /tmp
-    volumes:
-      - ./deploy/openxpki/openxpki-config/client.d:/etc/openxpki/client.d
-      - openxpkilogui:/var/log/openxpki-client
-      - openxpkisocket:/run/openxpkid
-      - openxpkiclientsocket:/run/openxpki-clientd
-      - openxpkidbsocket:/var/run/mysqld/
-    healthcheck:
-      test: /usr/bin/openxpkictl status client
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    depends_on:
-      pki-server:
-        condition: service_healthy
-
-  pki-web:
-    <<: *openxpki
-    container_name: openeidas_pki_web
-    command: /usr/bin/start-webserver apache
-    ports:
-      - "8080:80/tcp"
-      - "8443:443/tcp"
-    volumes:
-      - ./deploy/openxpki/openxpki-config/contrib/apache2-openxpki-site.conf:/etc/apache2/sites-enabled/openxpki.conf:ro
-      - ./deploy/openxpki/openxpki-config/tls/:/etc/openxpki/tls/
-      - openxpkiclientsocket:/run/openxpki-clientd
-      - openxpkidownload:/var/www/download:ro
-    healthcheck:
-      test: wget -q -O /dev/null http://localhost/healthcheck/ping
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    depends_on:
-      pki-client:
         condition: service_healthy
 
   # Cible de réplication hors site du journal d'audit pour la démonstration
@@ -146,15 +114,12 @@ services:
       OPENEIDAS_AUDIT_REPLICA_PASSWORD: ${OPENEIDAS_AUDIT_REPLICA_PASSWORD:-changeme}
       OPENEIDAS_CERT_FILE: /var/lib/open-eidas/state/tsu.pem
       OPENEIDAS_CHAIN_FILE: /var/lib/open-eidas/state/chain.pem
-      OPENEIDAS_ENROLL_ENDPOINT: https://pki-web/rpc/tsa/RequestCertificate
-      # Authentifie la demande de certificat auprès de la politique RPC
-      # (allow_anon_enroll: 0) — généré et persisté par scripts/bootstrap.sh.
+      # Adresse INTERNE de la CA : le certificat, lui, portera l'adresse
+      # publique (OPENEIDAS_PKI_PUBLIC_URL, côté service ca).
+      OPENEIDAS_ENROLL_ENDPOINT: http://ca:8320/api/v1/enroll
+      OPENEIDAS_ENROLL_PROFILE: tsa_signer
       OPENEIDAS_ENROLL_HMAC_KEY: ${OPENEIDAS_ENROLL_HMAC_KEY:-}
-      # Le conteneur OpenXPKI génère un certificat TLS auto-signé : acceptable
-      # pour la démonstration locale uniquement, à remplacer par une ancre de
-      # confiance explicite (OPENEIDAS_ENROLL_CA_FILE) en production.
-      OPENEIDAS_ENROLL_INSECURE: "true"
-      OPENEIDAS_SUBJECT_CN: ${OPENEIDAS_SUBJECT_CN:-tsa.openxpki.test}
+      OPENEIDAS_SUBJECT_CN: ${OPENEIDAS_SUBJECT_CN:-Open eIDAS Time-Stamping Unit 1}
     volumes:
       - softhsmtokens:/var/lib/softhsm/tokens
       - tsastate:/var/lib/open-eidas/state
@@ -164,15 +129,14 @@ services:
       timeout: 3s
       retries: 5
     depends_on:
-      pki-web:
+      ca:
         condition: service_healthy
       audit-replica:
         condition: service_healthy
 
-  # Répondeur OCSP (RFC 6960) pour la CA émettrice : OpenXPKI Community
-  # n'en embarque aucun (voir docs/ARCHITECTURE.md). S'appuie sur la CRL
-  # déjà publiée par pki-web plutôt que sur un accès direct à la base
-  # OpenXPKI — voir internal/ocspresponder.
+  # Répondeur OCSP (RFC 6960) pour la CA émettrice. Il s'appuie sur la CRL
+  # publiée par le service ca plutôt que sur un accès direct au registre :
+  # il ne voit ainsi que ce qu'un tiers pourrait voir lui-même.
   ocsp-responder:
     container_name: openeidas_ocsp_responder
     build:
@@ -189,15 +153,14 @@ services:
       OPENEIDAS_KEY_BITS: "3072"
       OPENEIDAS_CERT_FILE: /var/lib/open-eidas/state/ocsp.pem
       OPENEIDAS_CHAIN_FILE: /var/lib/open-eidas/state/chain.pem
-      OPENEIDAS_ENROLL_ENDPOINT: https://pki-web/rpc/ocsp/RequestCertificate
+      OPENEIDAS_ENROLL_ENDPOINT: http://ca:8320/api/v1/enroll
+      OPENEIDAS_ENROLL_PROFILE: ocsp_responder
       OPENEIDAS_ENROLL_HMAC_KEY: ${OPENEIDAS_ENROLL_HMAC_KEY:-}
-      OPENEIDAS_ENROLL_INSECURE: "true"
-      # Adresse à laquelle CE SERVICE joint la PKI pour interroger sa CRL —
+      OPENEIDAS_SUBJECT_CN: ${OPENEIDAS_OCSP_SUBJECT_CN:-Open eIDAS OCSP Responder 1}
+      # Adresse à laquelle CE SERVICE joint la CA pour interroger sa CRL —
       # interne au réseau docker-compose, à ne pas confondre avec
-      # OPENEIDAS_PKI_PUBLIC_URL (adresse externe gravée dans les
-      # certificats, substituée côté serveur OpenXPKI par bootstrap.sh).
-      OPENEIDAS_PKI_INTERNAL_URL: https://pki-web
-      OPENEIDAS_PKI_INSECURE: "true"
+      # OPENEIDAS_PKI_PUBLIC_URL (adresse gravée dans les certificats).
+      OPENEIDAS_PKI_INTERNAL_URL: http://ca:8320
     volumes:
       - ocsptokens:/var/lib/softhsm/tokens
       - ocspstate:/var/lib/open-eidas/state
@@ -207,17 +170,13 @@ services:
       timeout: 3s
       retries: 5
     depends_on:
-      pki-web:
+      ca:
         condition: service_healthy
 
 volumes:
-  openxpkidb:
-  openxpkidbsocket:
-  openxpkisocket:
-  openxpkiclientsocket:
-  openxpkilog:
-  openxpkilogui:
-  openxpkidownload:
+  cadb:
+  catokens:
+  castate:
   softhsmtokens:
   tsastate:
   auditreplica:

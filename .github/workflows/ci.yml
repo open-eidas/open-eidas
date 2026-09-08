@@ -45,14 +45,67 @@ jobs:
         with:
           go-version-input: ${{ env.GO_VERSION }}
 
+  conformance:
+    name: Matrice de conformité ETSI
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # La sous-commande sort en échec si la matrice est incohérente : une
+      # exigence déclarée couverte sans mécanisme ni test nommé, ou un écart
+      # sans cible de levée. C'est ce qui empêche docs/CONFORMITE-ETSI.md de
+      # se vider de son sens au fil des modifications.
+      - name: Vérifie la cohérence de la matrice
+        run: go run ./cmd/ca-server conformance
+
+      # Le document publié est rendu depuis le code : s'il en diverge, c'est
+      # qu'il a été modifié à la main, ce qui n'a pas de sens ici.
+      - name: Vérifie que docs/CONFORMITE-ETSI.md est à jour
+        run: |
+          go run ./cmd/ca-server conformance --markdown > /tmp/conformite.md
+          if ! diff -u docs/CONFORMITE-ETSI.md /tmp/conformite.md; then
+            echo "docs/CONFORMITE-ETSI.md est désynchronisé : lancez 'make conformance-doc'" >&2
+            exit 1
+          fi
+
   build:
-    name: Construction des images (TSA, répondeur OCSP)
+    name: Construction des images (CA, TSA, répondeur OCSP)
     runs-on: ubuntu-latest
     needs: test
     steps:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
+
+      - name: Construit l'image de la CA (sans publication)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/ca-server/Dockerfile
+          push: false
+          load: true
+          tags: openeidas-ca:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ github.sha }}
+
+      - name: Vérifie que le binaire de la CA démarre
+        run: docker run --rm openeidas-ca:ci version
+
+      - name: Scan de vulnérabilités de la CA (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: openeidas-ca:ci
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
 
       - name: Construit l'image TSA (sans publication)
         uses: docker/build-push-action@v6
@@ -125,6 +178,17 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: Construit l'image de la CA
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/ca-server/Dockerfile
+          push: false
+          load: true
+          tags: openeidas-ca:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Construit l'image TSA
         uses: docker/build-push-action@v6
         with:
@@ -154,6 +218,7 @@ jobs:
 
       - name: Charge les images dans kind
         run: |
+          kind load docker-image openeidas-ca:ci --name open-eidas
           kind load docker-image openeidas-tsa:ci --name open-eidas
           kind load docker-image openeidas-ocsp-responder:ci --name open-eidas
 
@@ -161,6 +226,8 @@ jobs:
         run: |
           helm install open-eidas deploy/helm/open-eidas \
             --namespace open-eidas --create-namespace \
+            --set ca.image.repository=openeidas-ca \
+            --set ca.image.tag=ci \
             --set tsa.image.repository=openeidas-tsa \
             --set tsa.image.tag=ci \
             --set tsa.time.policy=monitor \
@@ -168,14 +235,12 @@ jobs:
             --set ocsp.image.tag=ci
 
       - name: Attend que tous les pods soient prêts
-        # Le tout premier essai de signature après l'amorçage de la CA
-        # marque parfois une pause programmée le temps que le statut du
-        # token de signature se rafraîchisse (comportement normal
-        # d'OpenXPKI, observé aussi en local) : jusqu'à 5-6 minutes avant
-        # que le watchdog ne relance le workflow. 12 minutes laisse une
-        # marge confortable sur un runner potentiellement plus lent.
+        # L'essentiel de l'attente est la génération de quatre bi-clés RSA
+        # dans SoftHSM (deux pour la hiérarchie de CA en 4096 bits, une par
+        # service signataire en 3072) : quelques minutes sur un runner
+        # partagé. 6 minutes laissent une marge confortable.
         run: |
-          kubectl -n open-eidas wait --for=condition=ready pod --all --timeout=12m
+          kubectl -n open-eidas wait --for=condition=ready pod --all --timeout=6m
 
       - name: Horodate un fichier et vérifie le jeton (openssl ts)
         run: |
@@ -189,6 +254,25 @@ jobs:
           awk '/BEGIN CERTIFICATE/{n++} {print > (n == 1 ? "tsu.pem" : "ca.pem")}' chain.pem
           openssl ts -verify -in facture.tsr -queryfile facture.tsq -CAfile ca.pem
 
+      # Le moteur de CA est maison : il ne peut pas se valider avec ses seuls
+      # outils. openssl relit ici, indépendamment, ce qu'il a produit.
+      - name: Vérifie le certificat TSU et la CRL avec openssl
+        run: |
+          kubectl -n open-eidas port-forward svc/open-eidas-ca 8320:8320 &
+          sleep 3
+          openssl verify -CAfile ca.pem -purpose timestampsign tsu.pem
+          openssl x509 -in tsu.pem -noout -text | grep -q "Time Stamping"
+          CRL_URL="$(openssl x509 -in tsu.pem -noout -text \
+            | grep -A 2 "X509v3 CRL Distribution" | sed -n 's/.*URI://p' | tr -d ' ')"
+          curl -sf "http://localhost:8320/${CRL_URL#*://*/}" -o issuing.crl
+          openssl crl -inform DER -in issuing.crl -CAfile ca.pem -noout
+
+      - name: Rapport de conformité de l'instance déployée
+        run: |
+          curl -sf http://localhost:8320/api/v1/conformance \
+            | tee conformance.json | head -c 400
+          grep -q '"matrice_coherente": *true' conformance.json
+
       - name: Interroge le répondeur OCSP pour le certificat TSU
         run: |
           kubectl -n open-eidas port-forward svc/open-eidas-ocsp 8319:8319 &
@@ -197,18 +281,30 @@ jobs:
               -url http://localhost:8319/ocsp -resp_text | tee ocsp-response.txt
           grep -q "tsu.pem: good" ocsp-response.txt
 
-      - name: Vérifie la chaîne du journal d'audit
-        run: kubectl -n open-eidas exec deploy/open-eidas-tsa -- tsa-server verify-audit
+      - name: Vérifie la chaîne des journaux d'audit (TSA et CA)
+        run: |
+          kubectl -n open-eidas exec deploy/open-eidas-tsa -- tsa-server verify-audit
+          kubectl -n open-eidas exec deploy/open-eidas-ca -c ca -- ca-server verify-audit
+
+      # L'approbation est ce qu'un auditeur vient vérifier : elle doit être
+      # nominative et tracée, y compris lorsque l'opérateur est technique.
+      - name: Vérifie que chaque émission a été approuvée par un opérateur nommé
+        run: |
+          kubectl -n open-eidas exec deploy/open-eidas-ca -c ca -- \
+            ca-server ra list ISSUED | tee requests.txt
+          grep -q "ci-bootstrap" requests.txt
 
       - name: État des pods et journaux (utile en cas d'échec)
         if: always()
         run: |
           kubectl -n open-eidas get pods -o wide
           kubectl -n open-eidas describe pods
-          for c in server client web bootstrap; do
-            echo "=== openxpki / $c ==="
-            kubectl -n open-eidas logs deploy/open-eidas-openxpki -c "$c" --tail 200 || true
+          for c in ca ra-autoapprove; do
+            echo "=== ca / $c ==="
+            kubectl -n open-eidas logs deploy/open-eidas-ca -c "$c" --tail 200 || true
           done
+          echo "=== postgres ==="
+          kubectl -n open-eidas logs statefulset/open-eidas-postgres --tail 100 || true
           echo "=== tsa ==="
           kubectl -n open-eidas logs deploy/open-eidas-tsa --tail 200 || true
           echo "=== ocsp ==="
@@ -222,7 +318,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Amorce la pile (PKI OpenXPKI + TSA)
+      - name: Amorce la pile (CA + TSA + répondeur OCSP)
         # Les runners GitHub-hébergés ne garantissent pas de sortie UDP/123 vers
         # les deux serveurs NTP externes exigés par la politique "enforce" ; le
         # job helm-kind-smoke-test contourne déjà ce même aléa réseau en passant
@@ -234,8 +330,10 @@ jobs:
       - name: Horodate un fichier et vérifie le jeton (openssl ts)
         run: ./scripts/demo.sh
 
-      - name: Vérifie la chaîne du journal d'audit
-        run: docker compose exec -T tsa tsa-server verify-audit
+      - name: Vérifie la chaîne des journaux d'audit (TSA et CA)
+        run: |
+          docker compose exec -T tsa tsa-server verify-audit
+          docker compose exec -T ca ca-server verify-audit
 
       - name: Journaux (utile en cas d'échec)
         if: always()

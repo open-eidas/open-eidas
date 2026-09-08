@@ -20,8 +20,8 @@ import (
 
 	"github.com/digitorus/timestamp"
 
-	"github.com/open-eidas/tsa/internal/timesource"
-	"github.com/open-eidas/tsa/internal/tsa"
+	"github.com/open-eidas/open-eidas/internal/timesource"
+	"github.com/open-eidas/open-eidas/internal/tsa"
 )
 
 const (
