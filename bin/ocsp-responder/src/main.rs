@@ -252,25 +252,27 @@ async fn run_serve() {
         });
     }
 
-    let app = axum::Router::new().route(
-        "/ocsp",
-        axum::routing::post({
-            let responder = responder.clone();
-            move |body: axum::body::Bytes| {
+    let app = axum::Router::new()
+        .route(
+            "/ocsp",
+            axum::routing::post({
                 let responder = responder.clone();
-                async move {
-                    let der = responder.handle(&body);
-                    (
-                        [(
-                            axum::http::header::CONTENT_TYPE,
-                            "application/ocsp-response",
-                        )],
-                        der,
-                    )
+                move |body: axum::body::Bytes| {
+                    let responder = responder.clone();
+                    async move {
+                        let der = responder.handle(&body);
+                        (
+                            [(
+                                axum::http::header::CONTENT_TYPE,
+                                "application/ocsp-response",
+                            )],
+                            der,
+                        )
+                    }
                 }
-            }
-        }),
-    );
+            }),
+        )
+        .route("/healthz", axum::routing::get(|| async { "ok" }));
 
     let listener = tokio::net::TcpListener::bind(bind_addr(&cfg.listen))
         .await
