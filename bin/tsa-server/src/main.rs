@@ -36,6 +36,9 @@ enum Command {
         #[arg(long)]
         markdown: bool,
     },
+    /// Affiche la version (identique à `--version`, sous forme de
+    /// sous-commande — reproduit `cmd/tsa-server` (Go), qui n'a que celle-ci).
+    Version,
 }
 
 fn die(context: &str, err: impl std::fmt::Display) -> ! {
@@ -340,5 +343,6 @@ async fn main() {
                 counts[&oe_conformance::Status::OutOfScope],
             );
         }
+        Command::Version => println!("{}", env!("CARGO_PKG_VERSION")),
     }
 }

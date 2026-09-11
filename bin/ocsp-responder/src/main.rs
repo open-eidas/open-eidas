@@ -30,6 +30,10 @@ enum Command {
         #[arg(long)]
         markdown: bool,
     },
+    /// Affiche la version (identique à `--version`, sous forme de
+    /// sous-commande — reproduit `cmd/ocsp-responder` (Go), qui n'a que
+    /// celle-ci).
+    Version,
 }
 
 fn die(context: &str, err: impl std::fmt::Display) -> ! {
@@ -370,5 +374,6 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        Command::Version => println!("{}", env!("CARGO_PKG_VERSION")),
     }
 }

@@ -57,6 +57,9 @@ enum Command {
     VerifyAudit {
         path: Option<String>,
     },
+    /// Affiche la version (identique à `--version`, sous forme de
+    /// sous-commande — reproduit `cmd/ca-server` (Go), qui n'a que celle-ci).
+    Version,
 }
 
 #[derive(Subcommand)]
@@ -379,6 +382,7 @@ async fn main() {
             }
         }
         Command::Healthcheck => run_healthcheck().await,
+        Command::Version => println!("{}", env!("CARGO_PKG_VERSION")),
         Command::VerifyAudit { path } => run_verify_audit(path).await,
     }
 }

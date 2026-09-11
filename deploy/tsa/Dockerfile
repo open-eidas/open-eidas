@@ -1,17 +1,18 @@
-FROM golang:1.25-bookworm AS build
+FROM rust:1-bookworm AS build
 
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY cmd ./cmd
-COPY internal ./internal
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY bin ./bin
 
 ARG VERSION=dev
-# CGO est requis : le binding PKCS#11 charge le module du HSM via dlopen.
-RUN CGO_ENABLED=1 go build -trimpath \
-        -ldflags "-s -w -X main.version=${VERSION}" \
-        -o /out/tsa-server ./cmd/tsa-server
+# Pas de CGO à activer : le binding PKCS#11 (crate `cryptoki`) charge le
+# module du HSM via dlopen au même titre que le binaire Go, mais sans lien
+# statique contre une bibliothèque C particulière au moment de la
+# compilation.
+RUN cargo build --release --bin tsa-server \
+ && cp target/release/tsa-server /out-tsa-server \
+ && rm -rf target
 
 
 FROM debian:bookworm-slim
@@ -23,7 +24,7 @@ RUN apt-get update \
  && mkdir -p /var/lib/softhsm/tokens /var/lib/open-eidas/state \
  && chown -R tsa:tsa /var/lib/softhsm/tokens /var/lib/open-eidas
 
-COPY --from=build /out/tsa-server /usr/local/bin/tsa-server
+COPY --from=build /out-tsa-server /usr/local/bin/tsa-server
 COPY deploy/tsa/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENV SOFTHSM2_CONF=/etc/softhsm/softhsm2.conf \
