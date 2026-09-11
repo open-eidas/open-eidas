@@ -127,7 +127,7 @@ mod tests {
 
     fn case_dirs() -> Vec<std::path::PathBuf> {
         fs::read_dir(fixtures_dir())
-            .expect("corpus de fixtures introuvable — lancer `go run ./scripts/gen-fixtures`")
+            .expect("corpus de fixtures introuvable (tests/fixtures/rfc3161, généré une fois pour toutes par le binaire Go de référence avant sa dépréciation)")
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n != "keys"))

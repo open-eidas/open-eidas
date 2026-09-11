@@ -1,6 +1,9 @@
-//! Génère tests/fixtures/audit/rust-produced.log avec oe-audit, pour prouver
-//! la compatibilité Rust -> Go (jalon J5) : ce fichier doit être vérifiable
-//! par `go run ./scripts/verify-audit-fixture`.
+//! Génère tests/fixtures/audit/rust-produced.log avec oe-audit — a servi à
+//! prouver une fois pour toutes la compatibilité Rust -> Go (jalon J5,
+//! achevé) en le vérifiant avec le binaire Go `verify-audit-fixture`,
+//! aujourd'hui supprimé avec le reste du code Go. Le fichier généré reste
+//! comme trace historique de cette preuve ; regénérer ne peut plus être
+//! revérifié côté Go.
 //!
 //! `cargo run -p oe-audit --example gen_fixture`
 

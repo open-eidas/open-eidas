@@ -1,6 +1,7 @@
-//! Portage de `internal/conformance` : la matrice de conformité ETSI d'Open
-//! eIDAS sous une forme exécutable, source unique d'un document généré
-//! (`docs/CONFORMITE-ETSI.md` côté Go).
+//! Portage de l'ancien `internal/conformance` (Go, aujourd'hui déprécié) :
+//! la matrice de conformité ETSI d'Open eIDAS sous une forme exécutable,
+//! source unique du document généré `docs/CONFORMITE-ETSI.md`
+//! (`ca-server conformance --markdown`).
 //!
 //! Ce module porte fidèlement la structure de données et les règles de
 //! cohérence (`Matrix::validate`) ; [`system_matrix`] est mise à jour au fil

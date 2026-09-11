@@ -1,14 +1,14 @@
 # Corpus de non-régression RFC 3161 (Go ↔ Rust)
 
-Généré par `scripts/gen-fixtures` à partir du code Go de référence
-(`internal/tsa`). Jalon J0 du plan de migration Go → Rust
+Généré une fois pour toutes par `scripts/gen-fixtures` (supprimé avec le
+reste du code Go — voir INDEPENDANCE.md pour l'état de la dépréciation) à
+partir du code Go de référence (`internal/tsa`, également supprimé). Jalon
+J0 du plan de migration Go → Rust, achevé
 (`/home/philippe/.claude/plans/witty-hopping-nest.md`).
 
-## Régénérer
-
-```
-go run ./scripts/gen-fixtures
-```
+Ce corpus n'est plus régénérable : le binaire Go de référence n'existe
+plus dans ce dépôt. Il reste figé tel quel, comme trace historique de
+non-régression contre l'implémentation d'origine.
 
 ## Contenu
 

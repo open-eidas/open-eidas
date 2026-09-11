@@ -1,9 +1,11 @@
 //! Preuve de compatibilité Go ↔ Rust du format de journal d'audit (jalon
-//! critique J5 du plan de migration). La fixture est produite par le binaire
-//! Go de référence (`scripts/gen-audit-fixture`, régénérable via
-//! `go run ./scripts/gen-audit-fixture`) — ce test ne doit jamais la
-//! régénérer lui-même : il vérifie que le format Rust interopère avec ce que
-//! le service Go écrit réellement aujourd'hui.
+//! critique J5 du plan de migration, aujourd'hui achevé — le binaire Go est
+//! déprécié). La fixture (`tests/fixtures/audit/go-produced.log`) a été
+//! produite une fois pour toutes par le binaire Go de référence, avant sa
+//! dépréciation, via l'outil `scripts/gen-audit-fixture` (supprimé avec le
+//! reste du code Go) ; ce test ne doit jamais la régénérer : il vérifie
+//! que le format Rust interopère avec ce que le service Go écrivait
+//! réellement, à titre de preuve historique de compatibilité.
 
 use std::path::PathBuf;
 
