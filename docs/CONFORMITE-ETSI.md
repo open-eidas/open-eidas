@@ -5,7 +5,7 @@
      correction se fait dans le code, pour que la matrice publiée reste
      celle que le système applique réellement. -->
 
-**28 exigences** — 23 couvertes, 3 écarts documentés, 2 hors périmètre logiciel.
+**28 exigences** — 24 couvertes, 2 écarts documentés, 2 hors périmètre logiciel.
 
 Trois statuts seulement, pour qu'aucune zone grise ne puisse s'y loger :
 
@@ -39,7 +39,7 @@ Trois statuts seulement, pour qu'aucune zone grise ne puisse s'y loger :
 | §6.3.1 | Authentification de la demande de certificat | couvert | HMAC-SHA256 sur la CSR DER, vérifié en temps constant, et vérification de l'auto-signature de la CSR (preuve de possession) : oe_raflow::Flow::submit. | crates/oe-raflow/tests/flow.rs (submit_without_valid_hmac_is_unauthenticated, submit_opens_a_pending_request_idempotently) |
 | §6.3.2 | Durée de vie du certificat plafonnée | couvert | oe_conformance::check_certificate_lifetime relit la validité du certificat réellement signé et la compare à un plafond indépendant du profil (MAX_END_ENTITY_LIFETIME/MAX_OCSP_LIFETIME) ; appelé via le champ Profile::check de oe_ca_core::Issuer::issue, comme profile.Check (Go). | crates/oe-conformance/src/lib.rs (check_certificate_lifetime_accepts_within_the_ceiling, check_certificate_lifetime_rejects_beyond_the_ceiling), crates/oe-conformance/tests/tsu_certificate.rs |
 | §6.3.9 | Motif de révocation consigné | couvert | Motif RFC 5280 obligatoire à la révocation (Issuer::revoke), persisté et repris dans chaque entrée de CRL avec son extension cRLReason. | crates/oe-ca-core/tests/issuance.rs (revoke_is_idempotent_and_keeps_first_reason, revoke_then_publish_crl_lists_the_certificate) |
-| §6.3.10 | Publication régulière de l'état de révocation | écart documenté | oe_ca_core::Issuer::publish_crl produit une CRL signée, republiable même vide, et testée ; la republication périodique et le repli sur le registre plutôt que le cache (bin/ca-server::http::Server) n'ont pas encore de test automatisé propre au binaire, contrairement à cmd/ca-server/server_test.go (Go). | **Cible :** Écrire un test d'intégration pour bin/ca-server couvrant la republication périodique et la dégradation de /healthz sur CRL périmée. |
+| §6.3.10 | Publication régulière de l'état de révocation | couvert | oe_ca_core::Issuer::publish_crl produit une CRL signée, republiable même vide ; bin/ca-server::http::Server republie à intervalle régulier et dégrade /healthz (503) dès que la CRL servie est périmée, plutôt que de se déclarer sain sans pouvoir dire ce qui est révoqué. | crates/oe-ca-core/tests/issuance.rs (revoke_then_publish_crl_lists_the_certificate), bin/ca-server/tests/crl_publication.rs (crl_is_republished_periodically, healthz_degrades_when_the_published_crl_is_stale) |
 | §6.5.1 | Cérémonie de génération des clés d'autorité | écart documenté | Cérémonie scriptée et idempotente (`ca-server ceremony`), produisant un procès-verbal consigné au journal d'audit (empreintes de clés, opérateur, date) : oe_ca_core::ceremony. | **Cible :** Cérémonie en double contrôle, sous témoin indépendant, sur HSM certifié, avec procès-verbal contresigné — écart organisationnel, pas seulement logiciel. |
 
 ## ETSI EN 319 412-1

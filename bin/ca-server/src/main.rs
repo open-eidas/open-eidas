@@ -9,11 +9,9 @@
 //! Sous-commandes : `ceremony`, `serve`, `ra list|approve|reject`, `revoke`,
 //! `conformance`, `healthcheck`, `verify-audit`.
 
-mod config;
-mod http;
-
 use std::sync::Arc;
 
+use ca_server::{config, http};
 use clap::{Parser, Subcommand};
 use config::Config;
 use oe_hsm::SigningToken;

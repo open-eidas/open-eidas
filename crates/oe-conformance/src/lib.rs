@@ -561,10 +561,10 @@ pub fn system_matrix() -> Matrix {
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.3.10", title: "Publication régulière de l'état de révocation" },
-            status: Status::Gap,
-            mechanism: "oe_ca_core::Issuer::publish_crl produit une CRL signée, republiable même vide, et testée ; la republication périodique et le repli sur le registre plutôt que le cache (bin/ca-server::http::Server) n'ont pas encore de test automatisé propre au binaire, contrairement à cmd/ca-server/server_test.go (Go).",
-            test: "crates/oe-ca-core/tests/issuance.rs (revoke_then_publish_crl_lists_the_certificate)",
-            target: "Écrire un test d'intégration pour bin/ca-server couvrant la republication périodique et la dégradation de /healthz sur CRL périmée.",
+            status: Status::Covered,
+            mechanism: "oe_ca_core::Issuer::publish_crl produit une CRL signée, republiable même vide ; bin/ca-server::http::Server republie à intervalle régulier et dégrade /healthz (503) dès que la CRL servie est périmée, plutôt que de se déclarer sain sans pouvoir dire ce qui est révoqué.",
+            test: "crates/oe-ca-core/tests/issuance.rs (revoke_then_publish_crl_lists_the_certificate), bin/ca-server/tests/crl_publication.rs (crl_is_republished_periodically, healthz_degrades_when_the_published_crl_is_stale)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "RFC 6960", clause: "§2.1", title: "Service d'état de révocation interrogeable en ligne" },
