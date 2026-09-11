@@ -14,6 +14,8 @@ members = [
     "crates/oe-enroll",
     "crates/oe-httpapi",
     "crates/oe-ocsp-core",
+    "crates/oe-castore",
+    "crates/oe-ca-core",
     "bin/tsa-server",
     "bin/ocsp-responder",
 ]

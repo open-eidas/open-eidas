@@ -1,0 +1,20 @@
+[package]
+name = "oe-castore"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "État persistant de l'autorité de certification (autorités, registre, demandes, CRL) — portage de internal/castore."
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+time = { version = "0.3", features = ["std"] }
+thiserror = "2"
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
