@@ -38,6 +38,15 @@ use oe_hsm::SigningToken;
 
 pub use profile::{profile_by_name, Profile};
 
+/// Consigne les décisions de l'autorité au journal d'audit — reproduit
+/// `ca.Recorder` (Go) ; comme `oe_tsa_core::Recorder`, découplé de
+/// `oe-audit` par convention (mêmes noms d'événement en dur plutôt qu'une
+/// dépendance de crate) pour ne pas lier ce moteur à un format de journal
+/// particulier.
+pub trait Recorder: Send + Sync {
+    fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String>;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CaError {
     #[error("ca: {0}")]
@@ -126,6 +135,7 @@ pub struct Options {
     pub ocsp_url: Option<String>,
     pub crl_validity: time::Duration,
     pub crl_grace: time::Duration,
+    pub recorder: Option<Arc<dyn Recorder>>,
 }
 
 pub struct Issuer {
@@ -137,6 +147,12 @@ impl Issuer {
         let cert_spki_der = opts.certificate.tbs_certificate().subject_public_key_info().to_der()?;
         matches_signer(&cert_spki_der, opts.signer.as_ref())?;
         Ok(Issuer { opts })
+    }
+
+    fn record(&self, event: &str, data: serde_json::Value) {
+        if let Some(recorder) = &self.opts.recorder {
+            let _ = recorder.append(event, data);
+        }
     }
 
     pub fn certificate(&self) -> &Certificate {
@@ -210,7 +226,7 @@ impl Issuer {
         let cert = signing::sign_with_token(builder, self.opts.signer.as_ref(), &issuer_spki_der)?;
 
         self.opts.store.save_certificate(oe_castore::Certificate {
-            serial: serial_bytes,
+            serial: serial_bytes.clone(),
             profile: profile.name.to_string(),
             subject_dn: cert.tbs_certificate().subject().to_string(),
             issuer_dn: cert.tbs_certificate().issuer().to_string(),
@@ -222,6 +238,18 @@ impl Issuer {
             revocation_reason: 0,
             request_transaction_id: transaction_id.to_string(),
         }).await?;
+
+        self.record(
+            "ca.certificate_issued",
+            serde_json::json!({
+                "profil": profile.name,
+                "sujet": cert.tbs_certificate().subject().to_string(),
+                "emetteur": cert.tbs_certificate().issuer().to_string(),
+                "serie": hex::encode(&serial_bytes),
+                "not_after": (now + profile.validity).format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+                "demande": transaction_id,
+            }),
+        );
 
         Ok(cert)
     }
@@ -247,12 +275,26 @@ impl Issuer {
 
     /// Révoque un certificat émis par cette autorité et consigne la
     /// décision. La CRL n'est pas republiée ici : `publish_crl` la reprend.
-    pub async fn revoke(&self, serial: &[u8], reason: i32, operator: &str) -> Result<(), CaError> {
+    pub async fn revoke(&self, serial: &[u8], reason: i32, operator: &str, comment: &str) -> Result<(), CaError> {
         if operator.is_empty() {
             return Err(CaError::Other("la révocation exige l'identité de l'opérateur qui la décide".to_string()));
         }
-        let _ = self.opts.store.certificate(&serial.to_vec()).await?;
-        self.opts.store.revoke(&serial.to_vec(), time::OffsetDateTime::now_utc(), reason).await?;
+        let cert = self.opts.store.certificate(&serial.to_vec()).await?;
+        let at = time::OffsetDateTime::now_utc();
+        self.opts.store.revoke(&serial.to_vec(), at, reason).await?;
+
+        self.record(
+            "ca.certificate_revoked",
+            serde_json::json!({
+                "serie": hex::encode(serial),
+                "sujet": cert.subject_dn,
+                "motif": reason,
+                "operateur": operator,
+                "commentaire": comment,
+                "date": at.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+            }),
+        );
+
         Ok(())
     }
 
@@ -306,6 +348,16 @@ impl Issuer {
 
         let record = oe_castore::Crl { number, der, this_update: now, next_update: now + self.opts.crl_validity };
         self.opts.store.save_crl(record.clone()).await?;
+
+        self.record(
+            "ca.crl_published",
+            serde_json::json!({
+                "numero": number,
+                "entrees": revoked.len(),
+                "prochaine_maj": record.next_update.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+            }),
+        );
+
         Ok(record)
     }
 

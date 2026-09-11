@@ -3,6 +3,7 @@
 //! L'idempotence est délibérée (voir le fichier Go de référence).
 
 use der::{Decode, Encode};
+use sha2::Digest;
 use x509_cert::builder::CertificateBuilder;
 use x509_cert::serial_number::SerialNumber;
 use x509_cert::time::Validity;
@@ -11,7 +12,7 @@ use x509_cert::{Certificate, SubjectPublicKeyInfo};
 use oe_castore::{Authority, Store};
 use oe_hsm::SigningToken;
 
-use crate::{build_subject, extensions, matches_signer, to_x509_time, CaError, RawProfile};
+use crate::{build_subject, extensions, matches_signer, to_x509_time, CaError, RawProfile, Recorder};
 
 pub const AUTHORITY_ROOT: &str = "root";
 pub const AUTHORITY_ISSUING: &str = "issuing";
@@ -31,6 +32,7 @@ pub struct CeremonyOptions {
     pub issuing_key_label: String,
     pub store: std::sync::Arc<dyn Store>,
     pub operator: String,
+    pub recorder: Option<std::sync::Arc<dyn Recorder>>,
 }
 
 pub struct Hierarchy {
@@ -63,6 +65,27 @@ pub async fn run_ceremony(o: CeremonyOptions) -> Result<Hierarchy, CaError> {
         Authority { name: AUTHORITY_ISSUING.to_string(), subject_dn: issuing.tbs_certificate().subject().to_string(), der: issuing.to_der()?, token_label: o.issuing_token_label.clone(), key_label: o.issuing_key_label.clone(), created_at: now },
     ] {
         o.store.save_authority(a).await?;
+    }
+
+    // Procès-verbal de cérémonie (ETSI EN 319 411-1 §6.5.1) : les empreintes
+    // permettent de rattacher a posteriori une signature à la clé exacte
+    // créée ce jour-là, sans exposer la clé elle-même.
+    if let Some(recorder) = &o.recorder {
+        let _ = recorder.append(
+            "ca.ceremony",
+            serde_json::json!({
+                "operateur": o.operator,
+                "date": now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+                "racine_sujet": root.tbs_certificate().subject().to_string(),
+                "racine_serie": hex::encode(root.tbs_certificate().serial_number().as_bytes()),
+                "racine_empreinte": hex::encode(sha2::Sha256::digest(root.to_der()?)),
+                "racine_token": o.root_token_label,
+                "emettrice_sujet": issuing.tbs_certificate().subject().to_string(),
+                "emettrice_serie": hex::encode(issuing.tbs_certificate().serial_number().as_bytes()),
+                "emettrice_empreinte": hex::encode(sha2::Sha256::digest(issuing.to_der()?)),
+                "emettrice_token": o.issuing_token_label,
+            }),
+        );
     }
 
     Ok(Hierarchy { root, issuing, created: true })

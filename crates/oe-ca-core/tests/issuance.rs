@@ -40,6 +40,7 @@ async fn run_test_ceremony(store: Arc<Memory>) -> (Arc<SoftwareToken>, Arc<Softw
         issuing_key_label: "issuing-key".to_string(),
         store: store.clone(),
         operator: "test-operator".to_string(),
+        recorder: None,
     })
     .await
     .expect("la cérémonie doit réussir");
@@ -68,6 +69,7 @@ async fn ceremony_is_idempotent() {
         issuing_key_label: "issuing-key".to_string(),
         store: store.clone(),
         operator: "test-operator".to_string(),
+        recorder: None,
     })
     .await
     .expect("la seconde cérémonie doit se contenter de relire la hiérarchie existante");
@@ -103,6 +105,7 @@ async fn ceremony_rejects_mismatched_signer_on_replay() {
         issuing_key_label: "issuing-key".to_string(),
         store,
         operator: "test-operator".to_string(),
+        recorder: None,
     })
     .await;
 
@@ -120,6 +123,7 @@ async fn issuer_from_ceremony(store: Arc<Memory>) -> (Issuer, Arc<SoftwareToken>
         ocsp_url: Some("https://ocsp.example.test".to_string()),
         crl_validity: time::Duration::hours(24),
         crl_grace: time::Duration::hours(1),
+        recorder: None,
     })
     .expect("l'émetteur doit accepter une autorité dont la clé correspond au signataire");
     (issuer, issuing_signer)
@@ -168,7 +172,7 @@ async fn revoke_then_publish_crl_lists_the_certificate() {
     let parsed_empty: x509_cert::crl::CertificateList = x509_cert::crl::CertificateList::from_der(&empty_crl.der).unwrap();
     assert!(parsed_empty.tbs_cert_list.revoked_certificates.is_none());
 
-    issuer.revoke(&serial, 1, "test-operator").await.expect("la révocation doit réussir");
+    issuer.revoke(&serial, 1, "test-operator", "").await.expect("la révocation doit réussir");
 
     let crl = issuer.publish_crl().await.expect("la republication doit réussir");
     assert!(crl.number > empty_crl.number, "le numéro de CRL doit augmenter à chaque publication");
@@ -193,8 +197,8 @@ async fn revoke_is_idempotent_and_keeps_first_reason() {
     let cert = issuer.issue(&public_key_der, "tsu2.example.test", &tsa_profile, "txn-3").await.unwrap();
     let serial = cert.tbs_certificate().serial_number().as_bytes().to_vec();
 
-    issuer.revoke(&serial, 1, "test-operator").await.unwrap();
-    issuer.revoke(&serial, 5, "test-operator").await.unwrap();
+    issuer.revoke(&serial, 1, "test-operator", "").await.unwrap();
+    issuer.revoke(&serial, 5, "test-operator", "").await.unwrap();
 
     let stored = store.certificate(&serial).await.unwrap();
     assert_eq!(stored.status, oe_castore::CertificateStatus::Revoked);
@@ -226,6 +230,7 @@ async fn openssl_accepts_the_chain_and_honors_revocation() {
         ocsp_url: None,
         crl_validity: time::Duration::hours(24),
         crl_grace: time::Duration::hours(1),
+        recorder: None,
     })
     .unwrap();
 
@@ -254,7 +259,7 @@ async fn openssl_accepts_the_chain_and_honors_revocation() {
         .expect("openssl doit s'exécuter");
     assert!(verify_before.status.success(), "openssl doit accepter la chaîne avant révocation : {}", String::from_utf8_lossy(&verify_before.stderr));
 
-    issuer.revoke(&serial, 1, "test-operator").await.unwrap();
+    issuer.revoke(&serial, 1, "test-operator", "").await.unwrap();
     let crl = issuer.publish_crl().await.unwrap();
     let crl_pem = dir.join("issuing.crl.pem");
     write_crl_pem(&crl_pem, &crl.der);
@@ -300,6 +305,72 @@ fn write_crl_pem(path: &std::path::Path, der: &[u8]) {
     std::fs::write(path, out).unwrap();
 }
 
+/// Recorder de test qui capture les noms d'événement reçus — sert à vérifier
+/// que chaque décision de l'autorité (cérémonie, émission, révocation, CRL)
+/// laisse bien une trace, condition posée par le plan de portage (le journal
+/// d'audit est une preuve légale, pas un détail d'implémentation).
+#[derive(Default, Clone)]
+struct EventLog(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl oe_ca_core::Recorder for EventLog {
+    fn append(&self, event: &str, _data: serde_json::Value) -> Result<(), String> {
+        self.0.lock().unwrap().push(event.to_string());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn every_authority_decision_is_recorded() {
+    let store = store();
+    let log = EventLog::default();
+
+    let root_signer = Arc::new(SoftwareToken::generate(2048));
+    let issuing_signer = Arc::new(SoftwareToken::generate(2048));
+    let hierarchy = run_ceremony(CeremonyOptions {
+        root_signer: root_signer.clone(),
+        issuing_signer: issuing_signer.clone(),
+        root_cn: "Test Root CA".to_string(),
+        issuing_cn: "Test Issuing CA".to_string(),
+        organization: "Open eIDAS Test".to_string(),
+        country: "FR".to_string(),
+        root_validity: time::Duration::days(20 * 365),
+        issuing_validity: time::Duration::days(10 * 365),
+        root_token_label: "root".to_string(),
+        root_key_label: "root-key".to_string(),
+        issuing_token_label: "issuing".to_string(),
+        issuing_key_label: "issuing-key".to_string(),
+        store: store.clone(),
+        operator: "test-operator".to_string(),
+        recorder: Some(Arc::new(log.clone())),
+    })
+    .await
+    .unwrap();
+
+    let issuer = Issuer::new(Options {
+        signer: issuing_signer,
+        certificate: hierarchy.issuing,
+        chain: vec![],
+        store: store.clone(),
+        public_url: "https://ca.example.test".to_string(),
+        ocsp_url: None,
+        crl_validity: time::Duration::hours(24),
+        crl_grace: time::Duration::hours(1),
+        recorder: Some(Arc::new(log.clone())),
+    })
+    .unwrap();
+
+    let end_entity = SoftwareToken::generate(2048);
+    let public_key_der = end_entity.public_key_der().unwrap();
+    let tsa_profile = profile::tsa_signer();
+    let cert = issuer.issue(&public_key_der, "audit.example.test", &tsa_profile, "txn-audit").await.unwrap();
+    let serial = cert.tbs_certificate().serial_number().as_bytes().to_vec();
+    issuer.revoke(&serial, 1, "test-operator", "test").await.unwrap();
+    issuer.publish_crl().await.unwrap();
+
+    let events = log.0.lock().unwrap().clone();
+    assert_eq!(events, vec!["ca.ceremony", "ca.certificate_issued", "ca.certificate_revoked", "ca.crl_published"]);
+}
+
 #[tokio::test]
 async fn revoke_rejects_empty_operator() {
     let store = store();
@@ -311,6 +382,6 @@ async fn revoke_rejects_empty_operator() {
     let cert = issuer.issue(&public_key_der, "tsu3.example.test", &tsa_profile, "txn-4").await.unwrap();
     let serial = cert.tbs_certificate().serial_number().as_bytes().to_vec();
 
-    let err = issuer.revoke(&serial, 1, "").await;
+    let err = issuer.revoke(&serial, 1, "", "").await;
     assert!(err.is_err(), "révoquer sans identité d'opérateur doit être refusé — traçabilité de la décision");
 }

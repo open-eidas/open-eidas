@@ -1007,10 +1007,12 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "der 0.8.2",
+ "hex",
  "oe-castore",
  "oe-certs",
  "oe-hsm",
  "rand 0.8.8",
+ "serde_json",
  "sha1 0.10.7",
  "sha2",
  "signature 3.0.0",
