@@ -1,0 +1,7 @@
+{
+  "name": "granted-sha256-with-cert",
+  "notes": "cas nominal : demande de chaîne, nonce fourni, SHA-256.",
+  "want_granted": true,
+  "has_response": true,
+  "hash_algorithm": "SHA-256"
+}

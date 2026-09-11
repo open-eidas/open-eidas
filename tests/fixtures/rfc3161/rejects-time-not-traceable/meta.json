@@ -1,0 +1,8 @@
+{
+  "name": "rejects-time-not-traceable",
+  "notes": "l'horloge injectée signale l'absence de traçabilité UTC.",
+  "want_granted": false,
+  "want_failure": "the TSA's time source is not available",
+  "has_response": false,
+  "hash_algorithm": "SHA-256"
+}

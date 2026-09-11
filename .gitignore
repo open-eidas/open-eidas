@@ -1,8 +1,10 @@
 # Secrets locaux générés par scripts/bootstrap.sh (secret HMAC d'enrôlement)
 /deploy/local/
 
-# Artefacts de build
-/bin/
+# Artefacts de build Rust (bin/ contient désormais les crates binaires du
+# portage Rust, cf. /home/philippe/.claude/plans/witty-hopping-nest.md — ne
+# pas réintroduire d'ignore générique sur /bin/, qui est un répertoire source)
+/target/
 
 # Outils locaux
 /.claude/

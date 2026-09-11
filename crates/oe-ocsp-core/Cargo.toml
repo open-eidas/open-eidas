@@ -1,0 +1,30 @@
+[package]
+name = "oe-ocsp-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Répondeur OCSP (RFC 6960) autonome adossé à la CRL publiée par la CA — portage de internal/ocspresponder."
+
+[lints]
+workspace = true
+
+[dependencies]
+oe-hsm = { path = "../oe-hsm" }
+oe-certs = { path = "../oe-certs" }
+der = "0.8"
+x509-cert = "0.3"
+spki = "0.8"
+rsa = "0.9"
+sha1 = "0.10"
+sha2 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+time = { version = "0.3", features = ["std"] }
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = "0.8"
+pem = "3"

@@ -1,0 +1,7 @@
+{
+  "name": "granted-sha512",
+  "notes": "algorithme de hachage alternatif accepté (SHA-512).",
+  "want_granted": true,
+  "has_response": true,
+  "hash_algorithm": "SHA-512"
+}

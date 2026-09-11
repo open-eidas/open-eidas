@@ -1,0 +1,8 @@
+{
+  "name": "rejects-sha1",
+  "notes": "SHA-1 est refusé par la politique (ETSI TS 119 312).",
+  "want_granted": false,
+  "want_failure": "unrecognized or unsupported Algorithm Identifier",
+  "has_response": false,
+  "hash_algorithm": "SHA-1"
+}

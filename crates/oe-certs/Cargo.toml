@@ -1,0 +1,21 @@
+[package]
+name = "oe-certs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lecture/écriture des fichiers PEM (certificat TSU et chaîne d'émission) — portage de internal/certs."
+
+[lints]
+workspace = true
+
+[dependencies]
+x509-cert = { version = "0.3", features = ["pem"] }
+der = "0.8"
+pem = "3"
+regex = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

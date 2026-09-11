@@ -1,0 +1,33 @@
+[package]
+name = "tsa-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Portage Rust de cmd/tsa-server (RFC 3161 qualifiée eIDAS)."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "tsa-server"
+path = "src/main.rs"
+
+[dependencies]
+oe-config = { path = "../../crates/oe-config" }
+oe-conformance = { path = "../../crates/oe-conformance" }
+oe-hsm = { path = "../../crates/oe-hsm" }
+oe-certs = { path = "../../crates/oe-certs" }
+oe-audit = { path = "../../crates/oe-audit" }
+oe-timesource = { path = "../../crates/oe-timesource" }
+oe-tsa-core = { path = "../../crates/oe-tsa-core" }
+oe-httpapi = { path = "../../crates/oe-httpapi" }
+oe-enroll = { path = "../../crates/oe-enroll" }
+clap = { version = "4", features = ["derive"] }
+der = "0.8"
+serde_json = "1"
+time = { version = "0.3", features = ["std"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tracing-subscriber = "0.3"
+axum = "0.8"

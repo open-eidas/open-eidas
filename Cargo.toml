@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/oe-config",
+    "crates/oe-certs",
+    "crates/oe-hsm",
+    "crates/oe-timesource",
+    "crates/oe-audit",
+    "crates/oe-conformance",
+    "crates/oe-rfc3161-asn1",
+    "crates/oe-tsa-core",
+    "crates/oe-crosstsa",
+    "crates/oe-replicate",
+    "crates/oe-enroll",
+    "crates/oe-httpapi",
+    "crates/oe-ocsp-core",
+    "bin/tsa-server",
+    "bin/ocsp-responder",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/open-eidas/open-eidas"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

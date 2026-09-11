@@ -1,0 +1,8 @@
+{
+  "name": "rejects-foreign-policy",
+  "notes": "politique demandée différente de celle servie par cette TSA.",
+  "want_granted": false,
+  "want_failure": "the requested TSA policy is not supported by the TSA",
+  "has_response": false,
+  "hash_algorithm": "SHA-256"
+}

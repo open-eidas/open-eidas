@@ -1,0 +1,13 @@
+[package]
+name = "oe-conformance"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Portage en cours (voir /home/philippe/.claude/plans/witty-hopping-nest.md)."
+
+[lints]
+workspace = true
+
+[dependencies]

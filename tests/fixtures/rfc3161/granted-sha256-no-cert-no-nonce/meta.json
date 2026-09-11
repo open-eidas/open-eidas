@@ -1,0 +1,7 @@
+{
+  "name": "granted-sha256-no-cert-no-nonce",
+  "notes": "cas nominal sans demande de certificat ni nonce.",
+  "want_granted": true,
+  "has_response": true,
+  "hash_algorithm": "SHA-256"
+}

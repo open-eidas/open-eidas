@@ -1,0 +1,18 @@
+[package]
+name = "oe-rfc3161-asn1"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Structures ASN.1 RFC 3161 (TimeStampReq/Resp, TSTInfo, MessageImprint) — portage de github.com/digitorus/timestamp."
+
+[lints]
+workspace = true
+
+[dependencies]
+der = { version = "0.8", features = ["alloc", "derive", "oid"] }
+spki = "0.8"
+x509-cert = "0.3"
+cms = "0.3.0-pre.2"
+thiserror = "2"
