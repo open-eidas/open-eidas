@@ -1167,6 +1167,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "oe-raflow"
+version = "0.1.0"
+dependencies = [
+ "der 0.8.2",
+ "hex",
+ "hmac",
+ "oe-ca-core",
+ "oe-castore",
+ "oe-hsm",
+ "rand 0.8.8",
+ "rsa",
+ "serde_json",
+ "sha2",
+ "spki 0.8.0",
+ "thiserror",
+ "time",
+ "tokio",
+ "x509-cert",
+]
+
+[[package]]
 name = "oe-replicate"
 version = "0.1.0"
 dependencies = [

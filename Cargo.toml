@@ -16,6 +16,7 @@ members = [
     "crates/oe-ocsp-core",
     "crates/oe-castore",
     "crates/oe-ca-core",
+    "crates/oe-raflow",
     "bin/tsa-server",
     "bin/ocsp-responder",
 ]
