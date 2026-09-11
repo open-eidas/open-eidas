@@ -37,6 +37,18 @@ fn die(context: &str, err: impl std::fmt::Display) -> ! {
     std::process::exit(1);
 }
 
+/// `":8319"` (forme conventionnelle de `net.Listen`, Go, pour « toutes les
+/// interfaces ») n'est pas un hôte résoluble pour `tokio::net::TcpListener` :
+/// contrairement à Go, un hôte vide avant les deux-points échoue la
+/// résolution DNS au lieu d'être compris comme un joker. Reproduit ici la
+/// même convention en préfixant `0.0.0.0`.
+fn bind_addr(listen: &str) -> String {
+    match listen.strip_prefix(':') {
+        Some(port) => format!("0.0.0.0:{port}"),
+        None => listen.to_string(),
+    }
+}
+
 /// Paramètres du répondeur, tous pilotés par variables d'environnement —
 /// un jeu séparé de `oe-config`, à l'identique de `cmd/ocsp-responder/config.go`
 /// (Go) : ce service n'a pas besoin des champs propres à la TSA (journal
@@ -256,7 +268,7 @@ async fn run_serve() {
         }),
     );
 
-    let listener = tokio::net::TcpListener::bind(&cfg.listen)
+    let listener = tokio::net::TcpListener::bind(bind_addr(&cfg.listen))
         .await
         .unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.listen), e));
     eprintln!("ocsp-responder: écoute sur {}", cfg.listen);

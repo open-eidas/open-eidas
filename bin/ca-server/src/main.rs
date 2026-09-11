@@ -74,6 +74,18 @@ fn die(context: &str, err: impl std::fmt::Display) -> ! {
     std::process::exit(1);
 }
 
+/// `":8320"` (forme conventionnelle de `net.Listen`, Go, pour « toutes les
+/// interfaces ») n'est pas un hôte résoluble pour `tokio::net::TcpListener` :
+/// contrairement à Go, un hôte vide avant les deux-points échoue la
+/// résolution DNS au lieu d'être compris comme un joker. Reproduit ici la
+/// même convention en préfixant `0.0.0.0`.
+fn bind_addr(listen: &str) -> String {
+    match listen.strip_prefix(':') {
+        Some(port) => format!("0.0.0.0:{port}"),
+        None => listen.to_string(),
+    }
+}
+
 /// Relie le journal d'audit aux deux points d'injection qui en dépendent
 /// (`oe-ca-core` et `oe-raflow`) — mêmes noms d'événement que le binaire Go,
 /// qui partage lui aussi un seul journal chaîné entre ces deux sources.
@@ -235,7 +247,7 @@ async fn run_serve() {
     server.start_crl_publication(cfg.crl_refresh, shutdown_rx.clone()).await.unwrap_or_else(|e| die("publication initiale de la CRL", e));
 
     let app = http::router(server.clone(), cfg.max_request_bytes);
-    let listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.listen), e));
+    let listener = tokio::net::TcpListener::bind(bind_addr(&cfg.listen)).await.unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.listen), e));
     tracing::info!(adresse = %cfg.listen, emettrice = %server.issuer().certificate().tbs_certificate().subject(), "autorité de certification en écoute");
 
     let shutdown_timeout = cfg.shutdown_timeout;
