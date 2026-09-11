@@ -1,8 +1,4 @@
 SHELL := /bin/bash
-GO_IMAGE ?= golang:1.25-bookworm
-GO_RUN = docker run --rm -v "$(CURDIR)":/src -w /src \
-	-e GOCACHE=/tmp/gocache -e GOMODCACHE=/tmp/gomod \
-	-u "$(shell id -u):$(shell id -g)" $(GO_IMAGE)
 
 .DEFAULT_GOAL := help
 
@@ -16,22 +12,21 @@ up: ## Amorce la PKI et démarre la TSA (idempotent)
 demo: ## Horodate un fichier et vérifie le jeton avec openssl ts
 	./scripts/demo.sh
 
-test: ## Exécute les tests unitaires (dans un conteneur Go)
-	$(GO_RUN) go test ./...
+test: ## Exécute les tests du workspace
+	cargo test --workspace
 
-lint: ## Vérifie le formatage et lance go vet
-	$(GO_RUN) sh -c 'test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }'
-	$(GO_RUN) go vet ./...
+lint: ## Lance clippy sur tout le workspace
+	cargo clippy --workspace --all-targets -- -D warnings
 
 audit: ## Vérifie la chaîne de hachage des journaux d'audit (TSA et CA)
 	docker compose exec tsa tsa-server verify-audit
 	docker compose exec ca ca-server verify-audit
 
 conformance: ## Produit la matrice de conformité ETSI (échec sur écart bloquant)
-	$(GO_RUN) go run ./cmd/ca-server conformance
+	cargo run --bin ca-server -- conformance
 
-conformance-doc: ## Régénère docs/CONFORMITE-ETSI.md depuis internal/conformance
-	$(GO_RUN) go run ./cmd/ca-server conformance --markdown > docs/CONFORMITE-ETSI.md
+conformance-doc: ## Régénère docs/CONFORMITE-ETSI.md depuis oe-conformance
+	cargo run --bin ca-server -- conformance --markdown > docs/CONFORMITE-ETSI.md
 
 ra: ## Liste les demandes d'enrôlement en attente de décision
 	docker compose exec ca ca-server ra list PENDING

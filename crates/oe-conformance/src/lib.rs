@@ -2,15 +2,16 @@
 //! eIDAS sous une forme exécutable, source unique d'un document généré
 //! (`docs/CONFORMITE-ETSI.md` côté Go).
 //!
-//! Jalon J3 du plan de migration
-//! (`/home/philippe/.claude/plans/witty-hopping-nest.md`) : ce squelette
-//! porte fidèlement la structure de données et les règles de cohérence
-//! (`Matrix::validate`), mais [`system_matrix`] déclare **toutes** les
-//! exigences applicables au logiciel comme [`Status::Gap`] tant que le
-//! mécanisme Rust correspondant n'est pas réellement porté et testé — jamais
-//! [`Status::Covered`] par optimisme, même quand l'équivalent Go l'est déjà.
-//! Un statut ne doit passer à `Covered` côté Rust que lorsque le code qui
-//! l'applique existe dans ce workspace et qu'un test le vérifie.
+//! Ce module porte fidèlement la structure de données et les règles de
+//! cohérence (`Matrix::validate`) ; [`system_matrix`] est mise à jour au fil
+//! du portage — une entrée ne passe à [`Status::Covered`] que lorsque le
+//! code qui l'applique existe réellement dans ce workspace et qu'un test
+//! nommé le vérifie, jamais par anticipation sur ce qui reste à faire.
+//! **Tenir cette matrice à jour est une obligation du portage** : la laisser
+//! statique pendant qu'un jalon avance dessert le document publié
+//! (`docs/CONFORMITE-ETSI.md`) exactement comme le ferait un optimisme
+//! prématuré — dans les deux cas, le document cesse de refléter ce que le
+//! système applique réellement.
 //!
 //! Les deux exigences purement organisationnelles (aucun logiciel, Go ou
 //! Rust, ne peut les établir seul) restent [`Status::OutOfScope`], à
@@ -221,13 +222,11 @@ fn cell(s: &str) -> String {
 /// Produit le contenu d'un document de conformité à partir de la matrice.
 pub fn render_markdown(m: &Matrix) -> String {
     let mut b = String::new();
-    b.push_str("# Matrice de conformité ETSI (portage Rust)\n\n");
-    b.push_str("<!-- Document généré depuis oe-conformance::system_matrix. Ne pas\n");
-    b.push_str("     modifier à la main. Voir le jalon J3 du plan de migration :\n");
-    b.push_str("     tant que le portage Rust n'a pas atteint la parité fonctionnelle\n");
-    b.push_str("     avec le code Go, ce document reste distinct de\n");
-    b.push_str("     docs/CONFORMITE-ETSI.md, qui documente l'état réel du service en\n");
-    b.push_str("     production (encore écrit en Go). -->\n\n");
+    b.push_str("# Matrice de conformité ETSI\n\n");
+    b.push_str("<!-- Document généré par `ca-server conformance --markdown` depuis\n");
+    b.push_str("     oe-conformance::system_matrix. Ne pas modifier à la main : toute\n");
+    b.push_str("     correction se fait dans le code, pour que la matrice publiée reste\n");
+    b.push_str("     celle que le système applique réellement. -->\n\n");
 
     let counts = m.counts();
     b.push_str(&format!(
@@ -271,12 +270,9 @@ pub fn render_markdown(m: &Matrix) -> String {
 }
 
 /// La matrice de conformité applicable au portage Rust, à l'instant présent
-/// du chantier (voir la note de module : tout est `Gap` jusqu'à preuve du
-/// contraire).
+/// du chantier (voir la note de module : mise à jour à chaque jalon, jamais
+/// figée).
 pub fn system_matrix() -> Matrix {
-    const NOT_PORTED: &str =
-        "portage Rust non encore réalisé — voir le plan de migration (/home/philippe/.claude/plans/witty-hopping-nest.md)";
-
     Matrix(vec![
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 401", clause: "§7.4", title: "Gestion des clés du prestataire dans un module cryptographique" },
@@ -288,23 +284,23 @@ pub fn system_matrix() -> Matrix {
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 401", clause: "§7.10", title: "Journalisation des événements et durée de conservation" },
             status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-audit (jalon J5) : journal JSONL chaîné SHA-256, contreseing et réplication.",
+            mechanism: "Le journal JSON Lines chaîné par SHA-256 est porté et testé (oe-audit) ; la vérification de la durée de conservation configurée (équivalent de CheckAuditRetention, Go) ne l'est pas encore.",
+            test: "crates/oe-audit/src/lib.rs (deux_ecrivains_partagent_la_meme_chaine)",
+            target: "Porter l'équivalent de conformance.CheckAuditRetention et le brancher au démarrage de bin/ca-server, comme le fait cmd/ca-server (Go).",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 401", clause: "§7.9", title: "Intégrité démontrable des enregistrements d'audit" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-audit (jalon J5), avec test croisé de compatibilité de format contre le journal produit par le binaire Go.",
+            status: Status::Covered,
+            mechanism: "Chaînage par hachage vérifié intégralement à l'ouverture ; verrou de fichier partagé entre plusieurs écrivains d'un même processus : oe-audit::Log.",
+            test: "crates/oe-audit/src/lib.rs (deux_ecrivains_partagent_la_meme_chaine, verify_detects_modified_record, verify_detects_truncated_and_rewritten_tail)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 401", clause: "§7.11", title: "Continuité d'activité et reprise après sinistre" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-replicate (jalon J8).",
+            status: Status::Covered,
+            mechanism: "Contreseing du journal par une TSA tierce (oe-crosstsa) et réplication WebDAV hors site (oe-replicate), validés contre un vrai serveur.",
+            test: "crates/oe-crosstsa/tests/against_local_server.rs (seals_a_digest_against_a_real_rfc3161_server), crates/oe-replicate/tests/against_local_server.rs (replicates_content_via_webdav_put)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 401", clause: "§7.12", title: "Plan de cessation d'activité" },
@@ -315,94 +311,94 @@ pub fn system_matrix() -> Matrix {
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.6.1", title: "Profil du certificat d'autorité de certification" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-ca-core (rang 3 de l'ordre de portage, après tsa-server et ocsp-responder).",
+            status: Status::Covered,
+            mechanism: "Cérémonie produisant une racine et une CA émettrice au profil contrôlé (CA:TRUE critique, keyCertSign+cRLSign, SKI/AKI) : oe_ca_core::ceremony::run_ceremony, chaîne revérifiée par openssl.",
+            test: "crates/oe-ca-core/tests/issuance.rs (ceremony_is_idempotent, ceremony_rejects_mismatched_signer_on_replay, openssl_accepts_the_chain_and_honors_revocation)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.2.1", title: "Enregistrement et responsabilité de la décision d'émission" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-raflow (rang 3) : le garde-fou « pas d'auto-approbation silencieuse » (INDEPENDANCE.md) doit devenir un test Rust de première classe.",
+            status: Status::Covered,
+            mechanism: "Aucune transition vers Approved n'existe sans identité d'opérateur : oe_raflow::Decider::approve/reject. L'identité est consignée en base et au journal d'audit.",
+            test: "crates/oe-raflow/tests/flow.rs (decide_without_operator_identity_is_refused, approve_then_resubmit_issues_a_certificate_signed_by_the_issuing_key)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.3.1", title: "Authentification de la demande de certificat" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-enroll / oe-raflow (jalon J9 / rang 3).",
+            status: Status::Covered,
+            mechanism: "HMAC-SHA256 sur la CSR DER, vérifié en temps constant, et vérification de l'auto-signature de la CSR (preuve de possession) : oe_raflow::Flow::submit.",
+            test: "crates/oe-raflow/tests/flow.rs (submit_without_valid_hmac_is_unauthenticated, submit_opens_a_pending_request_idempotently)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.3.2", title: "Durée de vie du certificat plafonnée" },
             status: Status::Gap,
-            mechanism: NOT_PORTED,
+            mechanism: "La durée de vie est bornée par le profil au moment de la construction (oe_ca_core::Issuer::issue), mais rien ne relit ni ne re-contrôle le certificat produit après signature — contrairement au binaire Go (findings := profile.Check(...)).",
             test: "",
-            target: "oe-ca-core (rang 3).",
+            target: "Porter l'équivalent de profile.Check/CheckLifetime (oe-conformance) et l'appliquer après signature, avant l'enregistrement en base.",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.3.9", title: "Motif de révocation consigné" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-ca-core / oe-castore (rang 3).",
+            status: Status::Covered,
+            mechanism: "Motif RFC 5280 obligatoire à la révocation (Issuer::revoke), persisté et repris dans chaque entrée de CRL avec son extension cRLReason.",
+            test: "crates/oe-ca-core/tests/issuance.rs (revoke_is_idempotent_and_keeps_first_reason, revoke_then_publish_crl_lists_the_certificate)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.3.10", title: "Publication régulière de l'état de révocation" },
             status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-ca-core (rang 3).",
+            mechanism: "oe_ca_core::Issuer::publish_crl produit une CRL signée, republiable même vide, et testée ; la republication périodique et le repli sur le registre plutôt que le cache (bin/ca-server::http::Server) n'ont pas encore de test automatisé propre au binaire, contrairement à cmd/ca-server/server_test.go (Go).",
+            test: "crates/oe-ca-core/tests/issuance.rs (revoke_then_publish_crl_lists_the_certificate)",
+            target: "Écrire un test d'intégration pour bin/ca-server couvrant la republication périodique et la dégradation de /healthz sur CRL périmée.",
         },
         Entry {
             requirement: Requirement { standard: "RFC 6960", clause: "§2.1", title: "Service d'état de révocation interrogeable en ligne" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-ocsp-core (rang 2 de l'ordre de portage, juste après tsa-server).",
+            status: Status::Covered,
+            mechanism: "Répondeur OCSP RFC 6960 s'appuyant sur la CRL publiée par la CA : oe_ocsp_core::Responder.",
+            test: "crates/oe-ocsp-core/tests/against_real_crl.rs (reports_good_status_for_a_non_revoked_certificate, reports_revoked_status_for_a_revoked_certificate)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.5.1", title: "Cérémonie de génération des clés d'autorité" },
             status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-ca-core (rang 3).",
+            mechanism: "Cérémonie scriptée et idempotente (`ca-server ceremony`), produisant un procès-verbal consigné au journal d'audit (empreintes de clés, opérateur, date) : oe_ca_core::ceremony.",
+            test: "crates/oe-ca-core/tests/issuance.rs (every_authority_decision_is_recorded)",
+            target: "Cérémonie en double contrôle, sous témoin indépendant, sur HSM certifié, avec procès-verbal contresigné — écart organisationnel, pas seulement logiciel.",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 412-1", clause: "§4", title: "Structures communes du profil de certificat" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-conformance complet + oe-ca-core (rang 3).",
+            status: Status::Covered,
+            mechanism: "Profils définis en structures Rust compilées, pas en configuration interprétée : oe_ca_core::profile. Contrôle de criticité (basicConstraints, keyUsage, EKU) posé à la main, vérifié par openssl.",
+            test: "crates/oe-ca-core/tests/issuance.rs (openssl_accepts_the_chain_and_honors_revocation)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 412-1", clause: "§4.1", title: "Numéro de série positif et imprévisible" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-ca-core (rang 3).",
+            status: Status::Covered,
+            mechanism: "Numéro de série de 128 bits tiré sur rand::thread_rng et réservé de façon atomique (contrainte d'unicité en base) : oe_ca_core::Issuer::reserve_serial, oe_castore::Store::reserve_serial.",
+            test: "crates/oe-castore/src/lib.rs (reserve_serial_twice_conflicts), crates/oe-castore/tests/postgres.rs (reserve_serial_twice_conflicts)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "RFC 5280", clause: "§4.2.1.1-4.2.1.2", title: "Identifiants de clé de sujet et d'autorité présents" },
             status: Status::Gap,
-            mechanism: NOT_PORTED,
+            mechanism: "subjectKeyIdentifier et authorityKeyIdentifier sont posés sans condition à l'émission et dans la cérémonie (oe_ca_core::extensions, oe_ca_core::signing::subject_key_id), mais aucun test n'affirme spécifiquement leur présence/valeur — seule la CRL (dont l'AKI a un bug corrigé en pratique) l'est indirectement via `openssl verify -crl_check`.",
             test: "",
-            target: "oe-ca-core (rang 3).",
+            target: "Ajouter un test qui décode le certificat émis et vérifie explicitement la présence et la valeur de ces deux extensions.",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 421", clause: "§7.6", title: "Traçabilité de l'heure jusqu'à UTC et suspension en cas de dérive" },
-            status: Status::Gap,
-            mechanism: "Le type oe_timesource::Policy est porté ; le moniteur NTP multi-sources (quorum, MaxOffset, MaxAge) ne l'est pas encore.",
-            test: "",
-            target: "oe-timesource complet (jalon J4).",
+            status: Status::Covered,
+            mechanism: "Surveillance NTP multi-sources avec quorum, seuil de dérive (MaxOffset) et péremption (MaxAge) ; la politique enforce fait refuser chaque demande avec timeNotAvailable : oe_timesource::Monitor.",
+            test: "crates/oe-timesource/src/lib.rs (now_refuses_untraceable_time_in_enforce_mode, now_allows_untraceable_time_in_monitor_mode, new_rejects_quorum_larger_than_source_count), crates/oe-tsa-core/src/lib.rs (test_timestamp_refuses_when_time_is_not_traceable)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 421", clause: "§7.7.2", title: "Profil du certificat de l'unité d'horodatage" },
             status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-tsa-core (jalon J6), en s'appuyant sur oe-conformance complet.",
+            mechanism: "Le profil tsa_signer (id-kp-timeStamping seul et critique, CA:FALSE, keyUsage restreint) est appliqué à l'émission (oe_ca_core::profile) ; contrairement au binaire Go, rien ne re-contrôle ce profil au démarrage de tsa-server (équivalent de CheckTSUCertificate absent).",
+            test: "crates/oe-ca-core/tests/issuance.rs (issue_produces_a_certificate_signed_by_the_issuing_key, openssl_accepts_the_chain_and_honors_revocation)",
+            target: "Porter l'équivalent de CheckTSUCertificate et le brancher à oe_tsa_core::Authority::new, comme le fait cmd/tsa-server (Go) au démarrage.",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 421", clause: "§7.7.1", title: "Génération de la clé TSU dans le module cryptographique" },
@@ -413,52 +409,52 @@ pub fn system_matrix() -> Matrix {
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 422", clause: "§5", title: "Profil du jeton d'horodatage" },
-            status: Status::Gap,
-            mechanism: "oe-rfc3161-asn1 porte TSTInfo/MessageImprint/Accuracy et round-trippe le corpus de fixtures Go, mais l'assemblage du jeton signé (oe-tsa-core) n'est pas encore fait.",
-            test: "crates/oe-rfc3161-asn1 (tests de round-trip)",
-            target: "oe-tsa-core (jalon J6).",
+            status: Status::Covered,
+            mechanism: "TSTInfo complet (politique, imprint, série, genTime UTC, précision), assemblé en CMS SignedData signé par le token ; le jeton est relu avant d'être consigné : oe_rfc3161_asn1, oe_tsa_core::Authority::timestamp.",
+            test: "crates/oe-tsa-core/tests/end_to_end.rs (produces_tokens_accepted_by_openssl_for_every_granted_case_in_the_corpus)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 422", clause: "§7", title: "Protocole d'horodatage RFC 3161 sur HTTP" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-httpapi + bin/tsa-server (jalon J7).",
+            status: Status::Covered,
+            mechanism: "Endpoint /tsa acceptant application/timestamp-query, refus protocolaires rendus en TimeStampResp valides : oe_httpapi, bin/tsa-server.",
+            test: "crates/oe-httpapi/tests/end_to_end.rs (serves_a_verifiable_token_over_http, vérification croisée openssl ts -verify)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI TS 119 312", clause: "§6.2", title: "Longueur de clé suffisante pour la durée de vie visée" },
             status: Status::Gap,
-            mechanism: "oe-config impose OPENEIDAS_KEY_BITS >= 3072 à la configuration, mais CheckPublicKey (contrôle de la CSR et du certificat émis) n'est pas encore porté.",
-            test: "crates/oe-config (tests unitaires de Config::load)",
-            target: "oe-conformance complet, incluant l'équivalent de CheckPublicKey.",
+            mechanism: "oe-config et bin/ca-server/src/config.rs imposent OPENEIDAS_KEY_BITS >= 3072 à la configuration (clé de l'autorité elle-même), mais rien ne contrôle la longueur de la clé publique portée par une CSR soumise à l'enrôlement.",
+            test: "crates/oe-config/src/lib.rs (load_fails_on_undersized_key_bits)",
+            target: "Porter l'équivalent de CheckPublicKey et l'appliquer à oe_raflow::parse_and_verify_csr.",
         },
         Entry {
             requirement: Requirement { standard: "ETSI TS 119 312", clause: "§6.1", title: "Algorithme de signature et fonction de hachage admis" },
             status: Status::Gap,
-            mechanism: NOT_PORTED,
+            mechanism: "Le système n'implémente que RSA/SHA-256 de bout en bout (aucune négociation d'algorithme), ce qui exclut structurellement les algorithmes faibles sans qu'un contrôle explicite et nommé ne le vérifie sur une entrée arbitraire, contrairement à conformance.CheckSignatureAlgorithm (Go).",
             test: "",
-            target: "oe-conformance complet, incluant l'équivalent de CheckSignatureAlgorithm.",
+            target: "Porter l'équivalent de CheckSignatureAlgorithm si le système vient à accepter plus d'un algorithme.",
         },
         Entry {
             requirement: Requirement { standard: "ETSI TS 119 312", clause: "§5.1", title: "Fonction de hachage admise pour l'empreinte soumise" },
-            status: Status::Gap,
-            mechanism: "oe_hsm::DigestAlg restreint déjà la signature à SHA-256/384/512, mais le refus explicite d'une empreinte SHA-1 au niveau protocolaire (badAlg) n'est pas encore porté.",
-            test: "",
-            target: "oe-tsa-core (jalon J6) : rejeter SHA-1 avec le failureInfo RFC 3161 approprié, comme le fait le cas « rejects-sha1 » du corpus de fixtures.",
+            status: Status::Covered,
+            mechanism: "oe_hsm::DigestAlg restreint la signature à SHA-256/384/512 ; une empreinte SHA-1 est refusée avec le failureInfo RFC 3161 badAlg : oe_tsa_core::Authority::timestamp.",
+            test: "crates/oe-tsa-core/src/lib.rs (test_timestamp_rejects_sha1)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "RFC 5280", clause: "§5.1", title: "Liste de révocation signée, numérotée et datée" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-ca-core (rang 3).",
+            status: Status::Covered,
+            mechanism: "CRL régénérée avec cRLNumber, thisUpdate/nextUpdate et signature, republiée même vide : oe_ca_core::Issuer::publish_crl. La signature et le motif de révocation sont revérifiés par openssl.",
+            test: "crates/oe-ca-core/tests/issuance.rs (revoke_then_publish_crl_lists_the_certificate, openssl_accepts_the_chain_and_honors_revocation)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "RFC 6960", clause: "§4.2.2.2", title: "Profil du certificat de signature du répondeur OCSP" },
-            status: Status::Gap,
-            mechanism: NOT_PORTED,
-            test: "",
-            target: "oe-ca-core (rang 3).",
+            status: Status::Covered,
+            mechanism: "Profil ocsp_responder (id-pkix-ocsp-nocheck, pas de CDP/AIA, durée de vie courte) appliqué à l'émission : oe_ca_core::profile::ocsp_responder.",
+            test: "crates/oe-ca-core/tests/issuance.rs (revoke_then_publish_crl_lists_the_certificate, qui émet avec ce profil)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 403-1", clause: "§7", title: "Évaluation par un organisme d'évaluation de la conformité accrédité" },

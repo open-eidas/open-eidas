@@ -8,42 +8,40 @@ on:
 permissions:
   contents: read
 
-env:
-  GO_VERSION: "1.25"
-
 jobs:
   test:
-    name: Format, vet, tests
+    name: Clippy, tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
+          components: clippy
 
-      # crypto11 se lie à un module PKCS#11 via dlopen (CGO) : la compilation
-      # exige un compilateur C, pas le module lui-même.
-      - name: Vérifie le formatage
-        run: |
-          fmt_diff="$(gofmt -l .)"
-          if [ -n "$fmt_diff" ]; then
-            echo "fichiers non formatés (gofmt -l) :"
-            echo "$fmt_diff"
-            exit 1
-          fi
+      - uses: Swatinem/rust-cache@v2
 
-      - name: go vet
-        run: go vet ./...
+      # Pas de --fmt-check : le style établi par ce dépôt dépasse largement
+      # la largeur de ligne par défaut de rustfmt (voir la discussion dans
+      # l'historique de commits) — clippy est le filet de qualité qui compte
+      # réellement ici, et il est tenu à zéro avertissement depuis le début
+      # du portage.
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: go test
-        run: go test -race -cover ./...
+      # Les tests qui exigent SoftHSM2/PostgreSQL réels (feature `postgres`,
+      # crates/oe-hsm/tests/pkcs11_integration.rs) sont explicitement ignorés
+      # par défaut ou gardés par une variable d'environnement absente en CI ;
+      # ce job couvre donc la logique métier, pas l'intégration matérielle —
+      # celle-ci est revalidée par les jobs de démonstration (kind, compose)
+      # plus bas, qui tournent en conditions réelles.
+      - name: cargo test
+        run: cargo test --workspace
 
-      - name: govulncheck
-        uses: golang/govulncheck-action@v1
+      - name: cargo audit
+        uses: rustsec/audit-check@v2
         with:
-          go-version-input: ${{ env.GO_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   conformance:
     name: Matrice de conformité ETSI
@@ -51,23 +49,21 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
 
       # La sous-commande sort en échec si la matrice est incohérente : une
       # exigence déclarée couverte sans mécanisme ni test nommé, ou un écart
       # sans cible de levée. C'est ce qui empêche docs/CONFORMITE-ETSI.md de
       # se vider de son sens au fil des modifications.
       - name: Vérifie la cohérence de la matrice
-        run: go run ./cmd/ca-server conformance
+        run: cargo run --bin ca-server -- conformance
 
       # Le document publié est rendu depuis le code : s'il en diverge, c'est
       # qu'il a été modifié à la main, ce qui n'a pas de sens ici.
       - name: Vérifie que docs/CONFORMITE-ETSI.md est à jour
         run: |
-          go run ./cmd/ca-server conformance --markdown > /tmp/conformite.md
+          cargo run --bin ca-server -- conformance --markdown > /tmp/conformite.md
           if ! diff -u docs/CONFORMITE-ETSI.md /tmp/conformite.md; then
             echo "docs/CONFORMITE-ETSI.md est désynchronisé : lancez 'make conformance-doc'" >&2
             exit 1
