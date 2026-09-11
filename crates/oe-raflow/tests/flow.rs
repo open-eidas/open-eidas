@@ -161,14 +161,14 @@ async fn issuing_a_renewal_revokes_the_previous_certificate_for_the_same_subject
     let opened1 = flow.submit(&csr1, profile::PROFILE_TSA_SIGNER, &sig1).await.unwrap();
     flow.decider().approve(&opened1.transaction_id, "operateur-ra", "").await.unwrap();
     let issued1 = flow.submit(&csr1, profile::PROFILE_TSA_SIGNER, &sig1).await.unwrap();
-    let serial1 = issued1.certificate.unwrap().tbs_certificate().serial_number().as_bytes().to_vec();
+    let serial1 = oe_ca_core::canonical_serial(issued1.certificate.unwrap().tbs_certificate().serial_number());
 
     let (csr2, _key2) = build_csr("tsu.example.test");
     let sig2 = oe_raflow::signature(&csr2, HMAC_SECRET);
     let opened2 = flow.submit(&csr2, profile::PROFILE_TSA_SIGNER, &sig2).await.unwrap();
     flow.decider().approve(&opened2.transaction_id, "operateur-ra", "").await.unwrap();
     let issued2 = flow.submit(&csr2, profile::PROFILE_TSA_SIGNER, &sig2).await.unwrap();
-    let serial2 = issued2.certificate.unwrap().tbs_certificate().serial_number().as_bytes().to_vec();
+    let serial2 = oe_ca_core::canonical_serial(issued2.certificate.unwrap().tbs_certificate().serial_number());
 
     assert_ne!(serial1, serial2);
     let stored1 = store.certificate(&serial1).await.unwrap();

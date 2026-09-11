@@ -1,0 +1,37 @@
+[package]
+name = "ca-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Portage Rust de cmd/ca-server : autorité de certification et d'enregistrement."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ca-server"
+path = "src/main.rs"
+
+[dependencies]
+oe-hsm = { path = "../../crates/oe-hsm" }
+oe-certs = { path = "../../crates/oe-certs" }
+oe-castore = { path = "../../crates/oe-castore", features = ["postgres"] }
+oe-ca-core = { path = "../../crates/oe-ca-core" }
+oe-raflow = { path = "../../crates/oe-raflow" }
+oe-audit = { path = "../../crates/oe-audit" }
+oe-conformance = { path = "../../crates/oe-conformance" }
+clap = { version = "4", features = ["derive"] }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+der = { version = "0.8", features = ["pem", "std"] }
+x509-cert = "0.3"
+time = { version = "0.3", features = ["std", "formatting"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

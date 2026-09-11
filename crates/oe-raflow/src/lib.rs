@@ -367,7 +367,7 @@ impl Flow {
         let previous = self.opts.store.active_by_subject(&subject_dn, now).await?;
 
         let cert = self.opts.issuer.issue(spki_der, cn, profile, &r.transaction_id).await?;
-        let serial = cert.tbs_certificate().serial_number().as_bytes().to_vec();
+        let serial = oe_ca_core::canonical_serial(cert.tbs_certificate().serial_number());
 
         let mut updated = r.clone();
         updated.state = RequestState::Issued;

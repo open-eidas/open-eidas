@@ -142,7 +142,7 @@ async fn issue_produces_a_certificate_signed_by_the_issuing_key() {
 
     assert_eq!(cert.tbs_certificate().issuer().to_string(), issuer.certificate().tbs_certificate().subject().to_string());
 
-    let serial = cert.tbs_certificate().serial_number().as_bytes().to_vec();
+    let serial = oe_ca_core::canonical_serial(cert.tbs_certificate().serial_number());
     let stored = store.certificate(&serial).await.expect("le certificat doit être persisté");
     assert_eq!(stored.status, oe_castore::CertificateStatus::Issued);
     assert_eq!(stored.request_transaction_id, "txn-1");
@@ -166,7 +166,7 @@ async fn revoke_then_publish_crl_lists_the_certificate() {
     let public_key_der = end_entity.public_key_der().unwrap();
     let ocsp_profile = profile::ocsp_responder();
     let cert = issuer.issue(&public_key_der, "ocsp.example.test", &ocsp_profile, "txn-2").await.unwrap();
-    let serial = cert.tbs_certificate().serial_number().as_bytes().to_vec();
+    let serial = oe_ca_core::canonical_serial(cert.tbs_certificate().serial_number());
 
     let empty_crl = issuer.publish_crl().await.expect("une CRL vide doit pouvoir être publiée");
     let parsed_empty: x509_cert::crl::CertificateList = x509_cert::crl::CertificateList::from_der(&empty_crl.der).unwrap();
@@ -180,7 +180,7 @@ async fn revoke_then_publish_crl_lists_the_certificate() {
     let parsed: x509_cert::crl::CertificateList = x509_cert::crl::CertificateList::from_der(&crl.der).unwrap();
     let revoked = parsed.tbs_cert_list.revoked_certificates.expect("la CRL doit lister le certificat révoqué");
     assert_eq!(revoked.len(), 1);
-    assert_eq!(revoked[0].serial_number.as_bytes(), serial.as_slice());
+    assert_eq!(oe_ca_core::canonical_serial(&revoked[0].serial_number), serial);
 
     let current = issuer.current_crl().await.unwrap();
     assert_eq!(current.number, crl.number);
@@ -195,7 +195,7 @@ async fn revoke_is_idempotent_and_keeps_first_reason() {
     let public_key_der = end_entity.public_key_der().unwrap();
     let tsa_profile = profile::tsa_signer();
     let cert = issuer.issue(&public_key_der, "tsu2.example.test", &tsa_profile, "txn-3").await.unwrap();
-    let serial = cert.tbs_certificate().serial_number().as_bytes().to_vec();
+    let serial = oe_ca_core::canonical_serial(cert.tbs_certificate().serial_number());
 
     issuer.revoke(&serial, 1, "test-operator", "").await.unwrap();
     issuer.revoke(&serial, 5, "test-operator", "").await.unwrap();
@@ -238,7 +238,7 @@ async fn openssl_accepts_the_chain_and_honors_revocation() {
     let public_key_der = end_entity.public_key_der().unwrap();
     let tsa_profile = profile::tsa_signer();
     let leaf = issuer.issue(&public_key_der, "leaf.example.test", &tsa_profile, "txn-openssl").await.unwrap();
-    let serial = leaf.tbs_certificate().serial_number().as_bytes().to_vec();
+    let serial = oe_ca_core::canonical_serial(leaf.tbs_certificate().serial_number());
 
     let dir = std::env::temp_dir().join(format!("oe-ca-core-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -363,7 +363,7 @@ async fn every_authority_decision_is_recorded() {
     let public_key_der = end_entity.public_key_der().unwrap();
     let tsa_profile = profile::tsa_signer();
     let cert = issuer.issue(&public_key_der, "audit.example.test", &tsa_profile, "txn-audit").await.unwrap();
-    let serial = cert.tbs_certificate().serial_number().as_bytes().to_vec();
+    let serial = oe_ca_core::canonical_serial(cert.tbs_certificate().serial_number());
     issuer.revoke(&serial, 1, "test-operator", "test").await.unwrap();
     issuer.publish_crl().await.unwrap();
 
@@ -380,7 +380,7 @@ async fn revoke_rejects_empty_operator() {
     let public_key_der = end_entity.public_key_der().unwrap();
     let tsa_profile = profile::tsa_signer();
     let cert = issuer.issue(&public_key_der, "tsu3.example.test", &tsa_profile, "txn-4").await.unwrap();
-    let serial = cert.tbs_certificate().serial_number().as_bytes().to_vec();
+    let serial = oe_ca_core::canonical_serial(cert.tbs_certificate().serial_number());
 
     let err = issuer.revoke(&serial, 1, "", "").await;
     assert!(err.is_err(), "révoquer sans identité d'opérateur doit être refusé — traçabilité de la décision");

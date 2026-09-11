@@ -92,6 +92,21 @@ fn to_x509_time(t: time::OffsetDateTime) -> Result<Time, CaError> {
     Time::try_from(std::time::SystemTime::from(t)).map_err(CaError::Der)
 }
 
+/// Octets significatifs d'un numéro de série, sans l'éventuel `0x00` de tête
+/// que le DER ajoute pour garder un entier positif (RFC 5280 impose un
+/// INTEGER *signé*, donc un bit de poids fort à 1 exige ce remplissage) —
+/// c'est cette forme, et non l'encodage DER brut, que tout outil tiers
+/// affiche (`openssl x509 -serial`, `asn1parse`) et donc celle qu'un
+/// opérateur colle dans `ca-server revoke`. Utilisée comme clé de
+/// `castore`, jamais l'encodage DER intégral, pour que les deux
+/// représentations coïncident.
+pub fn canonical_serial(sn: &SerialNumber) -> Vec<u8> {
+    match sn.as_bytes() {
+        [0x00, rest @ ..] if !rest.is_empty() && rest[0] & 0x80 != 0 => rest.to_vec(),
+        bytes => bytes.to_vec(),
+    }
+}
+
 /// Vérifie que la clé publique d'un certificat correspond à celle du token
 /// — reproduit `matchesSigner` (Go).
 pub fn matches_signer(cert_spki_der: &[u8], signer: &dyn SigningToken) -> Result<(), CaError> {
@@ -184,13 +199,7 @@ impl Issuer {
     /// registre.
     pub async fn issue(&self, csr_public_key_der: &[u8], subject_cn: &str, profile: &Profile, transaction_id: &str) -> Result<Certificate, CaError> {
         let serial = self.reserve_serial(profile.name).await?;
-        // Clé de recherche dans le magasin : l'encodage DER canonique
-        // (`SerialNumber::as_bytes`), pas les octets aléatoires bruts — un
-        // entier positif dont le bit de poids fort est à 1 est ré-encodé
-        // avec un octet `0x00` de tête pour rester positif en DER, et c'est
-        // cette forme que `revoke`/`certificate` retrouveront plus tard en
-        // relisant `cert.tbs_certificate().serial_number().as_bytes()`.
-        let serial_bytes = serial.as_bytes().to_vec();
+        let serial_bytes = canonical_serial(&serial);
 
         let subject = build_subject(subject_cn, profile.organizational_unit, profile.organization, profile.country)?;
         let issuer_name = self.opts.certificate.tbs_certificate().subject().clone();
@@ -262,9 +271,10 @@ impl Issuer {
             rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut bytes);
             bytes[0] |= 0x80; // bit de poids fort forcé : strictement positif, entropie pleine.
             let serial = SerialNumber::new(&bytes)?;
-            // Réserve la forme canonique DER, pas les octets bruts : c'est
-            // cette même clé que relira `issue` juste après.
-            match self.opts.store.reserve_serial(&serial.as_bytes().to_vec(), profile).await {
+            // Réserve la forme canonique (voir `canonical_serial`) : c'est
+            // cette même clé que relira `issue` juste après, et celle que
+            // tout outil tiers affichera pour ce certificat.
+            match self.opts.store.reserve_serial(&canonical_serial(&serial), profile).await {
                 Ok(()) => return Ok(serial),
                 Err(StoreError::SerialTaken) => continue,
                 Err(e) => return Err(e.into()),

@@ -143,20 +143,37 @@ pub struct Pkcs11Token {
     key_label: String,
 }
 
+/// `C_Initialize` est un appel PROCESSUS entier, pas par instance de
+/// contexte : un second appel sans `C_Finalize` entre les deux échoue avec
+/// `CKR_CRYPTOKI_ALREADY_INITIALIZED` — constaté en pratique dès qu'un
+/// même processus ouvre deux tokens PKCS#11 distincts (la cérémonie de
+/// `ca-server` ouvre la racine ET l'émettrice). Ce cache, tenu pour la
+/// durée du processus et indexé par chemin de module, garantit qu'un seul
+/// contexte `Pkcs11` initialisé existe par bibliothèque chargée, partagé
+/// entre tous les tokens ouverts sur ce module — reproduit le comportement
+/// de `crypto11.Configure` (Go), qui réutilise de même un contexte partagé.
+fn shared_context(module_path: &str) -> Result<Pkcs11, cryptoki::error::Error> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CONTEXTS: OnceLock<Mutex<HashMap<String, Pkcs11>>> = OnceLock::new();
+    let contexts = CONTEXTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut contexts = contexts.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = contexts.get(module_path) {
+        return Ok(existing.clone());
+    }
+    let pkcs11 = Pkcs11::new(module_path)?;
+    pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))?;
+    contexts.insert(module_path.to_string(), pkcs11.clone());
+    Ok(pkcs11)
+}
+
 impl Pkcs11Token {
     pub fn open(o: &Options) -> Result<Self, HsmError> {
-        let pkcs11 = Pkcs11::new(&o.module_path).map_err(|source| HsmError::Open {
+        let pkcs11 = shared_context(&o.module_path).map_err(|source| HsmError::Open {
             module_path: o.module_path.clone(),
             token_label: o.token_label.clone(),
             source,
         })?;
-        pkcs11
-            .initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
-            .map_err(|source| HsmError::Open {
-                module_path: o.module_path.clone(),
-                token_label: o.token_label.clone(),
-                source,
-            })?;
 
         let slot = pkcs11
             .get_slots_with_token()?

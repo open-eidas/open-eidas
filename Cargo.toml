@@ -19,6 +19,7 @@ members = [
     "crates/oe-raflow",
     "bin/tsa-server",
     "bin/ocsp-responder",
+    "bin/ca-server",
 ]
 
 [workspace.package]
