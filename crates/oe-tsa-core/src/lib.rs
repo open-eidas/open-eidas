@@ -138,6 +138,12 @@ impl Authority {
             ));
         }
 
+        // Un certificat chargé depuis le disque peut venir d'ailleurs que de
+        // cette PKI : le re-contrôler au démarrage, pas seulement lui faire
+        // confiance parce qu'il a été émis un jour — reproduit
+        // `CheckTSUCertificate` appelée par `cmd/tsa-server` (Go).
+        oe_conformance::check_tsu_certificate("certificat TSU", &opts.certificate)?;
+
         Ok(Authority { opts })
     }
 

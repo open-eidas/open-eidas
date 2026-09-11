@@ -291,6 +291,199 @@ pub fn check_audit_retention(retention: time::Duration) -> Result<(), String> {
     Ok(())
 }
 
+/// Plafonds de durée de vie appliqués par le moteur d'émission. Aucune norme
+/// ne fixe ces valeurs au jour près pour une TSU ; elles sont posées ici de
+/// façon explicite et conservatrice (identiques à
+/// `internal/conformance/certificate.go`, Go), afin qu'un certificat à durée
+/// aberrante soit refusé plutôt que produit — un filet indépendant de ce que
+/// le profil d'émission prétend appliquer, puisqu'il relit le certificat
+/// réellement signé, pas les paramètres qui l'ont construit.
+pub const MAX_END_ENTITY_LIFETIME: time::Duration = time::Duration::days(39 * 30);
+pub const MAX_OCSP_LIFETIME: time::Duration = time::Duration::days(6 * 30);
+pub const MAX_ISSUING_CA_LIFETIME: time::Duration = time::Duration::days(15 * 365);
+pub const MAX_ROOT_CA_LIFETIME: time::Duration = time::Duration::days(25 * 365);
+
+/// ETSI EN 319 411-1 §6.3.2 : la durée de vie effective d'un certificat déjà
+/// signé (pas celle que son profil visait) ne doit pas dépasser le plafond
+/// applicable à sa catégorie.
+pub fn check_certificate_lifetime(
+    subject: &str,
+    not_before: time::OffsetDateTime,
+    not_after: time::OffsetDateTime,
+    max: time::Duration,
+) -> Result<(), String> {
+    let life = not_after - not_before;
+    if life > max {
+        return Err(format!(
+            "{subject}: durée de vie de {} jours, plafond {} jours",
+            life.whole_days(),
+            max.whole_days()
+        ));
+    }
+    Ok(())
+}
+
+/// OID des algorithmes de signature admis par ce système. RSA/SHA-256 est le
+/// seul algorithme que `oe-hsm` sait produire à ce stade — cette liste est
+/// donc plus étroite que `internal/conformance.admittedSignatureAlgorithms`
+/// (Go), qui admet aussi ECDSA et RSA-PSS : rien ici n'a encore de moyen de
+/// les produire, les admettre serait prématuré.
+const ADMITTED_SIGNATURE_ALGORITHM_OIDS: &[&str] = &[
+    "1.2.840.113549.1.1.11", // sha256WithRSAEncryption
+    "1.2.840.113549.1.1.12", // sha384WithRSAEncryption
+    "1.2.840.113549.1.1.13", // sha512WithRSAEncryption
+];
+
+/// ETSI TS 119 312 §6.1 : l'algorithme de signature d'un objet (certificat,
+/// CSR, CRL) doit figurer parmi les suites admises — SHA-1 et MD5 en sont
+/// exclus explicitement, jamais tolérés par omission.
+pub fn check_signature_algorithm(subject: &str, algorithm_oid: &str) -> Result<(), String> {
+    if !ADMITTED_SIGNATURE_ALGORITHM_OIDS.contains(&algorithm_oid) {
+        return Err(format!("{subject}: algorithme de signature {algorithm_oid} refusé (SHA-1 et MD5 sont proscrits par ETSI TS 119 312)"));
+    }
+    Ok(())
+}
+
+fn x509_time_to_offset_date_time(t: &x509_cert::time::Time) -> time::OffsetDateTime {
+    let dt = t.to_date_time();
+    time::OffsetDateTime::from_unix_timestamp(dt.unix_duration().as_secs() as i64)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
+}
+
+fn find_extension<'a>(
+    cert: &'a x509_cert::Certificate,
+    oid: &str,
+) -> Option<&'a x509_cert::ext::Extension> {
+    let target = der::asn1::ObjectIdentifier::new(oid).ok()?;
+    cert.tbs_certificate()
+        .extensions()?
+        .iter()
+        .find(|e| e.extn_id == target)
+}
+
+/// ETSI EN 319 421 §7.7.2 : le certificat de l'unité d'horodatage relit et
+/// re-contrôlé (pas seulement construit une fois à l'émission) doit porter
+/// CA:FALSE, un `extendedKeyUsage` critique contenant **seulement**
+/// id-kp-timeStamping, un `keyUsage` restreint à
+/// digitalSignature/nonRepudiation, et une durée de vie plafonnée —
+/// reproduit `CheckTSUCertificate` (Go). Appelé au démarrage de
+/// `tsa-server`, pas seulement à l'émission côté `ca-server` : un
+/// certificat chargé depuis le disque peut venir d'ailleurs.
+pub fn check_tsu_certificate(subject: &str, cert: &x509_cert::Certificate) -> Result<(), String> {
+    use der::Decode;
+    use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage, KeyUsages};
+
+    const OID_TIME_STAMPING: &str = "1.3.6.1.5.5.7.3.8";
+
+    check_signature_algorithm(subject, &cert.signature_algorithm().oid.to_string())?;
+
+    let not_before = x509_time_to_offset_date_time(&cert.tbs_certificate().validity().not_before);
+    let not_after = x509_time_to_offset_date_time(&cert.tbs_certificate().validity().not_after);
+    check_certificate_lifetime(subject, not_before, not_after, MAX_END_ENTITY_LIFETIME)?;
+
+    let bc_ext = find_extension(cert, "2.5.29.19")
+        .ok_or_else(|| format!("{subject}: extension basicConstraints absente"))?;
+    let bc = BasicConstraints::from_der(bc_ext.extn_value.as_bytes())
+        .map_err(|e| format!("{subject}: basicConstraints illisible: {e}"))?;
+    if bc.ca {
+        return Err(format!(
+            "{subject}: le certificat TSU porte basicConstraints CA:TRUE"
+        ));
+    }
+
+    let eku_ext = find_extension(cert, "2.5.29.37")
+        .ok_or_else(|| format!("{subject}: extension extendedKeyUsage absente"))?;
+    if !eku_ext.critical {
+        return Err(format!(
+            "{subject}: extension extendedKeyUsage non marquée critique"
+        ));
+    }
+    let eku = ExtendedKeyUsage::from_der(eku_ext.extn_value.as_bytes())
+        .map_err(|e| format!("{subject}: extendedKeyUsage illisible: {e}"))?;
+    let time_stamping =
+        der::asn1::ObjectIdentifier::new(OID_TIME_STAMPING).expect("OID constant invalide");
+    if eku.0.as_slice() != [time_stamping] {
+        return Err(format!(
+            "{subject}: extendedKeyUsage doit contenir uniquement id-kp-timeStamping"
+        ));
+    }
+
+    let ku_ext = find_extension(cert, "2.5.29.15")
+        .ok_or_else(|| format!("{subject}: extension keyUsage absente"))?;
+    let ku = KeyUsage::from_der(ku_ext.extn_value.as_bytes())
+        .map_err(|e| format!("{subject}: keyUsage illisible: {e}"))?;
+    let allowed = KeyUsages::DigitalSignature | KeyUsages::NonRepudiation;
+    if ku.0.is_empty() {
+        return Err(format!("{subject}: keyUsage vide"));
+    }
+    if !allowed.contains(ku.0) {
+        return Err(format!(
+            "{subject}: keyUsage déborde de digitalSignature/nonRepudiation"
+        ));
+    }
+
+    Ok(())
+}
+
+/// RFC 6960 §4.2.2.2 : le certificat de signature du répondeur OCSP relu et
+/// re-contrôlé doit porter CA:FALSE, `extendedKeyUsage` id-kp-OCSPSigning,
+/// l'extension `id-pkix-ocsp-nocheck`, `keyUsage` incluant digitalSignature,
+/// et une durée de vie plafonnée courte (§4.2.2.2.1 — la dispense de
+/// vérification de révocation qu'accorde ocsp-nocheck a pour contrepartie
+/// une vie courte) — reproduit `CheckOCSPResponderCertificate` (Go).
+pub fn check_ocsp_responder_certificate(
+    subject: &str,
+    cert: &x509_cert::Certificate,
+) -> Result<(), String> {
+    use der::Decode;
+    use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage, KeyUsages};
+
+    const OID_OCSP_SIGNING: &str = "1.3.6.1.5.5.7.3.9";
+    const OID_OCSP_NO_CHECK: &str = "1.3.6.1.5.5.7.48.1.5";
+
+    check_signature_algorithm(subject, &cert.signature_algorithm().oid.to_string())?;
+
+    let not_before = x509_time_to_offset_date_time(&cert.tbs_certificate().validity().not_before);
+    let not_after = x509_time_to_offset_date_time(&cert.tbs_certificate().validity().not_after);
+    check_certificate_lifetime(subject, not_before, not_after, MAX_OCSP_LIFETIME)?;
+
+    let bc_ext = find_extension(cert, "2.5.29.19")
+        .ok_or_else(|| format!("{subject}: extension basicConstraints absente"))?;
+    let bc = BasicConstraints::from_der(bc_ext.extn_value.as_bytes())
+        .map_err(|e| format!("{subject}: basicConstraints illisible: {e}"))?;
+    if bc.ca {
+        return Err(format!(
+            "{subject}: le certificat du répondeur porte basicConstraints CA:TRUE"
+        ));
+    }
+
+    let eku_ext = find_extension(cert, "2.5.29.37")
+        .ok_or_else(|| format!("{subject}: extension extendedKeyUsage absente"))?;
+    let eku = ExtendedKeyUsage::from_der(eku_ext.extn_value.as_bytes())
+        .map_err(|e| format!("{subject}: extendedKeyUsage illisible: {e}"))?;
+    let ocsp_signing =
+        der::asn1::ObjectIdentifier::new(OID_OCSP_SIGNING).expect("OID constant invalide");
+    if !eku.0.contains(&ocsp_signing) {
+        return Err(format!(
+            "{subject}: extendedKeyUsage id-kp-OCSPSigning absent"
+        ));
+    }
+
+    if find_extension(cert, OID_OCSP_NO_CHECK).is_none() {
+        return Err(format!("{subject}: extension id-pkix-ocsp-nocheck absente"));
+    }
+
+    let ku_ext = find_extension(cert, "2.5.29.15")
+        .ok_or_else(|| format!("{subject}: extension keyUsage absente"))?;
+    let ku = KeyUsage::from_der(ku_ext.extn_value.as_bytes())
+        .map_err(|e| format!("{subject}: keyUsage illisible: {e}"))?;
+    if !ku.0.contains(KeyUsages::DigitalSignature) {
+        return Err(format!("{subject}: keyUsage ne porte pas digitalSignature"));
+    }
+
+    Ok(())
+}
+
 /// La matrice de conformité applicable au portage Rust, à l'instant présent
 /// du chantier (voir la note de module : mise à jour à chaque jalon, jamais
 /// figée).
@@ -354,10 +547,10 @@ pub fn system_matrix() -> Matrix {
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.3.2", title: "Durée de vie du certificat plafonnée" },
-            status: Status::Gap,
-            mechanism: "La durée de vie est bornée par le profil au moment de la construction (oe_ca_core::Issuer::issue), mais rien ne relit ni ne re-contrôle le certificat produit après signature — contrairement au binaire Go (findings := profile.Check(...)).",
-            test: "",
-            target: "Porter l'équivalent de profile.Check/CheckLifetime (oe-conformance) et l'appliquer après signature, avant l'enregistrement en base.",
+            status: Status::Covered,
+            mechanism: "oe_conformance::check_certificate_lifetime relit la validité du certificat réellement signé et la compare à un plafond indépendant du profil (MAX_END_ENTITY_LIFETIME/MAX_OCSP_LIFETIME) ; appelé via le champ Profile::check de oe_ca_core::Issuer::issue, comme profile.Check (Go).",
+            test: "crates/oe-conformance/src/lib.rs (check_certificate_lifetime_accepts_within_the_ceiling, check_certificate_lifetime_rejects_beyond_the_ceiling), crates/oe-conformance/tests/tsu_certificate.rs",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.3.9", title: "Motif de révocation consigné" },
@@ -417,10 +610,10 @@ pub fn system_matrix() -> Matrix {
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 421", clause: "§7.7.2", title: "Profil du certificat de l'unité d'horodatage" },
-            status: Status::Gap,
-            mechanism: "Le profil tsa_signer (id-kp-timeStamping seul et critique, CA:FALSE, keyUsage restreint) est appliqué à l'émission (oe_ca_core::profile) ; contrairement au binaire Go, rien ne re-contrôle ce profil au démarrage de tsa-server (équivalent de CheckTSUCertificate absent).",
-            test: "crates/oe-ca-core/tests/issuance.rs (issue_produces_a_certificate_signed_by_the_issuing_key, openssl_accepts_the_chain_and_honors_revocation)",
-            target: "Porter l'équivalent de CheckTSUCertificate et le brancher à oe_tsa_core::Authority::new, comme le fait cmd/tsa-server (Go) au démarrage.",
+            status: Status::Covered,
+            mechanism: "oe_conformance::check_tsu_certificate (id-kp-timeStamping seul et critique, CA:FALSE, keyUsage restreint, durée de vie plafonnée) est appliquée à l'émission (Profile::check) ET re-contrôlée au démarrage de tsa-server (oe_tsa_core::Authority::new) — un certificat chargé depuis le disque peut venir d'ailleurs.",
+            test: "crates/oe-conformance/tests/tsu_certificate.rs (accepts_a_certificate_issued_with_the_tsa_signer_profile, rejects_a_certificate_issued_with_the_ocsp_responder_profile)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 421", clause: "§7.7.1", title: "Génération de la clé TSU dans le module cryptographique" },
@@ -452,10 +645,10 @@ pub fn system_matrix() -> Matrix {
         },
         Entry {
             requirement: Requirement { standard: "ETSI TS 119 312", clause: "§6.1", title: "Algorithme de signature et fonction de hachage admis" },
-            status: Status::Gap,
-            mechanism: "Le système n'implémente que RSA/SHA-256 de bout en bout (aucune négociation d'algorithme), ce qui exclut structurellement les algorithmes faibles sans qu'un contrôle explicite et nommé ne le vérifie sur une entrée arbitraire, contrairement à conformance.CheckSignatureAlgorithm (Go).",
-            test: "",
-            target: "Porter l'équivalent de CheckSignatureAlgorithm si le système vient à accepter plus d'un algorithme.",
+            status: Status::Covered,
+            mechanism: "oe_conformance::check_signature_algorithm vérifie explicitement l'OID de signature d'un certificat contre la liste des suites admises (SHA-256/384/512 avec RSA), appelée via Profile::check à l'émission et à la re-vérification.",
+            test: "crates/oe-conformance/src/lib.rs (check_signature_algorithm_accepts_sha256_with_rsa, check_signature_algorithm_rejects_sha1)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI TS 119 312", clause: "§5.1", title: "Fonction de hachage admise pour l'empreinte soumise" },
@@ -474,8 +667,8 @@ pub fn system_matrix() -> Matrix {
         Entry {
             requirement: Requirement { standard: "RFC 6960", clause: "§4.2.2.2", title: "Profil du certificat de signature du répondeur OCSP" },
             status: Status::Covered,
-            mechanism: "Profil ocsp_responder (id-pkix-ocsp-nocheck, pas de CDP/AIA, durée de vie courte) appliqué à l'émission : oe_ca_core::profile::ocsp_responder.",
-            test: "crates/oe-ca-core/tests/issuance.rs (revoke_then_publish_crl_lists_the_certificate, qui émet avec ce profil)",
+            mechanism: "Profil ocsp_responder (id-pkix-ocsp-nocheck, pas de CDP/AIA, durée de vie courte) appliqué à l'émission, re-contrôlé après signature par oe_conformance::check_ocsp_responder_certificate (Profile::check).",
+            test: "crates/oe-ca-core/tests/issuance.rs (revoke_then_publish_crl_lists_the_certificate, qui émet avec ce profil), crates/oe-conformance/tests/tsu_certificate.rs (rejects_a_certificate_issued_with_the_ocsp_responder_profile, qui prouve que check_ocsp_responder_certificate distingue bien ce profil de tsa_signer)",
             target: "",
         },
         Entry {
@@ -508,6 +701,41 @@ mod tests {
     fn check_audit_retention_rejects_unconfigured_and_short_durations() {
         assert!(check_audit_retention(time::Duration::ZERO).is_err());
         assert!(check_audit_retention(time::Duration::hours(24)).is_err());
+    }
+
+    #[test]
+    fn check_certificate_lifetime_accepts_within_the_ceiling() {
+        let now = time::OffsetDateTime::UNIX_EPOCH;
+        assert!(check_certificate_lifetime(
+            "t",
+            now,
+            now + time::Duration::days(365),
+            MAX_END_ENTITY_LIFETIME
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn check_certificate_lifetime_rejects_beyond_the_ceiling() {
+        let now = time::OffsetDateTime::UNIX_EPOCH;
+        assert!(check_certificate_lifetime(
+            "t",
+            now,
+            now + MAX_END_ENTITY_LIFETIME + time::Duration::days(1),
+            MAX_END_ENTITY_LIFETIME
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn check_signature_algorithm_accepts_sha256_with_rsa() {
+        assert!(check_signature_algorithm("t", "1.2.840.113549.1.1.11").is_ok());
+    }
+
+    #[test]
+    fn check_signature_algorithm_rejects_sha1() {
+        // sha1WithRSAEncryption : jamais dans la liste admise.
+        assert!(check_signature_algorithm("t", "1.2.840.113549.1.1.5").is_err());
     }
 
     #[test]

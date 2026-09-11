@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 oe-rfc3161-asn1 = { path = "../oe-rfc3161-asn1" }
 oe-hsm = { path = "../oe-hsm" }
+oe-conformance = { path = "../oe-conformance" }
 der = "0.8"
 x509-cert = "0.3"
 spki = "0.8"

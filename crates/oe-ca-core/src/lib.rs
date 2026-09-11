@@ -4,11 +4,14 @@
 //! 3 de l'ordre de portage post-`tsa-server`/`ocsp-responder`
 //! (`/home/philippe/.claude/plans/witty-hopping-nest.md`).
 //!
-//! **Écart assumé face à `internal/conformance`** : la re-vérification ETSI
-//! du certificat/CRL réellement produit (`conformance.Check*`) n'est pas
-//! encore portée (`oe-conformance` la déclare `Gap`, jalon J3) — ce moteur
-//! émet donc sans ce filet final pour l'instant, à l'identique de
-//! `oe-tsa-core::Authority::new` face à `CheckTSUCertificate`.
+//! **Re-vérification ETSI du certificat réellement signé** : chaque profil
+//! porte un champ `check` (`oe_conformance::check_tsu_certificate`,
+//! `check_ocsp_responder_certificate`) appelé juste après signature, avant
+//! tout enregistrement — reproduit `Profile.Check` (Go). Un certificat non
+//! conforme est refusé (`ca.issuance_refused` au journal) plutôt qu'émis. La
+//! CRL n'a pas d'équivalent porté : la CA maîtrise entièrement sa
+//! construction (`publish_crl`), contrairement au cas d'une CSR d'origine
+//! externe.
 //!
 //! **Clé privée jamais en mémoire du processus** : la signature d'un
 //! certificat ou d'une CRL passe par [`signing::sign_with_token`], qui
@@ -295,6 +298,25 @@ impl Issuer {
         )
         .map_err(|e| CaError::Other(e.to_string()))?;
         let cert = signing::sign_with_token(builder, self.opts.signer.as_ref(), &issuer_spki_der)?;
+
+        // Relit et re-contrôle le certificat réellement signé selon les
+        // règles ETSI propres à son profil, avant tout enregistrement —
+        // jamais se fier aux seuls paramètres qui l'ont construit.
+        let check_subject = format!("certificat {} émis pour {}", profile.name, subject_cn);
+        if let Err(reason) = (profile.check)(&check_subject, &cert) {
+            self.record(
+                "ca.issuance_refused",
+                serde_json::json!({
+                    "profil": profile.name,
+                    "sujet": cert.tbs_certificate().subject().to_string(),
+                    "motif": reason,
+                    "demande": transaction_id,
+                }),
+            );
+            return Err(CaError::Other(format!(
+                "le certificat produit n'est pas conforme, émission annulée: {reason}"
+            )));
+        }
 
         self.opts
             .store

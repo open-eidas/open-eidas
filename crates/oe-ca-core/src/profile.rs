@@ -38,6 +38,13 @@ pub struct Profile {
     pub include_crl_distribution_point: bool,
     pub include_ca_issuers: bool,
     pub include_ocsp_responder: bool,
+
+    /// Applique les règles ETSI propres à ce profil au certificat
+    /// réellement signé — reproduit le champ `Check` de `ca.Profile` (Go).
+    /// Appelé juste après signature, avant tout enregistrement : émettre
+    /// puis re-vérifier ce qui a été effectivement encodé, jamais se fier
+    /// aux seuls paramètres qui l'ont construit.
+    pub check: fn(&str, &x509_cert::Certificate) -> Result<(), String>,
 }
 
 pub const OID_EKU_TIME_STAMPING: &str = "1.3.6.1.5.5.7.3.8";
@@ -68,6 +75,7 @@ pub fn tsa_signer() -> Profile {
         include_crl_distribution_point: true,
         include_ca_issuers: true,
         include_ocsp_responder: true,
+        check: oe_conformance::check_tsu_certificate,
     }
 }
 
@@ -89,6 +97,7 @@ pub fn ocsp_responder() -> Profile {
         include_crl_distribution_point: false,
         include_ca_issuers: false,
         include_ocsp_responder: false,
+        check: oe_conformance::check_ocsp_responder_certificate,
     }
 }
 

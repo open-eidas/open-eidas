@@ -14,6 +14,7 @@ workspace = true
 oe-hsm = { path = "../oe-hsm" }
 oe-certs = { path = "../oe-certs" }
 oe-castore = { path = "../oe-castore" }
+oe-conformance = { path = "../oe-conformance" }
 der = "0.8"
 x509-cert = { version = "0.3", features = ["builder", "hazmat"] }
 spki = "0.8"
