@@ -34,7 +34,10 @@ use oe_castore::{Request, RequestState, Store, StoreError};
 pub enum RaflowError {
     #[error("raflow: demande non authentifiée")]
     Unauthenticated,
-    #[error("raflow: demande rejetée par l'autorité d'enregistrement (opérateur {operator}{})", comment_suffix(comment))]
+    #[error(
+        "raflow: demande rejetée par l'autorité d'enregistrement (opérateur {operator}{})",
+        comment_suffix(comment)
+    )]
     Rejected { operator: String, comment: String },
     #[error("raflow: demande inconnue")]
     NotFound,
@@ -69,7 +72,8 @@ pub trait Recorder: Send + Sync {
 /// client ([`oe_enroll`]) et le serveur calculent la même fonction : le
 /// protocole est défini par ce dépôt, pas déduit du comportement d'un tiers.
 pub fn signature(csr_der: &[u8], secret: &str) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("clé HMAC de taille arbitraire");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("clé HMAC de taille arbitraire");
     mac.update(csr_der);
     hex::encode(mac.finalize().into_bytes())
 }
@@ -88,9 +92,11 @@ pub fn transaction_id(csr_der: &[u8]) -> String {
 
 fn verify_hmac(csr_der: &[u8], secret: &str, signature_hex: &str) -> Result<(), RaflowError> {
     let given = hex::decode(signature_hex).map_err(|_| RaflowError::Unauthenticated)?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("clé HMAC de taille arbitraire");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("clé HMAC de taille arbitraire");
     mac.update(csr_der);
-    mac.verify_slice(&given).map_err(|_| RaflowError::Unauthenticated)
+    mac.verify_slice(&given)
+        .map_err(|_| RaflowError::Unauthenticated)
 }
 
 /// Sujet CN et clé publique (SPKI DER) d'une CSR PKCS#10, après vérification
@@ -107,17 +113,28 @@ fn parse_and_verify_csr(csr_der: &[u8]) -> Result<(String, Vec<u8>), RaflowError
 
     let csr = CertReq::from_der(csr_der)?;
     let spki_der = csr.info.public_key.to_der()?;
-    let public_key = RsaPublicKey::from_public_key_der(&spki_der).map_err(|e| RaflowError::Other(format!("clé publique de la demande illisible: {e}")))?;
+    let public_key = RsaPublicKey::from_public_key_der(&spki_der)
+        .map_err(|e| RaflowError::Other(format!("clé publique de la demande illisible: {e}")))?;
 
     let tbs_der = csr.info.to_der()?;
     let digest = Sha256::digest(&tbs_der);
     public_key
-        .verify(Pkcs1v15Sign::new::<Sha256>(), &digest, csr.signature.raw_bytes())
-        .map_err(|_| RaflowError::Other("la demande n'est pas signée par la clé qu'elle présente".to_string()))?;
+        .verify(
+            Pkcs1v15Sign::new::<Sha256>(),
+            &digest,
+            csr.signature.raw_bytes(),
+        )
+        .map_err(|_| {
+            RaflowError::Other(
+                "la demande n'est pas signée par la clé qu'elle présente".to_string(),
+            )
+        })?;
 
     let cn = common_name(&csr.info.subject);
     if cn.is_empty() {
-        return Err(RaflowError::Other("la demande ne porte pas de nom courant (CN)".to_string()));
+        return Err(RaflowError::Other(
+            "la demande ne porte pas de nom courant (CN)".to_string(),
+        ));
     }
     Ok((cn, spki_der))
 }
@@ -125,7 +142,10 @@ fn parse_and_verify_csr(csr_der: &[u8]) -> Result<(String, Vec<u8>), RaflowError
 fn common_name(name: &x509_cert::name::Name) -> String {
     const OID_CN: &str = "2.5.4.3";
     let cn_oid = der::asn1::ObjectIdentifier::new(OID_CN).expect("OID constant invalide");
-    name.iter().find(|atv| atv.oid == cn_oid).map(|atv| String::from_utf8_lossy(atv.value.value()).into_owned()).unwrap_or_default()
+    name.iter()
+        .find(|atv| atv.oid == cn_oid)
+        .map(|atv| String::from_utf8_lossy(atv.value.value()).into_owned())
+        .unwrap_or_default()
 }
 
 /// Configure la partie « décision » de la machine à états.
@@ -164,21 +184,46 @@ impl Decider {
     /// Fait passer une demande de PENDING à APPROVED. C'est la SEULE
     /// transition qui y mène, et elle exige l'identité de l'opérateur :
     /// c'est ce qui rend la décision imputable (ETSI EN 319 411-1 §6.2.1).
-    pub async fn approve(&self, transaction_id: &str, operator: &str, comment: &str) -> Result<Request, RaflowError> {
-        self.decide(transaction_id, operator, comment, RequestState::Approved).await
+    pub async fn approve(
+        &self,
+        transaction_id: &str,
+        operator: &str,
+        comment: &str,
+    ) -> Result<Request, RaflowError> {
+        self.decide(transaction_id, operator, comment, RequestState::Approved)
+            .await
     }
 
     /// Refuse définitivement une demande. Le demandeur en est informé lors
     /// de sa prochaine soumission, avec le nom de l'opérateur et son motif.
-    pub async fn reject(&self, transaction_id: &str, operator: &str, comment: &str) -> Result<Request, RaflowError> {
-        self.decide(transaction_id, operator, comment, RequestState::Rejected).await
+    pub async fn reject(
+        &self,
+        transaction_id: &str,
+        operator: &str,
+        comment: &str,
+    ) -> Result<Request, RaflowError> {
+        self.decide(transaction_id, operator, comment, RequestState::Rejected)
+            .await
     }
 
-    async fn decide(&self, transaction_id: &str, operator: &str, comment: &str, target: RequestState) -> Result<Request, RaflowError> {
+    async fn decide(
+        &self,
+        transaction_id: &str,
+        operator: &str,
+        comment: &str,
+        target: RequestState,
+    ) -> Result<Request, RaflowError> {
         if operator.is_empty() {
-            return Err(RaflowError::Other("la décision exige l'identité de l'opérateur qui la prend".to_string()));
+            return Err(RaflowError::Other(
+                "la décision exige l'identité de l'opérateur qui la prend".to_string(),
+            ));
         }
-        let r = match self.opts.store.request_by_transaction_id(transaction_id).await {
+        let r = match self
+            .opts
+            .store
+            .request_by_transaction_id(transaction_id)
+            .await
+        {
             Ok(r) => r,
             Err(StoreError::NotFound) => return Err(RaflowError::NotFound),
             Err(e) => return Err(e.into()),
@@ -192,13 +237,24 @@ impl Decider {
         updated.operator = operator.to_string();
         updated.comment = comment.to_string();
         updated.decided_at = Some(self.now());
-        match self.opts.store.update_request(updated.clone(), RequestState::Pending).await {
+        match self
+            .opts
+            .store
+            .update_request(updated.clone(), RequestState::Pending)
+            .await
+        {
             Ok(()) => {}
-            Err(StoreError::Conflict) => return Err(RaflowError::NotPending(RequestState::Pending.to_string())),
+            Err(StoreError::Conflict) => {
+                return Err(RaflowError::NotPending(RequestState::Pending.to_string()))
+            }
             Err(e) => return Err(e.into()),
         }
 
-        let event = if target == RequestState::Rejected { "ca.request_rejected" } else { "ca.request_approved" };
+        let event = if target == RequestState::Rejected {
+            "ca.request_rejected"
+        } else {
+            "ca.request_approved"
+        };
         self.record(
             event,
             serde_json::json!({
@@ -256,11 +312,27 @@ impl Flow {
         if opts.hmac_secret.is_empty() {
             // Une PKI qui délivre à quiconque le demande n'a pas de valeur :
             // le secret partagé n'est pas une identité, mais il est le minimum.
-            return Err(RaflowError::Other("secret HMAC d'enrôlement non configuré (enrôlement anonyme refusé)".to_string()));
+            return Err(RaflowError::Other(
+                "secret HMAC d'enrôlement non configuré (enrôlement anonyme refusé)".to_string(),
+            ));
         }
-        let retry_after = if opts.retry_after.is_zero() { time::Duration::seconds(5) } else { opts.retry_after };
-        let decider = Decider::new(DeciderOptions { store: opts.store.clone(), recorder: opts.recorder.clone(), clock: opts.clock.clone() });
-        Ok(Flow { decider, opts: Options { retry_after, ..opts } })
+        let retry_after = if opts.retry_after.is_zero() {
+            time::Duration::seconds(5)
+        } else {
+            opts.retry_after
+        };
+        let decider = Decider::new(DeciderOptions {
+            store: opts.store.clone(),
+            recorder: opts.recorder.clone(),
+            clock: opts.clock.clone(),
+        });
+        Ok(Flow {
+            decider,
+            opts: Options {
+                retry_after,
+                ..opts
+            },
+        })
     }
 
     pub fn decider(&self) -> &Decider {
@@ -287,7 +359,12 @@ impl Flow {
     /// l'émission a lieu ici, dans le processus qui détient la clé de
     /// l'autorité, et non au moment de l'approbation — l'opérateur RA
     /// décide, il ne signe pas.
-    pub async fn submit(&self, csr_der: &[u8], profile_name: &str, signature_hex: &str) -> Result<SubmitResult, RaflowError> {
+    pub async fn submit(
+        &self,
+        csr_der: &[u8],
+        profile_name: &str,
+        signature_hex: &str,
+    ) -> Result<SubmitResult, RaflowError> {
         verify_hmac(csr_der, &self.opts.hmac_secret, signature_hex)?;
         let profile = oe_ca_core::profile_by_name(profile_name).map_err(RaflowError::Other)?;
         let (cn, spki_der) = parse_and_verify_csr(csr_der)?;
@@ -301,12 +378,22 @@ impl Flow {
 
         match existing {
             None => self.open(csr_der, &cn, &spki_der, &profile, &fp).await,
-            Some(r) if r.profile != profile_name => Err(RaflowError::Other(format!("cette demande a été soumise pour le profil {:?}, pas {:?}", r.profile, profile_name))),
+            Some(r) if r.profile != profile_name => Err(RaflowError::Other(format!(
+                "cette demande a été soumise pour le profil {:?}, pas {:?}",
+                r.profile, profile_name
+            ))),
             Some(r) => self.resume(r, &spki_der, &cn, &profile).await,
         }
     }
 
-    async fn open(&self, csr_der: &[u8], cn: &str, _spki_der: &[u8], profile: &oe_ca_core::Profile, fp: &str) -> Result<SubmitResult, RaflowError> {
+    async fn open(
+        &self,
+        csr_der: &[u8],
+        cn: &str,
+        _spki_der: &[u8],
+        profile: &oe_ca_core::Profile,
+        fp: &str,
+    ) -> Result<SubmitResult, RaflowError> {
         let tx = transaction_id(csr_der);
         let r = Request {
             transaction_id: tx.clone(),
@@ -332,24 +419,56 @@ impl Flow {
                 "empreinte": fp,
             }),
         );
-        Ok(SubmitResult { state: RequestState::Pending, transaction_id: tx, retry_after: Some(self.opts.retry_after), certificate: None, chain: vec![] })
+        Ok(SubmitResult {
+            state: RequestState::Pending,
+            transaction_id: tx,
+            retry_after: Some(self.opts.retry_after),
+            certificate: None,
+            chain: vec![],
+        })
     }
 
-    async fn resume(&self, r: Request, spki_der: &[u8], cn: &str, profile: &oe_ca_core::Profile) -> Result<SubmitResult, RaflowError> {
+    async fn resume(
+        &self,
+        r: Request,
+        spki_der: &[u8],
+        cn: &str,
+        profile: &oe_ca_core::Profile,
+    ) -> Result<SubmitResult, RaflowError> {
         match r.state {
-            RequestState::Pending => Ok(SubmitResult { state: RequestState::Pending, transaction_id: r.transaction_id, retry_after: Some(self.opts.retry_after), certificate: None, chain: vec![] }),
-            RequestState::Rejected => Err(RaflowError::Rejected { operator: r.operator, comment: r.comment }),
+            RequestState::Pending => Ok(SubmitResult {
+                state: RequestState::Pending,
+                transaction_id: r.transaction_id,
+                retry_after: Some(self.opts.retry_after),
+                certificate: None,
+                chain: vec![],
+            }),
+            RequestState::Rejected => Err(RaflowError::Rejected {
+                operator: r.operator,
+                comment: r.comment,
+            }),
             RequestState::Approved => self.issue(r, spki_der, cn, profile).await,
             RequestState::Issued => {
                 let cert = self.issued_certificate(&r).await?;
-                Ok(SubmitResult { state: RequestState::Issued, transaction_id: r.transaction_id, retry_after: None, certificate: Some(cert), chain: self.opts.issuer.full_chain() })
+                Ok(SubmitResult {
+                    state: RequestState::Issued,
+                    transaction_id: r.transaction_id,
+                    retry_after: None,
+                    certificate: Some(cert),
+                    chain: self.opts.issuer.full_chain(),
+                })
             }
         }
     }
 
     async fn issued_certificate(&self, r: &Request) -> Result<x509_cert::Certificate, RaflowError> {
         use der::Decode;
-        let serial = r.certificate_serial.as_ref().ok_or_else(|| RaflowError::Other(format!("demande {} marquée émise sans certificat associé", r.transaction_id)))?;
+        let serial = r.certificate_serial.as_ref().ok_or_else(|| {
+            RaflowError::Other(format!(
+                "demande {} marquée émise sans certificat associé",
+                r.transaction_id
+            ))
+        })?;
         let rec = self.opts.store.certificate(serial).await?;
         Ok(x509_cert::Certificate::from_der(&rec.der)?)
     }
@@ -357,31 +476,63 @@ impl Flow {
     /// Transforme une demande approuvée en certificat, puis applique la
     /// politique « une seule unité active par sujet » en révoquant les
     /// certificats précédents du même sujet.
-    async fn issue(&self, r: Request, spki_der: &[u8], cn: &str, profile: &oe_ca_core::Profile) -> Result<SubmitResult, RaflowError> {
+    async fn issue(
+        &self,
+        r: Request,
+        spki_der: &[u8],
+        cn: &str,
+        profile: &oe_ca_core::Profile,
+    ) -> Result<SubmitResult, RaflowError> {
         // Les certificats actifs du sujet sont relevés AVANT l'émission :
         // après, le nouveau certificat en ferait partie et se révoquerait
         // lui-même.
-        let subject = oe_ca_core::build_subject(cn, profile.organizational_unit, profile.organization, profile.country)?;
+        let subject = oe_ca_core::build_subject(
+            cn,
+            profile.organizational_unit,
+            profile.organization,
+            profile.country,
+        )?;
         let subject_dn = subject.to_string();
         let now = self.now();
         let previous = self.opts.store.active_by_subject(&subject_dn, now).await?;
 
-        let cert = self.opts.issuer.issue(spki_der, cn, profile, &r.transaction_id).await?;
+        let cert = self
+            .opts
+            .issuer
+            .issue(spki_der, cn, profile, &r.transaction_id)
+            .await?;
         let serial = oe_ca_core::canonical_serial(cert.tbs_certificate().serial_number());
 
         let mut updated = r.clone();
         updated.state = RequestState::Issued;
         updated.issued_at = Some(now);
         updated.certificate_serial = Some(serial.clone());
-        self.opts.store.update_request(updated, RequestState::Approved).await?;
+        self.opts
+            .store
+            .update_request(updated, RequestState::Approved)
+            .await?;
 
         // reasonCode 4 = superseded (RFC 5280 §5.3.1) : le motif exact
         // compte, « unspecified » ne justifierait rien devant un auditeur.
         const SUPERSEDED: i32 = 4;
         for old in &previous {
-            self.opts.issuer.revoke(&old.serial, SUPERSEDED, "raflow:renouvellement", &format!("remplacé par {}", hex::encode(&serial))).await?;
+            self.opts
+                .issuer
+                .revoke(
+                    &old.serial,
+                    SUPERSEDED,
+                    "raflow:renouvellement",
+                    &format!("remplacé par {}", hex::encode(&serial)),
+                )
+                .await?;
         }
 
-        Ok(SubmitResult { state: RequestState::Issued, transaction_id: r.transaction_id, retry_after: None, certificate: Some(cert), chain: self.opts.issuer.full_chain() })
+        Ok(SubmitResult {
+            state: RequestState::Issued,
+            transaction_id: r.transaction_id,
+            retry_after: None,
+            certificate: Some(cert),
+            chain: self.opts.issuer.full_chain(),
+        })
     }
 }

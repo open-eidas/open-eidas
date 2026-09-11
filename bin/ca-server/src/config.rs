@@ -52,20 +52,27 @@ pub struct Config {
 }
 
 fn env_str(key: &str, fallback: &str) -> String {
-    std::env::var(key).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| fallback.to_string())
+    std::env::var(key)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn env_u64(key: &str, fallback: u64) -> Result<u64, String> {
     match std::env::var(key).ok().filter(|v| !v.is_empty()) {
         None => Ok(fallback),
-        Some(v) => v.parse().map_err(|_| format!("{key}: entier attendu, reçu {v:?}")),
+        Some(v) => v
+            .parse()
+            .map_err(|_| format!("{key}: entier attendu, reçu {v:?}")),
     }
 }
 
 fn env_i64(key: &str, fallback: i64) -> Result<i64, String> {
     match std::env::var(key).ok().filter(|v| !v.is_empty()) {
         None => Ok(fallback),
-        Some(v) => v.parse().map_err(|_| format!("{key}: entier attendu, reçu {v:?}")),
+        Some(v) => v
+            .parse()
+            .map_err(|_| format!("{key}: entier attendu, reçu {v:?}")),
     }
 }
 
@@ -89,7 +96,8 @@ fn parse_go_duration(s: &str) -> Option<Duration> {
 fn env_duration(key: &str, fallback: Duration) -> Result<Duration, String> {
     match std::env::var(key).ok().filter(|v| !v.is_empty()) {
         None => Ok(fallback),
-        Some(v) => parse_go_duration(&v).ok_or_else(|| format!("{key}: durée attendue (ex. 1h, 24h), reçu {v:?}")),
+        Some(v) => parse_go_duration(&v)
+            .ok_or_else(|| format!("{key}: durée attendue (ex. 1h, 24h), reçu {v:?}")),
     }
 }
 
@@ -109,7 +117,10 @@ impl Config {
 
         let dsn = env_str("OPENEIDAS_DB_DSN", "");
         if dsn.is_empty() {
-            return Err("OPENEIDAS_DB_DSN est obligatoire (DSN PostgreSQL du registre de la CA)".to_string());
+            return Err(
+                "OPENEIDAS_DB_DSN est obligatoire (DSN PostgreSQL du registre de la CA)"
+                    .to_string(),
+            );
         }
         let issuing_pin = std::env::var("OPENEIDAS_ISSUING_PIN").unwrap_or_default();
         if issuing_pin.is_empty() {
@@ -123,17 +134,39 @@ impl Config {
         // La racine et l'émettrice peuvent partager un PIN en démonstration ;
         // en production, ce sont deux tokens distincts sous deux contrôles
         // distincts — voir docs/CA.md.
-        let root_pin = if root_pin.is_empty() { issuing_pin.clone() } else { root_pin };
+        let root_pin = if root_pin.is_empty() {
+            issuing_pin.clone()
+        } else {
+            root_pin
+        };
 
         let max_request_bytes = env_i64("OPENEIDAS_MAX_REQUEST_BYTES", 64 * 1024)?.max(0) as usize;
-        let root_validity = to_time_duration(env_duration("OPENEIDAS_ROOT_VALIDITY", Duration::from_secs(20 * 365 * 24 * 3600))?, time::Duration::days(20 * 365));
-        let issuing_validity = to_time_duration(env_duration("OPENEIDAS_ISSUING_VALIDITY", Duration::from_secs(10 * 365 * 24 * 3600))?, time::Duration::days(10 * 365));
-        let crl_validity = to_time_duration(env_duration("OPENEIDAS_CRL_VALIDITY", Duration::from_secs(24 * 3600))?, time::Duration::hours(24));
+        let root_validity = to_time_duration(
+            env_duration(
+                "OPENEIDAS_ROOT_VALIDITY",
+                Duration::from_secs(20 * 365 * 24 * 3600),
+            )?,
+            time::Duration::days(20 * 365),
+        );
+        let issuing_validity = to_time_duration(
+            env_duration(
+                "OPENEIDAS_ISSUING_VALIDITY",
+                Duration::from_secs(10 * 365 * 24 * 3600),
+            )?,
+            time::Duration::days(10 * 365),
+        );
+        let crl_validity = to_time_duration(
+            env_duration("OPENEIDAS_CRL_VALIDITY", Duration::from_secs(24 * 3600))?,
+            time::Duration::hours(24),
+        );
         // La CRL est republiée bien avant d'expirer : un répondeur OCSP qui
         // n'obtiendrait qu'une CRL périmée refuse de répondre plutôt que de
         // garantir un statut obsolète.
         let crl_refresh = env_duration("OPENEIDAS_CRL_REFRESH", Duration::from_secs(3600))?;
-        let crl_grace = to_time_duration(env_duration("OPENEIDAS_CRL_GRACE", Duration::from_secs(30 * 24 * 3600))?, time::Duration::days(30));
+        let crl_grace = to_time_duration(
+            env_duration("OPENEIDAS_CRL_GRACE", Duration::from_secs(30 * 24 * 3600))?,
+            time::Duration::days(30),
+        );
 
         Ok(Config {
             listen: env_str("OPENEIDAS_LISTEN", ":8320"),
@@ -161,7 +194,10 @@ impl Config {
             crl_validity,
             crl_refresh,
             crl_grace,
-            audit_file: env_str("OPENEIDAS_AUDIT_FILE", "/var/lib/open-eidas/state/ca-audit.log"),
+            audit_file: env_str(
+                "OPENEIDAS_AUDIT_FILE",
+                "/var/lib/open-eidas/state/ca-audit.log",
+            ),
         })
     }
 }

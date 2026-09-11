@@ -16,7 +16,11 @@ fn oid(s: &str) -> ObjectIdentifier {
 }
 
 fn build<T: Encode>(oid_str: &str, critical: bool, value: &T) -> Result<Extension, CaError> {
-    Ok(Extension { extn_id: oid(oid_str), critical, extn_value: OctetString::new(value.to_der()?)? })
+    Ok(Extension {
+        extn_id: oid(oid_str),
+        critical,
+        extn_value: OctetString::new(value.to_der()?)?,
+    })
 }
 
 /// Reproduit la criticité que `crypto/x509` (Go) applique inconditionnellement
@@ -34,7 +38,14 @@ const OID_AD_OCSP: &str = "1.3.6.1.5.5.7.48.1";
 const OID_CRL_NUMBER: &str = "2.5.29.20";
 
 pub(crate) fn basic_constraints(ca: bool, path_len: Option<u8>) -> Result<Extension, CaError> {
-    build(OID_BASIC_CONSTRAINTS, true, &BasicConstraints { ca, path_len_constraint: path_len })
+    build(
+        OID_BASIC_CONSTRAINTS,
+        true,
+        &BasicConstraints {
+            ca,
+            path_len_constraint: path_len,
+        },
+    )
 }
 
 pub(crate) fn key_usage(usages: der::flagset::FlagSet<KeyUsages>) -> Result<Extension, CaError> {
@@ -62,7 +73,11 @@ pub(crate) fn authority_key_identifier(parent_ski: &[u8]) -> Result<Extension, C
     build(
         OID_AUTHORITY_KEY_ID,
         false,
-        &AuthorityKeyIdentifier { key_identifier: Some(OctetString::new(parent_ski.to_vec())?), authority_cert_issuer: None, authority_cert_serial_number: None },
+        &AuthorityKeyIdentifier {
+            key_identifier: Some(OctetString::new(parent_ski.to_vec())?),
+            authority_cert_issuer: None,
+            authority_cert_serial_number: None,
+        },
     )
 }
 
@@ -70,13 +85,20 @@ pub(crate) fn authority_key_identifier(parent_ski: &[u8]) -> Result<Extension, C
 /// ETSI EN 319 421 §7.7.2 exige de pouvoir le marquer critique, comme le
 /// fait `internal/ca.go` (Go) en construisant l'extension lui-même plutôt
 /// qu'en passant par `x509.Certificate.ExtKeyUsage`.
-pub(crate) fn extended_key_usage(oids: &[ObjectIdentifier], critical: bool) -> Result<Extension, CaError> {
+pub(crate) fn extended_key_usage(
+    oids: &[ObjectIdentifier],
+    critical: bool,
+) -> Result<Extension, CaError> {
     build(OID_EXT_KEY_USAGE, critical, &oids.to_vec())
 }
 
 pub(crate) fn ocsp_no_check() -> Extension {
     // La valeur est un NULL DER : l'extension vaut par sa seule présence.
-    Extension { extn_id: oid(OID_OCSP_NO_CHECK), critical: false, extn_value: OctetString::new(vec![0x05, 0x00]).expect("NULL DER valide") }
+    Extension {
+        extn_id: oid(OID_OCSP_NO_CHECK),
+        critical: false,
+        extn_value: OctetString::new(vec![0x05, 0x00]).expect("NULL DER valide"),
+    }
 }
 
 pub(crate) fn crl_distribution_point(url: &str) -> Result<Extension, CaError> {
@@ -84,21 +106,32 @@ pub(crate) fn crl_distribution_point(url: &str) -> Result<Extension, CaError> {
     use x509_cert::ext::pkix::name::DistributionPointName;
     let name = Ia5String::new(url)?;
     let dp = DistributionPoint {
-        distribution_point: Some(DistributionPointName::FullName(vec![GeneralName::UniformResourceIdentifier(name)])),
+        distribution_point: Some(DistributionPointName::FullName(vec![
+            GeneralName::UniformResourceIdentifier(name),
+        ])),
         reasons: None,
         crl_issuer: None,
     };
     build(OID_CRL_DISTRIBUTION_POINTS, false, &vec![dp])
 }
 
-pub(crate) fn authority_info_access(ca_issuers_url: Option<&str>, ocsp_url: Option<&str>) -> Result<Extension, CaError> {
+pub(crate) fn authority_info_access(
+    ca_issuers_url: Option<&str>,
+    ocsp_url: Option<&str>,
+) -> Result<Extension, CaError> {
     use x509_cert::ext::pkix::AccessDescription;
     let mut descriptions = Vec::new();
     if let Some(url) = ca_issuers_url {
-        descriptions.push(AccessDescription { access_method: oid(OID_AD_CA_ISSUERS), access_location: GeneralName::UniformResourceIdentifier(Ia5String::new(url)?) });
+        descriptions.push(AccessDescription {
+            access_method: oid(OID_AD_CA_ISSUERS),
+            access_location: GeneralName::UniformResourceIdentifier(Ia5String::new(url)?),
+        });
     }
     if let Some(url) = ocsp_url {
-        descriptions.push(AccessDescription { access_method: oid(OID_AD_OCSP), access_location: GeneralName::UniformResourceIdentifier(Ia5String::new(url)?) });
+        descriptions.push(AccessDescription {
+            access_method: oid(OID_AD_OCSP),
+            access_location: GeneralName::UniformResourceIdentifier(Ia5String::new(url)?),
+        });
     }
     build(OID_AUTHORITY_INFO_ACCESS, false, &descriptions)
 }

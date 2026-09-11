@@ -40,7 +40,9 @@ pub(crate) struct HsmKeypair {
 
 impl HsmKeypair {
     pub(crate) fn from_public_key_der(der: &[u8]) -> Self {
-        HsmKeypair { public_key_der: der.to_vec() }
+        HsmKeypair {
+            public_key_der: der.to_vec(),
+        }
     }
 }
 
@@ -54,7 +56,8 @@ impl signature::Keypair for HsmKeypair {
 impl spki::DynSignatureAlgorithmIdentifier for HsmKeypair {
     fn signature_algorithm_identifier(&self) -> spki::Result<AlgorithmIdentifierOwned> {
         Ok(AlgorithmIdentifierOwned {
-            oid: der::asn1::ObjectIdentifier::new(OID_SHA256_WITH_RSA).expect("OID constant invalide"),
+            oid: der::asn1::ObjectIdentifier::new(OID_SHA256_WITH_RSA)
+                .expect("OID constant invalide"),
             parameters: None,
         })
     }
@@ -64,13 +67,21 @@ impl spki::DynSignatureAlgorithmIdentifier for HsmKeypair {
 /// token PKCS#11, sans jamais faire transiter la clé privée par ce
 /// processus : `finalize` produit les octets à signer, le token les signe,
 /// `assemble` reconstitue l'objet final avec la signature obtenue.
-pub(crate) fn sign_with_token<B: Builder>(mut builder: B, signer: &dyn SigningToken, public_key_der: &[u8]) -> Result<B::Output, CaError> {
+pub(crate) fn sign_with_token<B: Builder>(
+    mut builder: B,
+    signer: &dyn SigningToken,
+    public_key_der: &[u8],
+) -> Result<B::Output, CaError> {
     let keypair = HsmKeypair::from_public_key_der(public_key_der);
-    let tbs_der = builder.finalize(&keypair).map_err(|e| CaError::Other(e.to_string()))?;
+    let tbs_der = builder
+        .finalize(&keypair)
+        .map_err(|e| CaError::Other(e.to_string()))?;
     let digest = Sha256::digest(&tbs_der);
     let signature = signer.sign_digest(DigestAlg::Sha256, &digest)?;
     let bit_string = BitString::from_bytes(&signature)?;
-    builder.assemble(bit_string, &keypair).map_err(|e| CaError::Other(e.to_string()))
+    builder
+        .assemble(bit_string, &keypair)
+        .map_err(|e| CaError::Other(e.to_string()))
 }
 
 /// Signe une CRL construite à la main (voir `lib::publish_crl`), sans passer
@@ -80,15 +91,24 @@ pub(crate) fn sign_with_token<B: Builder>(mut builder: B, signer: &dyn SigningTo
 /// `extensions::authority_key_identifier`. Reproduit la même séquence que
 /// `Builder::finalize`/`assemble` (fixer l'algorithme, encoder, signer,
 /// assembler), à la main.
-pub(crate) fn sign_crl(mut tbs: x509_cert::crl::TbsCertList, signer: &dyn SigningToken, public_key_der: &[u8]) -> Result<x509_cert::crl::CertificateList, CaError> {
+pub(crate) fn sign_crl(
+    mut tbs: x509_cert::crl::TbsCertList,
+    signer: &dyn SigningToken,
+    public_key_der: &[u8],
+) -> Result<x509_cert::crl::CertificateList, CaError> {
     let keypair = HsmKeypair::from_public_key_der(public_key_der);
-    let algorithm = spki::DynSignatureAlgorithmIdentifier::signature_algorithm_identifier(&keypair).map_err(|e| CaError::Other(e.to_string()))?;
+    let algorithm = spki::DynSignatureAlgorithmIdentifier::signature_algorithm_identifier(&keypair)
+        .map_err(|e| CaError::Other(e.to_string()))?;
     tbs.signature = algorithm.clone();
     let tbs_der = tbs.to_der().map_err(CaError::Der)?;
     let digest = Sha256::digest(&tbs_der);
     let signature = signer.sign_digest(DigestAlg::Sha256, &digest)?;
     let bit_string = BitString::from_bytes(&signature)?;
-    Ok(x509_cert::crl::CertificateList { tbs_cert_list: tbs, signature_algorithm: algorithm, signature: bit_string })
+    Ok(x509_cert::crl::CertificateList {
+        tbs_cert_list: tbs,
+        signature_algorithm: algorithm,
+        signature: bit_string,
+    })
 }
 
 /// SHA-1 de la BIT STRING de clé publique (méthode 1, RFC 5280 §4.2.1.2).

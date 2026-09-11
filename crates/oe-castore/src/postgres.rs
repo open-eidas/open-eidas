@@ -14,7 +14,10 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 
-use crate::{serial_key, Authority, Certificate, CertificateStatus, Crl, Request, RequestState, Serial, Store, StoreError};
+use crate::{
+    serial_key, Authority, Certificate, CertificateStatus, Crl, Request, RequestState, Serial,
+    Store, StoreError,
+};
 
 fn map_err(e: sqlx::Error) -> StoreError {
     StoreError::Other(e.to_string())
@@ -39,7 +42,9 @@ fn status_from_str(s: &str) -> Result<CertificateStatus, StoreError> {
         "reserved" => Ok(CertificateStatus::Reserved),
         "issued" => Ok(CertificateStatus::Issued),
         "revoked" => Ok(CertificateStatus::Revoked),
-        other => Err(StoreError::Other(format!("castore: statut de certificat illisible en base: {other:?}"))),
+        other => Err(StoreError::Other(format!(
+            "castore: statut de certificat illisible en base: {other:?}"
+        ))),
     }
 }
 
@@ -49,12 +54,15 @@ fn state_from_str(s: &str) -> Result<RequestState, StoreError> {
         "APPROVED" => Ok(RequestState::Approved),
         "ISSUED" => Ok(RequestState::Issued),
         "REJECTED" => Ok(RequestState::Rejected),
-        other => Err(StoreError::Other(format!("castore: état de demande illisible en base: {other:?}"))),
+        other => Err(StoreError::Other(format!(
+            "castore: état de demande illisible en base: {other:?}"
+        ))),
     }
 }
 
 fn serial_from_hex(s: &str) -> Result<Serial, StoreError> {
-    hex::decode(s).map_err(|e| StoreError::Other(format!("castore: numéro de série illisible en base: {e}")))
+    hex::decode(s)
+        .map_err(|e| StoreError::Other(format!("castore: numéro de série illisible en base: {e}")))
 }
 
 /// Implémentation de [`Store`] adossée à PostgreSQL, utilisée en
@@ -67,21 +75,40 @@ impl Postgres {
     /// Établit le pool de connexions et applique les migrations
     /// (`migrations/0001_schema.sql`, embarquée dans le binaire).
     pub async fn open(dsn: &str) -> Result<Postgres, StoreError> {
-        let pool = PgPoolOptions::new().connect(dsn).await.map_err(|e| StoreError::Other(format!("castore: connexion à PostgreSQL: {e}")))?;
-        sqlx::migrate!("./migrations").run(&pool).await.map_err(|e| StoreError::Other(format!("castore: migration: {e}")))?;
+        let pool = PgPoolOptions::new()
+            .connect(dsn)
+            .await
+            .map_err(|e| StoreError::Other(format!("castore: connexion à PostgreSQL: {e}")))?;
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(|e| StoreError::Other(format!("castore: migration: {e}")))?;
         Ok(Postgres { pool })
     }
 
     fn certificate_from_row(row: sqlx::postgres::PgRow) -> Result<Certificate, StoreError> {
         let status: String = row.try_get("status").map_err(map_err)?;
         Ok(Certificate {
-            serial: serial_from_hex(row.try_get::<String, _>("serial_hex").map_err(map_err)?.as_str())?,
+            serial: serial_from_hex(
+                row.try_get::<String, _>("serial_hex")
+                    .map_err(map_err)?
+                    .as_str(),
+            )?,
             profile: row.try_get("profile").map_err(map_err)?,
             subject_dn: row.try_get("subject_dn").map_err(map_err)?,
             issuer_dn: row.try_get("issuer_dn").map_err(map_err)?,
-            not_before: row.try_get::<Option<OffsetDateTime>, _>("not_before").map_err(map_err)?.unwrap_or(OffsetDateTime::UNIX_EPOCH),
-            not_after: row.try_get::<Option<OffsetDateTime>, _>("not_after").map_err(map_err)?.unwrap_or(OffsetDateTime::UNIX_EPOCH),
-            der: row.try_get::<Option<Vec<u8>>, _>("der").map_err(map_err)?.unwrap_or_default(),
+            not_before: row
+                .try_get::<Option<OffsetDateTime>, _>("not_before")
+                .map_err(map_err)?
+                .unwrap_or(OffsetDateTime::UNIX_EPOCH),
+            not_after: row
+                .try_get::<Option<OffsetDateTime>, _>("not_after")
+                .map_err(map_err)?
+                .unwrap_or(OffsetDateTime::UNIX_EPOCH),
+            der: row
+                .try_get::<Option<Vec<u8>>, _>("der")
+                .map_err(map_err)?
+                .unwrap_or_default(),
             status: status_from_str(&status)?,
             revoked_at: row.try_get("revoked_at").map_err(map_err)?,
             revocation_reason: row.try_get("revocation_reason").map_err(map_err)?,
@@ -163,11 +190,13 @@ impl Store for Postgres {
     }
 
     async fn reserve_serial(&self, serial: &Serial, profile: &str) -> Result<(), StoreError> {
-        let result = sqlx::query("INSERT INTO certificates (serial_hex, profile, status) VALUES ($1, $2, 'reserved')")
-            .bind(serial_key(serial))
-            .bind(profile)
-            .execute(&self.pool)
-            .await;
+        let result = sqlx::query(
+            "INSERT INTO certificates (serial_hex, profile, status) VALUES ($1, $2, 'reserved')",
+        )
+        .bind(serial_key(serial))
+        .bind(profile)
+        .execute(&self.pool)
+        .await;
         match result {
             Ok(_) => Ok(()),
             Err(e) if is_unique_violation(&e) => Err(StoreError::SerialTaken),
@@ -213,7 +242,11 @@ impl Store for Postgres {
         Self::certificate_from_row(row)
     }
 
-    async fn active_by_subject(&self, subject_dn: &str, now: OffsetDateTime) -> Result<Vec<Certificate>, StoreError> {
+    async fn active_by_subject(
+        &self,
+        subject_dn: &str,
+        now: OffsetDateTime,
+    ) -> Result<Vec<Certificate>, StoreError> {
         let rows = sqlx::query(&format!(
             "SELECT {CERTIFICATE_COLUMNS} FROM certificates
              WHERE status = 'issued' AND subject_dn = $1 AND not_after > $2
@@ -227,7 +260,12 @@ impl Store for Postgres {
         rows.into_iter().map(Self::certificate_from_row).collect()
     }
 
-    async fn revoke(&self, serial: &Serial, at: OffsetDateTime, reason: i32) -> Result<(), StoreError> {
+    async fn revoke(
+        &self,
+        serial: &Serial,
+        at: OffsetDateTime,
+        reason: i32,
+    ) -> Result<(), StoreError> {
         let key = serial_key(serial);
         // La clause status = 'issued' rend l'opération idempotente ET
         // protège la date de première révocation : une seconde révocation
@@ -244,14 +282,23 @@ impl Store for Postgres {
         }
         // Aucune ligne modifiée : soit le certificat est déjà révoqué (sans
         // erreur), soit il n'existe pas (NotFound).
-        let status: Option<String> = sqlx::query_scalar("SELECT status FROM certificates WHERE serial_hex = $1").bind(&key).fetch_optional(&self.pool).await.map_err(map_err)?;
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM certificates WHERE serial_hex = $1")
+                .bind(&key)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_err)?;
         match status.as_deref() {
             None | Some("reserved") => Err(StoreError::NotFound),
             _ => Ok(()),
         }
     }
 
-    async fn revoked(&self, now: OffsetDateTime, grace: time::Duration) -> Result<Vec<Certificate>, StoreError> {
+    async fn revoked(
+        &self,
+        now: OffsetDateTime,
+        grace: time::Duration,
+    ) -> Result<Vec<Certificate>, StoreError> {
         let rows = sqlx::query(&format!(
             "SELECT {CERTIFICATE_COLUMNS} FROM certificates
              WHERE status = 'revoked' AND not_after + $2::interval >= $1
@@ -288,22 +335,26 @@ impl Store for Postgres {
     }
 
     async fn request_by_fingerprint(&self, fingerprint: &str) -> Result<Request, StoreError> {
-        let row = sqlx::query(&format!("SELECT {REQUEST_COLUMNS} FROM enrollment_requests WHERE csr_fingerprint = $1"))
-            .bind(fingerprint)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_err)?
-            .ok_or(StoreError::NotFound)?;
+        let row = sqlx::query(&format!(
+            "SELECT {REQUEST_COLUMNS} FROM enrollment_requests WHERE csr_fingerprint = $1"
+        ))
+        .bind(fingerprint)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?
+        .ok_or(StoreError::NotFound)?;
         Self::request_from_row(row)
     }
 
     async fn request_by_transaction_id(&self, transaction_id: &str) -> Result<Request, StoreError> {
-        let row = sqlx::query(&format!("SELECT {REQUEST_COLUMNS} FROM enrollment_requests WHERE transaction_id = $1"))
-            .bind(transaction_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_err)?
-            .ok_or(StoreError::NotFound)?;
+        let row = sqlx::query(&format!(
+            "SELECT {REQUEST_COLUMNS} FROM enrollment_requests WHERE transaction_id = $1"
+        ))
+        .bind(transaction_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?
+        .ok_or(StoreError::NotFound)?;
         Self::request_from_row(row)
     }
 
@@ -341,25 +392,40 @@ impl Store for Postgres {
         .await
         .map_err(map_err)?;
         if tag.rows_affected() == 0 {
-            let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM enrollment_requests WHERE transaction_id = $1)").bind(&r.transaction_id).fetch_one(&self.pool).await.map_err(map_err)?;
-            return Err(if exists { StoreError::Conflict } else { StoreError::NotFound });
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM enrollment_requests WHERE transaction_id = $1)",
+            )
+            .bind(&r.transaction_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_err)?;
+            return Err(if exists {
+                StoreError::Conflict
+            } else {
+                StoreError::NotFound
+            });
         }
         Ok(())
     }
 
     async fn next_crl_number(&self) -> Result<i64, StoreError> {
-        let n: i64 = sqlx::query_scalar("SELECT nextval('crl_number_seq')").fetch_one(&self.pool).await.map_err(map_err)?;
+        let n: i64 = sqlx::query_scalar("SELECT nextval('crl_number_seq')")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_err)?;
         Ok(n)
     }
 
     async fn save_crl(&self, c: Crl) -> Result<(), StoreError> {
-        let result = sqlx::query("INSERT INTO crls (number, der, this_update, next_update) VALUES ($1, $2, $3, $4)")
-            .bind(c.number)
-            .bind(&c.der)
-            .bind(c.this_update)
-            .bind(c.next_update)
-            .execute(&self.pool)
-            .await;
+        let result = sqlx::query(
+            "INSERT INTO crls (number, der, this_update, next_update) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(c.number)
+        .bind(&c.der)
+        .bind(c.this_update)
+        .bind(c.next_update)
+        .execute(&self.pool)
+        .await;
         match result {
             Ok(_) => Ok(()),
             Err(e) if is_unique_violation(&e) => Err(StoreError::Conflict),
@@ -368,7 +434,13 @@ impl Store for Postgres {
     }
 
     async fn latest_crl(&self) -> Result<Crl, StoreError> {
-        let row = sqlx::query("SELECT number, der, this_update, next_update FROM crls ORDER BY number DESC LIMIT 1").fetch_optional(&self.pool).await.map_err(map_err)?.ok_or(StoreError::NotFound)?;
+        let row = sqlx::query(
+            "SELECT number, der, this_update, next_update FROM crls ORDER BY number DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?
+        .ok_or(StoreError::NotFound)?;
         Ok(Crl {
             number: row.try_get("number").map_err(map_err)?,
             der: row.try_get("der").map_err(map_err)?,

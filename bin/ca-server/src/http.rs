@@ -32,7 +32,11 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(issuer: Arc<oe_ca_core::Issuer>, flow: Arc<oe_raflow::Flow>, version: String) -> Server {
+    pub fn new(
+        issuer: Arc<oe_ca_core::Issuer>,
+        flow: Arc<oe_raflow::Flow>,
+        version: String,
+    ) -> Server {
         let name = oe_certs::file_name(&common_name(issuer.certificate()));
         let ca_der = issuer.certificate().to_der().unwrap_or_default();
         let mut ca_pem = String::new();
@@ -41,7 +45,19 @@ impl Server {
                 ca_pem.push_str(&pem_block("CERTIFICATE", &der));
             }
         }
-        Server { issuer, flow, version, ca_der, ca_pem, crl_path: format!("/download/{name}.crl"), ca_path: format!("/download/{name}.cer"), cache: RwLock::new(CrlCache { crl: None, err: None }) }
+        Server {
+            issuer,
+            flow,
+            version,
+            ca_der,
+            ca_pem,
+            crl_path: format!("/download/{name}.crl"),
+            ca_path: format!("/download/{name}.cer"),
+            cache: RwLock::new(CrlCache {
+                crl: None,
+                err: None,
+            }),
+        }
     }
 
     pub fn issuer(&self) -> &oe_ca_core::Issuer {
@@ -52,8 +68,14 @@ impl Server {
     /// annulation du token. La première publication est bloquante : le
     /// service ne doit pas se déclarer prêt sans état de révocation
     /// servable.
-    pub async fn start_crl_publication(self: &Arc<Self>, every: std::time::Duration, mut shutdown: tokio::sync::watch::Receiver<bool>) -> Result<(), String> {
-        self.publish_crl().await.map_err(|e| format!("publication initiale de la CRL: {e}"))?;
+    pub async fn start_crl_publication(
+        self: &Arc<Self>,
+        every: std::time::Duration,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<(), String> {
+        self.publish_crl()
+            .await
+            .map_err(|e| format!("publication initiale de la CRL: {e}"))?;
         let server = self.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(every);
@@ -122,7 +144,12 @@ impl Server {
 fn common_name(cert: &x509_cert::Certificate) -> String {
     const OID_CN: &str = "2.5.4.3";
     let cn_oid = der::asn1::ObjectIdentifier::new(OID_CN).expect("OID constant invalide");
-    cert.tbs_certificate().subject().iter().find(|atv| atv.oid == cn_oid).map(|atv| String::from_utf8_lossy(atv.value.value()).into_owned()).unwrap_or_default()
+    cert.tbs_certificate()
+        .subject()
+        .iter()
+        .find(|atv| atv.oid == cn_oid)
+        .map(|atv| String::from_utf8_lossy(atv.value.value()).into_owned())
+        .unwrap_or_default()
 }
 
 fn pem_block(label: &str, der: &[u8]) -> String {
@@ -186,35 +213,57 @@ fn decode_csr(raw: &str) -> Result<Vec<u8>, String> {
         return Err("champ pkcs10 vide".to_string());
     }
     if raw.starts_with("-----BEGIN") {
-        let (label, doc) = der::Document::from_pem(raw).map_err(|e| format!("bloc PEM illisible: {e}"))?;
+        let (label, doc) =
+            der::Document::from_pem(raw).map_err(|e| format!("bloc PEM illisible: {e}"))?;
         if label != "CERTIFICATE REQUEST" {
-            return Err(format!("bloc PEM de type {label:?}, attendu CERTIFICATE REQUEST"));
+            return Err(format!(
+                "bloc PEM de type {label:?}, attendu CERTIFICATE REQUEST"
+            ));
         }
         return Ok(doc.into_vec());
     }
     use base64::Engine;
-    base64::engine::general_purpose::STANDARD.decode(raw).map_err(|_| "champ pkcs10 : ni PEM ni base64 exploitable".to_string())
+    base64::engine::general_purpose::STANDARD
+        .decode(raw)
+        .map_err(|_| "champ pkcs10 : ni PEM ni base64 exploitable".to_string())
 }
 
-async fn handle_enroll(State(server): State<Arc<Server>>, Json(req): Json<EnrollRequest>) -> Response {
+async fn handle_enroll(
+    State(server): State<Arc<Server>>,
+    Json(req): Json<EnrollRequest>,
+) -> Response {
     let csr_der = match decode_csr(&req.pkcs10) {
         Ok(der) => der,
         Err(e) => return error_response(StatusCode::BAD_REQUEST, e),
     };
 
-    let result = match server.flow.submit(&csr_der, &req.profile, &req.signature).await {
+    let result = match server
+        .flow
+        .submit(&csr_der, &req.profile, &req.signature)
+        .await
+    {
         Ok(r) => r,
         // Volontairement laconique : distinguer « secret faux » de « CSR
         // invalide » renseignerait un attaquant sur ce qu'il doit corriger.
-        Err(oe_raflow::RaflowError::Unauthenticated) => return error_response(StatusCode::UNAUTHORIZED, "demande non authentifiée"),
-        Err(e @ oe_raflow::RaflowError::Rejected { .. }) => return error_response(StatusCode::FORBIDDEN, e.to_string()),
+        Err(oe_raflow::RaflowError::Unauthenticated) => {
+            return error_response(StatusCode::UNAUTHORIZED, "demande non authentifiée")
+        }
+        Err(e @ oe_raflow::RaflowError::Rejected { .. }) => {
+            return error_response(StatusCode::FORBIDDEN, e.to_string())
+        }
         Err(e) => {
             tracing::warn!(erreur = %e, "enrôlement refusé");
             return error_response(StatusCode::BAD_REQUEST, e.to_string());
         }
     };
 
-    let mut resp = EnrollResponse { state: request_state_str(result.state).to_string(), transaction_id: result.transaction_id, retry_after: None, certificate: None, chain: vec![] };
+    let mut resp = EnrollResponse {
+        state: request_state_str(result.state).to_string(),
+        transaction_id: result.transaction_id,
+        retry_after: None,
+        certificate: None,
+        chain: vec![],
+    };
     let status = if result.state == oe_castore::RequestState::Pending {
         // 202 Accepted : la demande est enregistrée, la décision appartient
         // à un opérateur RA. Le client reviendra.
@@ -224,7 +273,12 @@ async fn handle_enroll(State(server): State<Arc<Server>>, Json(req): Json<Enroll
         if let Some(cert) = &result.certificate {
             resp.certificate = cert.to_der().ok().map(|der| pem_block("CERTIFICATE", &der));
         }
-        resp.chain = result.chain.iter().filter_map(|c| c.to_der().ok()).map(|der| pem_block("CERTIFICATE", &der)).collect();
+        resp.chain = result
+            .chain
+            .iter()
+            .filter_map(|c| c.to_der().ok())
+            .map(|der| pem_block("CERTIFICATE", &der))
+            .collect();
         StatusCode::OK
     };
     (status, Json(resp)).into_response()
@@ -240,13 +294,19 @@ fn request_state_str(s: oe_castore::RequestState) -> &'static str {
 }
 
 async fn handle_ca_pem(State(server): State<Arc<Server>>) -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "application/x-pem-file")], server.ca_pem.clone())
+    (
+        [(header::CONTENT_TYPE, "application/x-pem-file")],
+        server.ca_pem.clone(),
+    )
 }
 
 /// Sert le certificat de la CA émettrice au format DER, à l'adresse exacte
 /// que porte l'extension AIA `ca_issuers` des certificats émis.
 async fn handle_ca_der(State(server): State<Arc<Server>>) -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "application/pkix-cert")], server.ca_der.clone())
+    (
+        [(header::CONTENT_TYPE, "application/pkix-cert")],
+        server.ca_der.clone(),
+    )
 }
 
 async fn handle_crl(State(server): State<Arc<Server>>) -> Response {
@@ -269,8 +329,9 @@ async fn handle_conformance(State(server): State<Arc<Server>>) -> impl IntoRespo
         .iter()
         .map(|e| {
             serde_json::json!({
-                "exigence": e.requirement.to_string(),
-                "titre": e.requirement.title,
+                "norme": e.requirement.standard,
+                "clause": e.requirement.clause,
+                "exigence": e.requirement.title,
                 "statut": e.status.label(),
                 "mecanisme": e.mechanism,
                 "test": e.test,
@@ -278,7 +339,23 @@ async fn handle_conformance(State(server): State<Arc<Server>>) -> impl IntoRespo
             })
         })
         .collect();
-    Json(serde_json::json!({ "version": server.version, "exigences": entries }))
+    let comptes: serde_json::Map<String, serde_json::Value> = matrix
+        .counts()
+        .into_iter()
+        .map(|(status, n)| (status.label().to_string(), serde_json::Value::from(n)))
+        .collect();
+    let (coherente, incoherence) = match matrix.validate() {
+        Ok(()) => (true, None),
+        Err(msg) => (false, Some(msg)),
+    };
+    Json(serde_json::json!({
+        "version": server.version,
+        "comptes": comptes,
+        "normes": matrix.standards(),
+        "exigences": entries,
+        "matrice_coherente": coherente,
+        "incoherence": incoherence,
+    }))
 }
 
 /// Bascule en dégradé dès que l'état de révocation n'est plus servable : un

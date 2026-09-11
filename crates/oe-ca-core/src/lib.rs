@@ -112,7 +112,9 @@ pub fn canonical_serial(sn: &SerialNumber) -> Vec<u8> {
 pub fn matches_signer(cert_spki_der: &[u8], signer: &dyn SigningToken) -> Result<(), CaError> {
     let signer_spki = signer.public_key_der()?;
     if cert_spki_der != signer_spki.as_slice() {
-        return Err(CaError::Other("la clé du token PKCS#11 ne correspond pas au certificat de l'autorité".to_string()));
+        return Err(CaError::Other(
+            "la clé du token PKCS#11 ne correspond pas au certificat de l'autorité".to_string(),
+        ));
     }
     Ok(())
 }
@@ -133,7 +135,12 @@ impl BuilderProfile for RawProfile {
     fn get_subject(&self) -> Name {
         self.subject.clone()
     }
-    fn build_extensions(&self, _spk: spki::SubjectPublicKeyInfoRef<'_>, _issuer_spk: spki::SubjectPublicKeyInfoRef<'_>, _tbs: &x509_cert::TbsCertificate) -> x509_cert::builder::Result<Vec<Extension>> {
+    fn build_extensions(
+        &self,
+        _spk: spki::SubjectPublicKeyInfoRef<'_>,
+        _issuer_spk: spki::SubjectPublicKeyInfoRef<'_>,
+        _tbs: &x509_cert::TbsCertificate,
+    ) -> x509_cert::builder::Result<Vec<Extension>> {
         Ok(self.extensions.clone())
     }
 }
@@ -159,7 +166,11 @@ pub struct Issuer {
 
 impl Issuer {
     pub fn new(opts: Options) -> Result<Issuer, CaError> {
-        let cert_spki_der = opts.certificate.tbs_certificate().subject_public_key_info().to_der()?;
+        let cert_spki_der = opts
+            .certificate
+            .tbs_certificate()
+            .subject_public_key_info()
+            .to_der()?;
         matches_signer(&cert_spki_der, opts.signer.as_ref())?;
         Ok(Issuer { opts })
     }
@@ -185,11 +196,19 @@ impl Issuer {
     }
 
     pub fn crl_url(&self) -> String {
-        format!("{}/download/{}.crl", self.opts.public_url, oe_certs::file_name(&common_name(&self.opts.certificate)))
+        format!(
+            "{}/download/{}.crl",
+            self.opts.public_url,
+            oe_certs::file_name(&common_name(&self.opts.certificate))
+        )
     }
 
     pub fn ca_certificate_url(&self) -> String {
-        format!("{}/download/{}.cer", self.opts.public_url, oe_certs::file_name(&common_name(&self.opts.certificate)))
+        format!(
+            "{}/download/{}.cer",
+            self.opts.public_url,
+            oe_certs::file_name(&common_name(&self.opts.certificate))
+        )
     }
 
     /// Produit un certificat pour la CSR donnée selon le profil demandé.
@@ -197,11 +216,22 @@ impl Issuer {
     /// Séquence rigide, à l'identique du code Go : réserver le numéro de
     /// série AVANT de signer, signer, puis seulement alors inscrire au
     /// registre.
-    pub async fn issue(&self, csr_public_key_der: &[u8], subject_cn: &str, profile: &Profile, transaction_id: &str) -> Result<Certificate, CaError> {
+    pub async fn issue(
+        &self,
+        csr_public_key_der: &[u8],
+        subject_cn: &str,
+        profile: &Profile,
+        transaction_id: &str,
+    ) -> Result<Certificate, CaError> {
         let serial = self.reserve_serial(profile.name).await?;
         let serial_bytes = canonical_serial(&serial);
 
-        let subject = build_subject(subject_cn, profile.organizational_unit, profile.organization, profile.country)?;
+        let subject = build_subject(
+            subject_cn,
+            profile.organizational_unit,
+            profile.organization,
+            profile.country,
+        )?;
         let issuer_name = self.opts.certificate.tbs_certificate().subject().clone();
 
         let now = time::OffsetDateTime::now_utc();
@@ -210,13 +240,26 @@ impl Issuer {
 
         let subject_spki = SubjectPublicKeyInfo::from_der(csr_public_key_der)?;
         let ski = signing::subject_key_id(csr_public_key_der)?;
-        let issuer_spki_der = self.opts.certificate.tbs_certificate().subject_public_key_info().to_der()?;
+        let issuer_spki_der = self
+            .opts
+            .certificate
+            .tbs_certificate()
+            .subject_public_key_info()
+            .to_der()?;
         let parent_ski = signing::subject_key_id(&issuer_spki_der)?;
 
-        let mut exts = vec![extensions::basic_constraints(false, None)?, extensions::key_usage(profile.key_usages)?, extensions::subject_key_identifier(&ski)?, extensions::authority_key_identifier(&parent_ski)?];
+        let mut exts = vec![
+            extensions::basic_constraints(false, None)?,
+            extensions::key_usage(profile.key_usages)?,
+            extensions::subject_key_identifier(&ski)?,
+            extensions::authority_key_identifier(&parent_ski)?,
+        ];
         let eku_oids = profile::eku_oids(profile);
         if !eku_oids.is_empty() {
-            exts.push(extensions::extended_key_usage(&eku_oids, profile.eku_critical)?);
+            exts.push(extensions::extended_key_usage(
+                &eku_oids,
+                profile.eku_critical,
+            )?);
         }
         if profile.ocsp_no_check {
             exts.push(extensions::ocsp_no_check());
@@ -224,29 +267,51 @@ impl Issuer {
         if profile.include_crl_distribution_point {
             exts.push(extensions::crl_distribution_point(&self.crl_url())?);
         }
-        let ca_issuers = profile.include_ca_issuers.then(|| self.ca_certificate_url());
-        let ocsp = if profile.include_ocsp_responder { self.opts.ocsp_url.clone() } else { None };
+        let ca_issuers = profile
+            .include_ca_issuers
+            .then(|| self.ca_certificate_url());
+        let ocsp = if profile.include_ocsp_responder {
+            self.opts.ocsp_url.clone()
+        } else {
+            None
+        };
         if ca_issuers.is_some() || ocsp.is_some() {
-            exts.push(extensions::authority_info_access(ca_issuers.as_deref(), ocsp.as_deref())?);
+            exts.push(extensions::authority_info_access(
+                ca_issuers.as_deref(),
+                ocsp.as_deref(),
+            )?);
         }
 
-        let raw_profile = RawProfile { subject, issuer: issuer_name, extensions: exts };
-        let builder = CertificateBuilder::new(raw_profile, serial, Validity::new(not_before, not_after), subject_spki).map_err(|e| CaError::Other(e.to_string()))?;
+        let raw_profile = RawProfile {
+            subject,
+            issuer: issuer_name,
+            extensions: exts,
+        };
+        let builder = CertificateBuilder::new(
+            raw_profile,
+            serial,
+            Validity::new(not_before, not_after),
+            subject_spki,
+        )
+        .map_err(|e| CaError::Other(e.to_string()))?;
         let cert = signing::sign_with_token(builder, self.opts.signer.as_ref(), &issuer_spki_der)?;
 
-        self.opts.store.save_certificate(oe_castore::Certificate {
-            serial: serial_bytes.clone(),
-            profile: profile.name.to_string(),
-            subject_dn: cert.tbs_certificate().subject().to_string(),
-            issuer_dn: cert.tbs_certificate().issuer().to_string(),
-            not_before: now,
-            not_after: now + profile.validity,
-            der: cert.to_der()?,
-            status: oe_castore::CertificateStatus::Issued,
-            revoked_at: None,
-            revocation_reason: 0,
-            request_transaction_id: transaction_id.to_string(),
-        }).await?;
+        self.opts
+            .store
+            .save_certificate(oe_castore::Certificate {
+                serial: serial_bytes.clone(),
+                profile: profile.name.to_string(),
+                subject_dn: cert.tbs_certificate().subject().to_string(),
+                issuer_dn: cert.tbs_certificate().issuer().to_string(),
+                not_before: now,
+                not_after: now + profile.validity,
+                der: cert.to_der()?,
+                status: oe_castore::CertificateStatus::Issued,
+                revoked_at: None,
+                revocation_reason: 0,
+                request_transaction_id: transaction_id.to_string(),
+            })
+            .await?;
 
         self.record(
             "ca.certificate_issued",
@@ -274,7 +339,12 @@ impl Issuer {
             // Réserve la forme canonique (voir `canonical_serial`) : c'est
             // cette même clé que relira `issue` juste après, et celle que
             // tout outil tiers affichera pour ce certificat.
-            match self.opts.store.reserve_serial(&canonical_serial(&serial), profile).await {
+            match self
+                .opts
+                .store
+                .reserve_serial(&canonical_serial(&serial), profile)
+                .await
+            {
                 Ok(()) => return Ok(serial),
                 Err(StoreError::SerialTaken) => continue,
                 Err(e) => return Err(e.into()),
@@ -285,9 +355,17 @@ impl Issuer {
 
     /// Révoque un certificat émis par cette autorité et consigne la
     /// décision. La CRL n'est pas republiée ici : `publish_crl` la reprend.
-    pub async fn revoke(&self, serial: &[u8], reason: i32, operator: &str, comment: &str) -> Result<(), CaError> {
+    pub async fn revoke(
+        &self,
+        serial: &[u8],
+        reason: i32,
+        operator: &str,
+        comment: &str,
+    ) -> Result<(), CaError> {
         if operator.is_empty() {
-            return Err(CaError::Other("la révocation exige l'identité de l'opérateur qui la décide".to_string()));
+            return Err(CaError::Other(
+                "la révocation exige l'identité de l'opérateur qui la décide".to_string(),
+            ));
         }
         let cert = self.opts.store.certificate(&serial.to_vec()).await?;
         let at = time::OffsetDateTime::now_utc();
@@ -336,17 +414,32 @@ impl Issuer {
         // `None` plutôt qu'une séquence vide lorsqu'il n'y a rien à révoquer,
         // à l'identique du binaire Go.
         let entries = entries?;
-        let revoked_certificates = if entries.is_empty() { None } else { Some(entries) };
+        let revoked_certificates = if entries.is_empty() {
+            None
+        } else {
+            Some(entries)
+        };
 
-        let issuer_spki_der = self.opts.certificate.tbs_certificate().subject_public_key_info().to_der()?;
+        let issuer_spki_der = self
+            .opts
+            .certificate
+            .tbs_certificate()
+            .subject_public_key_info()
+            .to_der()?;
         let ski = signing::subject_key_id(&issuer_spki_der)?;
-        let crl_extensions: x509_cert::ext::Extensions = vec![extensions::crl_number(number)?, extensions::authority_key_identifier(&ski)?];
+        let crl_extensions: x509_cert::ext::Extensions = vec![
+            extensions::crl_number(number)?,
+            extensions::authority_key_identifier(&ski)?,
+        ];
 
         let tbs = x509_cert::crl::TbsCertList {
             version: x509_cert::Version::V2,
             // Remplacé par `signing::sign_crl` juste avant de signer, comme
             // le fait `x509_cert::builder::CrlBuilder` (placeholder "0.0.0").
-            signature: spki::AlgorithmIdentifierOwned { oid: der::asn1::ObjectIdentifier::new("0.0.0").expect("OID constant invalide"), parameters: None },
+            signature: spki::AlgorithmIdentifierOwned {
+                oid: der::asn1::ObjectIdentifier::new("0.0.0").expect("OID constant invalide"),
+                parameters: None,
+            },
             issuer: self.opts.certificate.tbs_certificate().subject().clone(),
             this_update,
             next_update: Some(next_update),
@@ -356,7 +449,12 @@ impl Issuer {
         let crl = signing::sign_crl(tbs, self.opts.signer.as_ref(), &issuer_spki_der)?;
         let der = crl.to_der()?;
 
-        let record = oe_castore::Crl { number, der, this_update: now, next_update: now + self.opts.crl_validity };
+        let record = oe_castore::Crl {
+            number,
+            der,
+            this_update: now,
+            next_update: now + self.opts.crl_validity,
+        };
         self.opts.store.save_crl(record.clone()).await?;
 
         self.record(
@@ -390,7 +488,11 @@ fn extensions_crl_reason(code: i32) -> Result<Extension, CaError> {
         10 => CrlReason::AaCompromise,
         _ => CrlReason::Unspecified,
     };
-    Ok(Extension { extn_id: der::asn1::ObjectIdentifier::new("2.5.29.21").expect("OID constant invalide"), critical: false, extn_value: der::asn1::OctetString::new(variant.to_der()?)? })
+    Ok(Extension {
+        extn_id: der::asn1::ObjectIdentifier::new("2.5.29.21").expect("OID constant invalide"),
+        critical: false,
+        extn_value: der::asn1::OctetString::new(variant.to_der()?)?,
+    })
 }
 
 fn common_name(cert: &Certificate) -> String {

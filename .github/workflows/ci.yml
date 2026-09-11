@@ -17,15 +17,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
 
-      # Pas de --fmt-check : le style établi par ce dépôt dépasse largement
-      # la largeur de ligne par défaut de rustfmt (voir la discussion dans
-      # l'historique de commits) — clippy est le filet de qualité qui compte
-      # réellement ici, et il est tenu à zéro avertissement depuis le début
-      # du portage.
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 

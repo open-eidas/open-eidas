@@ -142,11 +142,24 @@ pub trait Store: Send + Sync {
     async fn reserve_serial(&self, serial: &Serial, profile: &str) -> Result<(), StoreError>;
     async fn save_certificate(&self, c: Certificate) -> Result<(), StoreError>;
     async fn certificate(&self, serial: &Serial) -> Result<Certificate, StoreError>;
-    async fn active_by_subject(&self, subject_dn: &str, now: OffsetDateTime) -> Result<Vec<Certificate>, StoreError>;
-    async fn revoke(&self, serial: &Serial, at: OffsetDateTime, reason: i32) -> Result<(), StoreError>;
+    async fn active_by_subject(
+        &self,
+        subject_dn: &str,
+        now: OffsetDateTime,
+    ) -> Result<Vec<Certificate>, StoreError>;
+    async fn revoke(
+        &self,
+        serial: &Serial,
+        at: OffsetDateTime,
+        reason: i32,
+    ) -> Result<(), StoreError>;
     /// Certificats révoqués à porter dans la CRL. Un certificat expiré
     /// depuis plus de `grace` en est retiré (RFC 5280 §5).
-    async fn revoked(&self, now: OffsetDateTime, grace: time::Duration) -> Result<Vec<Certificate>, StoreError>;
+    async fn revoked(
+        &self,
+        now: OffsetDateTime,
+        grace: time::Duration,
+    ) -> Result<Vec<Certificate>, StoreError>;
 
     async fn create_request(&self, r: Request) -> Result<(), StoreError>;
     async fn request_by_fingerprint(&self, fingerprint: &str) -> Result<Request, StoreError>;
@@ -192,12 +205,22 @@ impl Memory {
 #[async_trait::async_trait]
 impl Store for Memory {
     async fn save_authority(&self, a: Authority) -> Result<(), StoreError> {
-        self.inner.lock().unwrap().authorities.insert(a.name.clone(), a);
+        self.inner
+            .lock()
+            .unwrap()
+            .authorities
+            .insert(a.name.clone(), a);
         Ok(())
     }
 
     async fn authority(&self, name: &str) -> Result<Authority, StoreError> {
-        self.inner.lock().unwrap().authorities.get(name).cloned().ok_or(StoreError::NotFound)
+        self.inner
+            .lock()
+            .unwrap()
+            .authorities
+            .get(name)
+            .cloned()
+            .ok_or(StoreError::NotFound)
     }
 
     async fn reserve_serial(&self, serial: &Serial, profile: &str) -> Result<(), StoreError> {
@@ -230,7 +253,9 @@ impl Store for Memory {
         let key = serial_key(&c.serial);
         match state.certificates.get(&key) {
             None => return Err(StoreError::NotFound),
-            Some(existing) if existing.status != CertificateStatus::Reserved => return Err(StoreError::Conflict),
+            Some(existing) if existing.status != CertificateStatus::Reserved => {
+                return Err(StoreError::Conflict)
+            }
             _ => {}
         }
         state.certificates.insert(key, c);
@@ -245,22 +270,38 @@ impl Store for Memory {
         }
     }
 
-    async fn active_by_subject(&self, subject_dn: &str, now: OffsetDateTime) -> Result<Vec<Certificate>, StoreError> {
+    async fn active_by_subject(
+        &self,
+        subject_dn: &str,
+        now: OffsetDateTime,
+    ) -> Result<Vec<Certificate>, StoreError> {
         let state = self.inner.lock().unwrap();
         let mut out: Vec<Certificate> = state
             .certificates
             .values()
-            .filter(|c| c.status == CertificateStatus::Issued && c.subject_dn == subject_dn && now < c.not_after)
+            .filter(|c| {
+                c.status == CertificateStatus::Issued
+                    && c.subject_dn == subject_dn
+                    && now < c.not_after
+            })
             .cloned()
             .collect();
         out.sort_by(|a, b| a.serial.cmp(&b.serial));
         Ok(out)
     }
 
-    async fn revoke(&self, serial: &Serial, at: OffsetDateTime, reason: i32) -> Result<(), StoreError> {
+    async fn revoke(
+        &self,
+        serial: &Serial,
+        at: OffsetDateTime,
+        reason: i32,
+    ) -> Result<(), StoreError> {
         let mut state = self.inner.lock().unwrap();
         let key = serial_key(serial);
-        let cert = state.certificates.get_mut(&key).ok_or(StoreError::NotFound)?;
+        let cert = state
+            .certificates
+            .get_mut(&key)
+            .ok_or(StoreError::NotFound)?;
         if cert.status == CertificateStatus::Reserved {
             return Err(StoreError::NotFound);
         }
@@ -274,7 +315,11 @@ impl Store for Memory {
         Ok(())
     }
 
-    async fn revoked(&self, now: OffsetDateTime, grace: time::Duration) -> Result<Vec<Certificate>, StoreError> {
+    async fn revoked(
+        &self,
+        now: OffsetDateTime,
+        grace: time::Duration,
+    ) -> Result<Vec<Certificate>, StoreError> {
         let state = self.inner.lock().unwrap();
         let mut out: Vec<Certificate> = state
             .certificates
@@ -288,34 +333,62 @@ impl Store for Memory {
 
     async fn create_request(&self, r: Request) -> Result<(), StoreError> {
         let mut state = self.inner.lock().unwrap();
-        if state.by_fingerprint.contains_key(&r.csr_fingerprint) || state.requests.contains_key(&r.transaction_id) {
+        if state.by_fingerprint.contains_key(&r.csr_fingerprint)
+            || state.requests.contains_key(&r.transaction_id)
+        {
             return Err(StoreError::Conflict);
         }
-        state.by_fingerprint.insert(r.csr_fingerprint.clone(), r.transaction_id.clone());
+        state
+            .by_fingerprint
+            .insert(r.csr_fingerprint.clone(), r.transaction_id.clone());
         state.requests.insert(r.transaction_id.clone(), r);
         Ok(())
     }
 
     async fn request_by_fingerprint(&self, fingerprint: &str) -> Result<Request, StoreError> {
         let state = self.inner.lock().unwrap();
-        let id = state.by_fingerprint.get(fingerprint).ok_or(StoreError::NotFound)?;
+        let id = state
+            .by_fingerprint
+            .get(fingerprint)
+            .ok_or(StoreError::NotFound)?;
         state.requests.get(id).cloned().ok_or(StoreError::NotFound)
     }
 
     async fn request_by_transaction_id(&self, transaction_id: &str) -> Result<Request, StoreError> {
-        self.inner.lock().unwrap().requests.get(transaction_id).cloned().ok_or(StoreError::NotFound)
+        self.inner
+            .lock()
+            .unwrap()
+            .requests
+            .get(transaction_id)
+            .cloned()
+            .ok_or(StoreError::NotFound)
     }
 
-    async fn requests(&self, state_filter: Option<RequestState>) -> Result<Vec<Request>, StoreError> {
+    async fn requests(
+        &self,
+        state_filter: Option<RequestState>,
+    ) -> Result<Vec<Request>, StoreError> {
         let state = self.inner.lock().unwrap();
-        let mut out: Vec<Request> = state.requests.values().filter(|r| state_filter.is_none_or(|s| r.state == s)).cloned().collect();
-        out.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.transaction_id.cmp(&b.transaction_id)));
+        let mut out: Vec<Request> = state
+            .requests
+            .values()
+            .filter(|r| state_filter.is_none_or(|s| r.state == s))
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.transaction_id.cmp(&b.transaction_id))
+        });
         Ok(out)
     }
 
     async fn update_request(&self, r: Request, from: RequestState) -> Result<(), StoreError> {
         let mut state = self.inner.lock().unwrap();
-        let existing = state.requests.get(&r.transaction_id).ok_or(StoreError::NotFound)?;
+        let existing = state
+            .requests
+            .get(&r.transaction_id)
+            .ok_or(StoreError::NotFound)?;
         if existing.state != from {
             return Err(StoreError::Conflict);
         }
@@ -336,7 +409,12 @@ impl Store for Memory {
 
     async fn latest_crl(&self) -> Result<Crl, StoreError> {
         let state = self.inner.lock().unwrap();
-        state.crls.iter().max_by_key(|c| c.number).cloned().ok_or(StoreError::NotFound)
+        state
+            .crls
+            .iter()
+            .max_by_key(|c| c.number)
+            .cloned()
+            .ok_or(StoreError::NotFound)
     }
 }
 
@@ -344,7 +422,12 @@ impl Store for Memory {
 mod tests {
     use super::*;
 
-    fn cert(serial: &[u8], subject: &str, status: CertificateStatus, not_after: OffsetDateTime) -> Certificate {
+    fn cert(
+        serial: &[u8],
+        subject: &str,
+        status: CertificateStatus,
+        not_after: OffsetDateTime,
+    ) -> Certificate {
         Certificate {
             serial: serial.to_vec(),
             profile: "tsa_signer".to_string(),
@@ -365,10 +448,21 @@ mod tests {
         let store = Memory::new();
         let serial = vec![1u8; 16];
         store.reserve_serial(&serial, "tsa_signer").await.unwrap();
-        assert!(matches!(store.certificate(&serial).await, Err(StoreError::NotFound)), "réservé mais non signé doit rester invisible");
+        assert!(
+            matches!(store.certificate(&serial).await, Err(StoreError::NotFound)),
+            "réservé mais non signé doit rester invisible"
+        );
 
         let far_future = OffsetDateTime::UNIX_EPOCH + time::Duration::days(365 * 50);
-        store.save_certificate(cert(&serial, "CN=test", CertificateStatus::Issued, far_future)).await.unwrap();
+        store
+            .save_certificate(cert(
+                &serial,
+                "CN=test",
+                CertificateStatus::Issued,
+                far_future,
+            ))
+            .await
+            .unwrap();
         let got = store.certificate(&serial).await.unwrap();
         assert_eq!(got.subject_dn, "CN=test");
     }
@@ -378,7 +472,10 @@ mod tests {
         let store = Memory::new();
         let serial = vec![2u8; 16];
         store.reserve_serial(&serial, "tsa_signer").await.unwrap();
-        assert!(matches!(store.reserve_serial(&serial, "tsa_signer").await, Err(StoreError::SerialTaken)));
+        assert!(matches!(
+            store.reserve_serial(&serial, "tsa_signer").await,
+            Err(StoreError::SerialTaken)
+        ));
     }
 
     #[tokio::test]
@@ -387,7 +484,15 @@ mod tests {
         let serial = vec![3u8; 16];
         let far_future = OffsetDateTime::UNIX_EPOCH + time::Duration::days(365 * 50);
         store.reserve_serial(&serial, "tsa_signer").await.unwrap();
-        store.save_certificate(cert(&serial, "CN=test", CertificateStatus::Issued, far_future)).await.unwrap();
+        store
+            .save_certificate(cert(
+                &serial,
+                "CN=test",
+                CertificateStatus::Issued,
+                far_future,
+            ))
+            .await
+            .unwrap();
 
         let first = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
         let second = OffsetDateTime::UNIX_EPOCH + time::Duration::days(2);
@@ -395,7 +500,11 @@ mod tests {
         store.revoke(&serial, second, 2).await.unwrap();
 
         let got = store.certificate(&serial).await.unwrap();
-        assert_eq!(got.revoked_at, Some(first), "la première révocation doit faire foi");
+        assert_eq!(
+            got.revoked_at,
+            Some(first),
+            "la première révocation doit faire foi"
+        );
         assert_eq!(got.revocation_reason, 1);
     }
 
@@ -419,7 +528,10 @@ mod tests {
         store.create_request(r.clone()).await.unwrap();
         let mut dup = r.clone();
         dup.transaction_id = "tx2".to_string();
-        assert!(matches!(store.create_request(dup).await, Err(StoreError::Conflict)));
+        assert!(matches!(
+            store.create_request(dup).await,
+            Err(StoreError::Conflict)
+        ));
     }
 
     #[tokio::test]
@@ -443,8 +555,16 @@ mod tests {
 
         let mut approved = r.clone();
         approved.state = RequestState::Approved;
-        assert!(matches!(store.update_request(approved.clone(), RequestState::Rejected).await, Err(StoreError::Conflict)));
-        store.update_request(approved, RequestState::Pending).await.unwrap();
+        assert!(matches!(
+            store
+                .update_request(approved.clone(), RequestState::Rejected)
+                .await,
+            Err(StoreError::Conflict)
+        ));
+        store
+            .update_request(approved, RequestState::Pending)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -454,11 +574,21 @@ mod tests {
         assert_eq!(store.next_crl_number().await.unwrap(), 2);
 
         store
-            .save_crl(Crl { number: 1, der: vec![], this_update: OffsetDateTime::UNIX_EPOCH, next_update: OffsetDateTime::UNIX_EPOCH })
+            .save_crl(Crl {
+                number: 1,
+                der: vec![],
+                this_update: OffsetDateTime::UNIX_EPOCH,
+                next_update: OffsetDateTime::UNIX_EPOCH,
+            })
             .await
             .unwrap();
         store
-            .save_crl(Crl { number: 2, der: vec![9], this_update: OffsetDateTime::UNIX_EPOCH, next_update: OffsetDateTime::UNIX_EPOCH })
+            .save_crl(Crl {
+                number: 2,
+                der: vec![9],
+                this_update: OffsetDateTime::UNIX_EPOCH,
+                next_update: OffsetDateTime::UNIX_EPOCH,
+            })
             .await
             .unwrap();
         assert_eq!(store.latest_crl().await.unwrap().number, 2);

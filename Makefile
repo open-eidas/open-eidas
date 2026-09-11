@@ -15,7 +15,8 @@ demo: ## Horodate un fichier et vérifie le jeton avec openssl ts
 test: ## Exécute les tests du workspace
 	cargo test --workspace
 
-lint: ## Lance clippy sur tout le workspace
+lint: ## Vérifie le formatage et lance clippy
+	cargo fmt --check
 	cargo clippy --workspace --all-targets -- -D warnings
 
 audit: ## Vérifie la chaîne de hachage des journaux d'audit (TSA et CA)
