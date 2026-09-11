@@ -12,6 +12,13 @@ jobs:
   test:
     name: Clippy, tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # rustsec/audit-check publie son résultat comme un check run —
+      # sans cette permission explicite, le GITHUB_TOKEN par défaut
+      # (contents: read seul) fait échouer l'action avec « Resource not
+      # accessible by integration », indépendamment de tout écart réel.
+      checks: write
     steps:
       - uses: actions/checkout@v4
 
@@ -36,10 +43,21 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
+      # RUSTSEC-2023-0071 (« Marvin Attack », rsa < aucune version corrigée
+      # à ce jour) est un canal auxiliaire temporel sur les opérations de
+      # clé PRIVÉE de la crate `rsa`. Vérifié dans ce dépôt : `rsa` n'y sert
+      # jamais qu'à VÉRIFIER une signature avec une clé PUBLIQUE (CSR
+      # entrantes dans oe-raflow, requêtes/réponses OCSP dans
+      # oe-ocsp-core) — la clé privée de chaque service ne quitte jamais
+      # le token PKCS#11 (voir oe-hsm::SigningToken). La seule opération de
+      # clé privée par `rsa` est oe_hsm::testing::SoftwareToken, documentée
+      # comme n'étant jamais utilisée en production. Ignoré ici faute de
+      # correctif amont disponible ; à retirer dès qu'un correctif existe.
       - name: cargo audit
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          ignore: RUSTSEC-2023-0071
 
   conformance:
     name: Matrice de conformité ETSI
