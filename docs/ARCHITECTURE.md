@@ -16,17 +16,17 @@ référentiel sont listés en section 8.
   (curl,         │                                                  │
    openssl ts,   │   ┌───────────────┐  PKCS#11 ┌─────────────┐     │
    Sign*)        │   │  tsa-server   │─────────▶│  SoftHSM2   │     │
-     │ RFC 3161  │   │     (Go)      │          │ (→ HSM FIPS │     │
+     │ RFC 3161  │   │    (Rust)     │          │ (→ HSM FIPS │     │
      ├──────────▶│   │               │          │   en prod)  │     │
      │  :8318    │   └──┬─────────┬──┘          └─────────────┘     │
      │           │      │         │ POST /api/v1/enroll             │
      │           │      │         ▼                                 │
      │           │      │  ┌───────────────┐   ┌─────────────┐      │
      │           │      │  │   ca-server   │───│ PostgreSQL  │      │
-     │  OCSP     │      │  │     (Go)      │   │  (registre) │      │
+     │  OCSP     │      │  │    (Rust)     │   │  (registre) │      │
      ├──────────▶│   ┌──┴──┤ racine +      │   └─────────────┘      │
      │  :8319    │   │ocsp │ CA émettrice  │                        │
-     │           │   │ (Go)│    :8320      │──▶ PKCS#11 (2 tokens)  │
+     │           │   │(Rust│    :8320      │──▶ PKCS#11 (2 tokens)  │
      │           │   └─────┴───────┬───────┘                        │
      │           │        CRL      │ /download/<CA>.crl, .cer       │
                  └─────────────────┼────────────────────────────────┘
@@ -39,9 +39,9 @@ Quatre services, tous écrits et compris par l'équipe :
 
 | Composant | Rôle | Image / langage |
 |---|---|---|
-| `tsa-server` | Service RFC 3161, signature des jetons | Go 1.25, binaire unique |
-| `ca-server` | Autorité de certification et d'enregistrement : cérémonie de clé, émission depuis une CSR, approbation RA, publication de la CRL et du certificat de la CA | Go 1.25, binaire unique |
-| `ocsp-responder` | Répondeur OCSP (RFC 6960) pour la CA émettrice | Go 1.25, binaire unique |
+| `tsa-server` | Service RFC 3161, signature des jetons | Rust, binaire unique |
+| `ca-server` | Autorité de certification et d'enregistrement : cérémonie de clé, émission depuis une CSR, approbation RA, publication de la CRL et du certificat de la CA | Rust, binaire unique |
+| `ocsp-responder` | Répondeur OCSP (RFC 6960) pour la CA émettrice | Rust, binaire unique |
 | SoftHSM2 | Conservation des clés privées (racine, CA émettrice, TSU, répondeur OCSP — un token par rôle) | `softhsm2` (Debian), PKCS#11 |
 | PostgreSQL | Registre de la CA : autorités, certificats émis, demandes d'enrôlement, historique des CRL | `postgres:17-alpine` |
 
@@ -50,18 +50,22 @@ API (`POST /api/v1/enroll`, authentifiée par un secret HMAC partagé), en
 demandant chacun son profil. Le répondeur OCSP consulte ensuite la CRL publiée
 par la CA (`/download`), rafraîchie périodiquement — plutôt qu'un accès direct
 au registre : il ne voit ainsi que ce qu'un tiers pourrait voir lui-même. Voir
-`internal/ocspresponder` et [CA.md](CA.md).
+`crates/oe-ocsp-core` et [CA.md](CA.md).
 
 ## 3. Choix techniques et justification
 
-**Go pour le service d'horodatage.** Binaire unique sans runtime, surface
-d'attaque réduite, bibliothèque standard solide en ASN.1/X.509, et bindings
-PKCS#11 matures. Un service d'horodatage est un composant synchrone, court, à
-forte contrainte de disponibilité : c'est le profil pour lequel Go est le plus
-prévisible en latence et en empreinte mémoire.
+**Rust pour les trois services.** Binaire unique sans runtime ni ramasse-
+miettes, surface d'attaque réduite, `unsafe_code = "forbid"` sur tout le
+workspace sauf la seule crate d'accès au HSM (`crates/oe-hsm`, bindings
+PKCS#11 via `cryptoki`) — la garantie de sécurité mémoire qu'exige un
+composant qui manipule des clés de signature est ainsi vérifiable
+mécaniquement, pas seulement déclarée. Le projet a d'abord été écrit en
+Go, puis intégralement reporté en Rust pour cette raison ; l'ASN.1/X.509
+est porté à la main sur `der`/`x509-cert` (RustCrypto), faute de
+bibliothèque RFC 3161/6960 clé en main compatible à l'époque du portage.
 
 **PKCS#11 dès le prototype.** La clé privée de la TSU ne quitte jamais le
-module cryptographique : `tsa-server` ne manipule qu'un `crypto.Signer` dont
+module cryptographique : `tsa-server` ne manipule qu'un `SigningToken` dont
 chaque signature est déléguée au token. SoftHSM2 parle exactement le même
 protocole qu'un HSM certifié FIPS 140-2 niveau 3 ou Critères Communs. Le
 passage en production se fait en changeant `OPENEIDAS_PKCS11_MODULE` et le
@@ -70,7 +74,7 @@ label du token — aucune ligne de code applicatif à modifier.
 **Une autorité de certification écrite en propre.** Le certificat de la TSU
 doit être émis par une CA distincte, avec un profil contraint et un cycle de
 vie auditable. Le projet a d'abord intégré OpenXPKI Community, puis l'a
-remplacé par `cmd/ca-server` : l'intégration avait exigé, à plusieurs
+remplacé par `bin/ca-server` : l'intégration avait exigé, à plusieurs
 reprises, de rétro-ingénierier des comportements internes non documentés,
 portant précisément sur les contrôles qu'un audit vient vérifier — validité du
 profil émis, effectivité de l'approbation RA. L'arbitrage complet est dans
@@ -82,7 +86,7 @@ d'approbation à un seul workflow. En contrepartie, l'équipe peut expliquer
 chaque règle ligne à ligne à un auditeur, et chaque exigence normative est
 portée par un test exécutable.
 
-**Les règles ETSI définies une seule fois.** `internal/conformance` porte
+**Les règles ETSI définies une seule fois.** `crates/oe-conformance` porte
 chaque exigence technique applicable sous forme de vérification appelable,
 utilisée à trois endroits qui ne peuvent pas diverger : les tests unitaires,
 les gardes d'exécution (le certificat produit est relu depuis son DER et
@@ -256,7 +260,7 @@ journalisé mais non bloquant, comme pour le contreseing tiers.
 
 L'état exigence par exigence, avec le mécanisme qui la porte et le test qui le
 vérifie, est dans [CONFORMITE-ETSI.md](CONFORMITE-ETSI.md) — généré depuis
-`internal/conformance`, donc incapable de diverger du code. Le tableau
+`crates/oe-conformance`, donc incapable de diverger du code. Le tableau
 ci-dessous en donne la lecture d'ensemble.
 
 | Exigence | État du prototype | Cible |
@@ -266,8 +270,8 @@ ci-dessous en donne la lecture d'ensemble.
 | Cérémonie de clé | Scriptée, idempotente, procès-verbal consigné au journal d'audit (empreintes, opérateur, horodatage) — mais sans double contrôle ni témoin | Double contrôle, témoin indépendant, HSM certifié, racine hors ligne après cérémonie (voir [CA.md](CA.md)) |
 | Approbation RA | Point d'approbation réellement actif : aucun chemin du code ne mène à l'émission sans décision d'un opérateur identifié, consignée en base et au journal. Automatisée sous un compte technique pour que la démonstration/CI s'amorce sans opérateur humain | Revue humaine réelle par un opérateur RA nominatif, à la place de l'approbation automatisée |
 | Journalisation | Journal chaîné par hachage, contresigné par des TSA tierces publiques et répliqué hors site à chaque scellement ; durée de conservation contrôlée au démarrage | Politique de conservation formalisée, réplication multi-région |
-| Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` | OID sous l'arc PEN de l'association, TSA Policy et Practice Statement publiés |
-| Profils de certificat | Structures Go compilées et testées ; le certificat émis est relu depuis son DER et re-contrôlé avant délivrance ; CDP, AIA `ca_issuers` et répondeur OCSP réellement publiés et vérifiés | OID de politique de certification propre |
+| Politique d'horodatage | OID de test `1.3.6.1.4.1.99999.1.1.1` ; brouillon de Policy/Practice Statement dans [CPS.md](CPS.md) | OID sous l'arc PEN de l'association, [CPS.md](CPS.md) adopté formellement et publié |
+| Profils de certificat | Structures Rust compilées et testées ; le certificat émis est relu depuis son DER et re-contrôlé avant délivrance ; CDP, AIA `ca_issuers` et répondeur OCSP réellement publiés et vérifiés | OID de politique de certification propre |
 | Continuité | Instance unique ; registre PostgreSQL sauvegardable, journal répliqué hors site | Redondance active/active, sauvegarde et restauration testées, plan de cessation d'activité engagé (voir [CA.md](CA.md)) |
 | Audit | Aucun | Évaluation par un organisme accrédité (LSTI, Apave), inscription à la liste de confiance |
 
@@ -276,7 +280,7 @@ les certificats invalides (clé et certificat désaccordés, usage étendu absen
 ou non critique, clé trop courte, certificat expiré, autorité elle-même non
 conforme) et journalise un avertissement sur les écarts non bloquants.
 
-**Sur le moteur de CA/RA.** Il n'y en a plus de tiers : `cmd/ca-server` a
+**Sur le moteur de CA/RA.** Il n'y en a plus de tiers : `bin/ca-server` a
 remplacé OpenXPKI Community. Le motif était la difficulté répétée à établir ce
 que le moteur faisait réellement — un profil de certificat mal formé y
 échouait silencieusement à l'émission plutôt qu'au chargement, et le point

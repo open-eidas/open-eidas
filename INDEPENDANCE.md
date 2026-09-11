@@ -65,17 +65,17 @@ Ce que ça ne supprime pas :
 
 | Fonction | OpenXPKI auparavant | Réalisation |
 |---|---|---|
-| Émission depuis une CSR | Profil YAML + moteur NICE (Perl) | `internal/ca` — `x509.CreateCertificate`, profils en structures Go testables unitairement |
-| Génération de CRL | Workflow `crl_issuance` + connecteur `cdp` | `internal/ca` — `x509.CreateRevocationList`, `CRLNumber` monotone servi par la base |
-| Stockage des clés de CA | Datavault chiffré en base (MariaDB) | PKCS#11 (`internal/hsm`), un token par autorité — un seul mécanisme de gestion de clé pour toute la pile |
-| Enrôlement + approbation RA | Workflow générique `certificate_enroll` | `internal/raflow` — une machine à états dédiée (HMAC → PENDING → APPROVED → ISSUED), sans aucun chemin d'auto-approbation |
-| Publication du certificat de CA et de la CRL | Connecteurs `cacert-der`/`cacert-pem`, contournés par la hiérarchie jetable | Servies par `cmd/ca-server` aux mêmes chemins `/download/<CN>.cer` et `.crl` |
-| Répondeur OCSP | — | Déjà fait avant ce chantier (`cmd/ocsp-responder`) |
+| Émission depuis une CSR | Profil YAML + moteur NICE (Perl) | `crates/oe-ca-core` — `x509_cert::builder`, profils en structures Rust testées unitairement |
+| Génération de CRL | Workflow `crl_issuance` + connecteur `cdp` | `crates/oe-ca-core` — `CrlBuilder`, `cRLNumber` monotone servi par la base |
+| Stockage des clés de CA | Datavault chiffré en base (MariaDB) | PKCS#11 (`crates/oe-hsm`), un token par autorité — un seul mécanisme de gestion de clé pour toute la pile |
+| Enrôlement + approbation RA | Workflow générique `certificate_enroll` | `crates/oe-raflow` — une machine à états dédiée (HMAC → PENDING → APPROVED → ISSUED), sans aucun chemin d'auto-approbation |
+| Publication du certificat de CA et de la CRL | Connecteurs `cacert-der`/`cacert-pem`, contournés par la hiérarchie jetable | Servies par `bin/ca-server` aux mêmes chemins `/download/<CN>.cer` et `.crl` |
+| Répondeur OCSP | — | Déjà fait avant ce chantier (`bin/ocsp-responder`) |
 | Interface opérateur RA | WebUI OpenXPKI | CLI `ca-server ra list|approve|reject`, cohérente avec `tsa-server enroll`/`verify-audit` |
-| Registre (certificats, demandes, CRL) | MariaDB, schéma OpenXPKI | PostgreSQL, schéma écrit et commenté par ce dépôt (`internal/castore`) |
+| Registre (certificats, demandes, CRL) | MariaDB, schéma OpenXPKI | PostgreSQL, schéma écrit et commenté par ce dépôt (`crates/oe-castore`) |
 
 **Au-delà du périmètre initialement envisagé**, le chantier a produit
-`internal/conformance` : les exigences ETSI applicables rendues exécutables,
+`crates/oe-conformance` : les exigences ETSI applicables rendues exécutables,
 définies une seule fois et utilisées à trois endroits qui ne peuvent pas
 diverger — les tests unitaires, les gardes d'exécution (le certificat produit
 est relu depuis son DER et re-contrôlé avant d'être délivré), et la matrice
@@ -86,7 +86,10 @@ Conséquence pour le packaging : le Pod OpenXPKI à 4 conteneurs
 (`server`/`client`/`web`/`bootstrap`), ses contournements de permissions
 Kubernetes (`fsGroup`, vhost Apache recopié, groupe forcé des workers Apache)
 et la dépendance Perl/MariaDB ont disparu du chart Helm comme du
-docker-compose. La pile ne contient plus que du Go et PostgreSQL.
+docker-compose. La pile ne contient plus que du Rust et PostgreSQL — le
+moteur maison lui-même a depuis été intégralement reporté de Go vers
+Rust, pour la garantie de sécurité mémoire qu'exige la qualification
+eIDAS ; voir l'historique de commits pour ce second chantier.
 
 ## Risques du chantier, et où ils en sont
 
@@ -113,7 +116,9 @@ lever, et qui figurent comme tels dans la matrice :
 - **approbation RA automatisée** sous un compte technique en démonstration et
   en CI — le point d'approbation est réellement actif, mais la décision n'est
   pas encore prise par un opérateur humain nominatif ;
-- **CP/CPS** non publiés, OID de politique encore de test ;
+- **CP/CPS** : brouillon structuré dans [`docs/CPS.md`](docs/CPS.md), contenu
+  technique aligné sur le code, emplacements organisationnels et juridiques
+  encore à trancher par l'association ; OID de politique encore de test ;
 - **audit par un organisme accrédité** non engagé ;
 - **continuité** : instance unique, sauvegarde et restauration non encore
   testées de bout en bout.
@@ -125,5 +130,6 @@ Procédures et cibles correspondantes : [`docs/CA.md`](docs/CA.md).
 1. Sauvegarde et restauration du registre et des tokens, testées.
 2. Cérémonie de clé rejouée sur HSM certifié, sous double contrôle.
 3. Substitution d'un opérateur RA nominatif à l'approbation automatisée.
-4. Rédaction du CP/CPS et obtention d'un arc OID propre.
+4. Remplissage des emplacements organisationnels de `docs/CPS.md`, adoption
+   formelle par l'association, et obtention d'un arc OID propre.
 5. Audit externe, en s'appuyant sur `docs/CONFORMITE-ETSI.md`.

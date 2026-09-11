@@ -51,8 +51,10 @@ La feuille de route d'Open eIDAS étendra progressivement ce socle aux autres se
 
 Ce dépôt héberge le prototype **fonctionnel et vérifiable** du premier service Open eIDAS — l'autorité d'horodatage (TSA) :
 
-- un service d'horodatage **RFC 3161** écrit en Go, dont la clé de signature
-  ne quitte jamais un module cryptographique (**PKCS#11**) ;
+- un service d'horodatage **RFC 3161** écrit en Rust (mémoire sûre par
+  construction — `unsafe_code` interdit dans tout le workspace sauf le
+  module d'accès au HSM), dont la clé de signature ne quitte jamais un
+  module cryptographique (**PKCS#11**) ;
 - une **autorité de certification écrite en propre** — racine, CA émettrice,
   profils compilés et testés, approbation RA effective, publication de la CRL
   et réponses OCSP — qui délivre le certificat de l'unité d'horodatage par
@@ -154,27 +156,27 @@ Voir [deploy/helm/open-eidas/README.md](deploy/helm/open-eidas/README.md) et
 ## Structure du dépôt
 
 ```
-cmd/tsa-server/       point d'entrée de la TSA : enroll, serve, verify-audit
-cmd/ca-server/        autorité de certification : ceremony, serve, ra, revoke
-cmd/ocsp-responder/   répondeur OCSP (RFC 6960)
-internal/tsa/         cœur RFC 3161 : validation, TSTInfo, CMS SignedData
-internal/conformance/ exigences ETSI sous forme exécutable, et la matrice
-internal/ca/          moteur d'émission : profils, cérémonie, CRL
-internal/raflow/      machine à états d'enrôlement et d'approbation RA
-internal/castore/     registre de la CA (PostgreSQL, et mémoire pour les tests)
-internal/hsm/         accès PKCS#11 aux clés de signature
-internal/timesource/  surveillance de la traçabilité de l'heure
-internal/audit/       journal d'audit chaîné par hachage
-internal/crosstsa/    contreseing du journal par des TSA tierces publiques
-internal/enroll/      client d'enrôlement auprès de la CA
-internal/httpapi/     endpoints HTTP (RFC 3161 + façade JSON)
-deploy/               images des trois services, chart Helm
-scripts/              amorçage et démonstration
+bin/tsa-server/        point d'entrée de la TSA : enroll, serve, verify-audit
+bin/ca-server/         autorité de certification : ceremony, serve, ra, revoke
+bin/ocsp-responder/    répondeur OCSP (RFC 6960)
+crates/oe-tsa-core/    cœur RFC 3161 : validation, TSTInfo, CMS SignedData
+crates/oe-conformance/ exigences ETSI sous forme exécutable, et la matrice
+crates/oe-ca-core/     moteur d'émission : profils, cérémonie, CRL
+crates/oe-raflow/      machine à états d'enrôlement et d'approbation RA
+crates/oe-castore/     registre de la CA (PostgreSQL, et mémoire pour les tests)
+crates/oe-hsm/         accès PKCS#11 aux clés de signature (seule crate autorisant `unsafe`)
+crates/oe-timesource/  surveillance de la traçabilité de l'heure
+crates/oe-audit/       journal d'audit chaîné par hachage
+crates/oe-crosstsa/    contreseing du journal par des TSA tierces publiques
+crates/oe-enroll/      client d'enrôlement auprès de la CA
+crates/oe-httpapi/     endpoints HTTP (RFC 3161 + façade JSON)
+deploy/                images des trois services, chart Helm
+scripts/               amorçage et démonstration
 ```
 
 ## Modèle & Sûreté
 
-- **Gouvernance non lucrative d'intérêt général** : association financée par le mécénat et le soutien d'acteurs de la souveraineté numérique. Service gratuit ou à prix coûtant, sans quota commercial ni rente monopolistique.
+- **Gouvernance non lucrative d'intérêt général** : association financée par le mécénat et le soutien d'acteurs de la souveraineté numérique. Service gratuit ou à prix coûtant, sans quota commercial ni rente monopolistique. La frugalité se vérifie : la pile complète tient dans ~200 Mio de RAM demandée, mesuré service par service dans [docs/SIZING.md](docs/SIZING.md).
 - **Sûreté intransigeante** : aucun compromis sur la sécurité. L'architecture est conçue pour satisfaire rigoureusement les normes ETSI (EN 319 421, EN 319 422, etc.) et les exigences de qualification eIDAS / ANSSI.
 - **Transparence intégrale** : code source libre, politiques de service publiques, traçabilité métrologique documentée et rapports d'audit tiers publiés.
 
