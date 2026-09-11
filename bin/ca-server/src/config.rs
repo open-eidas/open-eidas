@@ -167,6 +167,18 @@ impl Config {
             env_duration("OPENEIDAS_CRL_GRACE", Duration::from_secs(30 * 24 * 3600))?,
             time::Duration::days(30),
         );
+        // Contrôlée ici, à la configuration, et non seulement documentée :
+        // ETSI EN 319 401 §7.10 impose une durée de conservation minimale,
+        // pas seulement un journal qui existe (oe_conformance::check_audit_retention).
+        let audit_retention = to_time_duration(
+            env_duration(
+                "OPENEIDAS_AUDIT_RETENTION",
+                Duration::from_secs(365 * 24 * 3600),
+            )?,
+            time::Duration::days(365),
+        );
+        oe_conformance::check_audit_retention(audit_retention)
+            .map_err(|e| format!("OPENEIDAS_AUDIT_RETENTION: {e}"))?;
 
         Ok(Config {
             listen: env_str("OPENEIDAS_LISTEN", ":8320"),

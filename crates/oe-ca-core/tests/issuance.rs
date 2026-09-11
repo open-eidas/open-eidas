@@ -176,6 +176,7 @@ async fn issue_produces_a_certificate_signed_by_the_issuing_key() {
         cert.tbs_certificate().issuer().to_string(),
         issuer.certificate().tbs_certificate().subject().to_string()
     );
+    assert_ski_and_aki_present_and_linked(&cert, issuer.certificate());
 
     let serial = oe_ca_core::canonical_serial(cert.tbs_certificate().serial_number());
     let stored = store
@@ -405,6 +406,52 @@ fn write_crl_pem(path: &std::path::Path, der: &[u8]) {
     }
     out.push_str("-----END X509 CRL-----\n");
     std::fs::write(path, out).unwrap();
+}
+
+/// RFC 5280 §4.2.1.1/§4.2.1.2 : vérifie que le certificat porte un
+/// subjectKeyIdentifier non critique (SHA-1 de sa clé publique, méthode 1)
+/// et un authorityKeyIdentifier dont le keyIdentifier pointe vers le
+/// subjectKeyIdentifier du certificat émetteur — pas seulement que la chaîne
+/// se vérifie par ailleurs (subject/issuer/signature suffiraient à openssl
+/// sans ces extensions).
+fn assert_ski_and_aki_present_and_linked(cert: &Certificate, issuer_cert: &Certificate) {
+    use x509_cert::ext::pkix::{AuthorityKeyIdentifier, SubjectKeyIdentifier};
+
+    fn find<'a>(cert: &'a Certificate, oid: &str) -> &'a der::asn1::OctetString {
+        let target = der::asn1::ObjectIdentifier::new(oid).unwrap();
+        &cert
+            .tbs_certificate()
+            .extensions()
+            .expect("le certificat doit porter des extensions")
+            .iter()
+            .find(|e| e.extn_id == target)
+            .unwrap_or_else(|| panic!("extension {oid} absente"))
+            .extn_value
+    }
+
+    let ski_ext = find(cert, "2.5.29.14");
+    let ski = SubjectKeyIdentifier::from_der(ski_ext.as_bytes()).expect("SKI doit se décoder");
+    assert_eq!(
+        ski.0.as_bytes().len(),
+        20,
+        "le SKI doit être un condensé SHA-1 (méthode 1, RFC 5280 §4.2.1.2)"
+    );
+
+    let aki_ext = find(cert, "2.5.29.35");
+    let aki = AuthorityKeyIdentifier::from_der(aki_ext.as_bytes()).expect("AKI doit se décoder");
+    let aki_key_id = aki
+        .key_identifier
+        .expect("l'AKI doit porter un keyIdentifier");
+
+    let issuer_ski_ext = find(issuer_cert, "2.5.29.14");
+    let issuer_ski = SubjectKeyIdentifier::from_der(issuer_ski_ext.as_bytes())
+        .expect("SKI de l'émetteur doit se décoder");
+
+    assert_eq!(
+        aki_key_id.as_bytes(),
+        issuer_ski.0.as_bytes(),
+        "l'AKI du certificat émis doit pointer vers le SKI de son émetteur"
+    );
 }
 
 /// Recorder de test qui capture les noms d'événement reçus — sert à vérifier

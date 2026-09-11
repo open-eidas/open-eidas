@@ -11,3 +11,4 @@ description = "Portage en cours (voir /home/philippe/.claude/plans/witty-hopping
 workspace = true
 
 [dependencies]
+time = { version = "0.3", features = ["std"] }

@@ -27,8 +27,12 @@ use oe_raflow::{Decider, DeciderOptions, Flow, Options, RaflowError};
 const HMAC_SECRET: &str = "secret-de-test";
 
 fn build_csr(cn: &str) -> (Vec<u8>, RsaPrivateKey) {
+    build_csr_with_bits(cn, 3072)
+}
+
+fn build_csr_with_bits(cn: &str, bits: usize) -> (Vec<u8>, RsaPrivateKey) {
     let mut rng = rand::thread_rng();
-    let key = RsaPrivateKey::new(&mut rng, 2048).expect("clé RSA de test");
+    let key = RsaPrivateKey::new(&mut rng, bits).expect("clé RSA de test");
     let public_key = RsaPublicKey::from(&key);
     let spki_der = public_key
         .to_public_key_der()
@@ -117,6 +121,24 @@ async fn submit_without_valid_hmac_is_unauthenticated() {
         .submit(&csr_der, profile::PROFILE_TSA_SIGNER, "00")
         .await;
     assert!(matches!(err, Err(RaflowError::Unauthenticated)));
+}
+
+/// ETSI TS 119 312 §6.2 : une CSR authentifiée et correctement signée, mais
+/// dont la clé publique est trop courte, doit tout de même être refusée —
+/// l'authentification HMAC prouve l'identité du demandeur, pas que sa clé
+/// est acceptable.
+#[tokio::test]
+async fn submit_rejects_a_csr_with_an_undersized_key() {
+    let (flow, _store) = test_flow().await;
+    let (csr_der, _key) = build_csr_with_bits("tsu.example.test", 2048);
+    let sig = oe_raflow::signature(&csr_der, HMAC_SECRET);
+    let err = flow
+        .submit(&csr_der, profile::PROFILE_TSA_SIGNER, &sig)
+        .await;
+    assert!(
+        err.is_err(),
+        "une clé RSA de 2048 bits doit être refusée (< 3072 bits, ETSI TS 119 312 §6.2)"
+    );
 }
 
 #[tokio::test]

@@ -1313,6 +1313,9 @@ dependencies = [
 [[package]]
 name = "oe-conformance"
 version = "0.1.0"
+dependencies = [
+ "time",
+]
 
 [[package]]
 name = "oe-crosstsa"

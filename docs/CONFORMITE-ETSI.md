@@ -5,7 +5,7 @@
      correction se fait dans le code, pour que la matrice publiée reste
      celle que le système applique réellement. -->
 
-**28 exigences** — 17 couvertes, 9 écarts documentés, 2 hors périmètre logiciel.
+**28 exigences** — 20 couvertes, 6 écarts documentés, 2 hors périmètre logiciel.
 
 Trois statuts seulement, pour qu'aucune zone grise ne puisse s'y loger :
 
@@ -18,7 +18,7 @@ Trois statuts seulement, pour qu'aucune zone grise ne puisse s'y loger :
 | Clause | Exigence | Statut | Mécanisme | Vérification / cible |
 |---|---|---|---|---|
 | §7.4 | Gestion des clés du prestataire dans un module cryptographique | couvert | Toutes les clés vivent dans un token PKCS#11 et n'en sortent jamais : oe-hsm::Pkcs11Token, validé contre un vrai token SoftHSM2 (crates/oe-hsm/tests/pkcs11_integration.rs). | crates/oe-hsm/tests/pkcs11_integration.rs |
-| §7.10 | Journalisation des événements et durée de conservation | écart documenté | Le journal JSON Lines chaîné par SHA-256 est porté et testé (oe-audit) ; la vérification de la durée de conservation configurée (équivalent de CheckAuditRetention, Go) ne l'est pas encore. | **Cible :** Porter l'équivalent de conformance.CheckAuditRetention et le brancher au démarrage de bin/ca-server, comme le fait cmd/ca-server (Go). |
+| §7.10 | Journalisation des événements et durée de conservation | couvert | Journal JSON Lines chaîné par SHA-256 (oe-audit) ; durée de conservation contrôlée à la configuration par oe_conformance::check_audit_retention, branché sur bin/ca-server::Config::load. | crates/oe-audit/src/lib.rs (deux_ecrivains_partagent_la_meme_chaine), crates/oe-conformance/src/lib.rs (check_audit_retention_accepts_the_minimum, check_audit_retention_rejects_unconfigured_and_short_durations) |
 | §7.9 | Intégrité démontrable des enregistrements d'audit | couvert | Chaînage par hachage vérifié intégralement à l'ouverture ; verrou de fichier partagé entre plusieurs écrivains d'un même processus : oe-audit::Log. | crates/oe-audit/src/lib.rs (deux_ecrivains_partagent_la_meme_chaine, verify_detects_modified_record, verify_detects_truncated_and_rewritten_tail) |
 | §7.11 | Continuité d'activité et reprise après sinistre | couvert | Contreseing du journal par une TSA tierce (oe-crosstsa) et réplication WebDAV hors site (oe-replicate), validés contre un vrai serveur. | crates/oe-crosstsa/tests/against_local_server.rs (seals_a_digest_against_a_real_rfc3161_server), crates/oe-replicate/tests/against_local_server.rs (replicates_content_via_webdav_put) |
 | §7.12 | Plan de cessation d'activité | hors périmètre logiciel | Procédure organisationnelle décrite dans docs/CA.md, indépendante du langage d'implémentation. | **Cible :** Engagement juridique de l'association, dépôt auprès de l'organe de contrôle, séquestre des journaux. |
@@ -68,7 +68,7 @@ Trois statuts seulement, pour qu'aucune zone grise ne puisse s'y loger :
 
 | Clause | Exigence | Statut | Mécanisme | Vérification / cible |
 |---|---|---|---|---|
-| §6.2 | Longueur de clé suffisante pour la durée de vie visée | écart documenté | oe-config et bin/ca-server/src/config.rs imposent OPENEIDAS_KEY_BITS >= 3072 à la configuration (clé de l'autorité elle-même), mais rien ne contrôle la longueur de la clé publique portée par une CSR soumise à l'enrôlement. | **Cible :** Porter l'équivalent de CheckPublicKey et l'appliquer à oe_raflow::parse_and_verify_csr. |
+| §6.2 | Longueur de clé suffisante pour la durée de vie visée | couvert | oe-config et bin/ca-server/src/config.rs imposent OPENEIDAS_KEY_BITS >= 3072 à la configuration (clé des autorités elles-mêmes) ; oe_raflow::parse_and_verify_csr applique la même exigence à la clé publique portée par une CSR soumise à l'enrôlement. | crates/oe-config/src/lib.rs (load_fails_on_undersized_key_bits), crates/oe-raflow/tests/flow.rs (submit_rejects_a_csr_with_an_undersized_key) |
 | §6.1 | Algorithme de signature et fonction de hachage admis | écart documenté | Le système n'implémente que RSA/SHA-256 de bout en bout (aucune négociation d'algorithme), ce qui exclut structurellement les algorithmes faibles sans qu'un contrôle explicite et nommé ne le vérifie sur une entrée arbitraire, contrairement à conformance.CheckSignatureAlgorithm (Go). | **Cible :** Porter l'équivalent de CheckSignatureAlgorithm si le système vient à accepter plus d'un algorithme. |
 | §5.1 | Fonction de hachage admise pour l'empreinte soumise | couvert | oe_hsm::DigestAlg restreint la signature à SHA-256/384/512 ; une empreinte SHA-1 est refusée avec le failureInfo RFC 3161 badAlg : oe_tsa_core::Authority::timestamp. | crates/oe-tsa-core/src/lib.rs (test_timestamp_rejects_sha1) |
 
@@ -76,7 +76,7 @@ Trois statuts seulement, pour qu'aucune zone grise ne puisse s'y loger :
 
 | Clause | Exigence | Statut | Mécanisme | Vérification / cible |
 |---|---|---|---|---|
-| §4.2.1.1-4.2.1.2 | Identifiants de clé de sujet et d'autorité présents | écart documenté | subjectKeyIdentifier et authorityKeyIdentifier sont posés sans condition à l'émission et dans la cérémonie (oe_ca_core::extensions, oe_ca_core::signing::subject_key_id), mais aucun test n'affirme spécifiquement leur présence/valeur — seule la CRL (dont l'AKI a un bug corrigé en pratique) l'est indirectement via `openssl verify -crl_check`. | **Cible :** Ajouter un test qui décode le certificat émis et vérifie explicitement la présence et la valeur de ces deux extensions. |
+| §4.2.1.1-4.2.1.2 | Identifiants de clé de sujet et d'autorité présents | couvert | subjectKeyIdentifier (SHA-1 de la clé, méthode 1) et authorityKeyIdentifier (pointant vers le SKI de l'émetteur) posés sans condition à l'émission et dans la cérémonie : oe_ca_core::extensions, oe_ca_core::signing::subject_key_id. | crates/oe-ca-core/tests/issuance.rs (issue_produces_a_certificate_signed_by_the_issuing_key, assert_ski_and_aki_present_and_linked) |
 | §5.1 | Liste de révocation signée, numérotée et datée | couvert | CRL régénérée avec cRLNumber, thisUpdate/nextUpdate et signature, republiée même vide : oe_ca_core::Issuer::publish_crl. La signature et le motif de révocation sont revérifiés par openssl. | crates/oe-ca-core/tests/issuance.rs (revoke_then_publish_crl_lists_the_certificate, openssl_accepts_the_chain_and_honors_revocation) |
 
 ## RFC 6960

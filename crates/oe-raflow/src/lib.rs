@@ -99,6 +99,13 @@ fn verify_hmac(csr_der: &[u8], secret: &str, signature_hex: &str) -> Result<(), 
         .map_err(|_| RaflowError::Unauthenticated)
 }
 
+/// ETSI TS 119 312 §6.2 : longueur de clé RSA minimale, la même exigence
+/// qu'`OPENEIDAS_CA_KEY_BITS`/`OPENEIDAS_KEY_BITS` imposent déjà à la
+/// configuration des autorités elles-mêmes — appliquée ici à la clé
+/// publique portée par la demande d'un tiers, que la configuration ne
+/// contrôle pas.
+const MIN_RSA_KEY_BITS: usize = 3072;
+
 /// Sujet CN et clé publique (SPKI DER) d'une CSR PKCS#10, après vérification
 /// qu'elle est bien signée par la clé privée correspondant à cette même clé
 /// publique — reproduit `x509.CertificateRequest.CheckSignature` (Go).
@@ -109,12 +116,20 @@ fn parse_and_verify_csr(csr_der: &[u8]) -> Result<(String, Vec<u8>), RaflowError
     use der::{Decode, Encode};
     use rsa::pkcs1v15::Pkcs1v15Sign;
     use rsa::pkcs8::DecodePublicKey;
+    use rsa::traits::PublicKeyParts;
     use rsa::RsaPublicKey;
 
     let csr = CertReq::from_der(csr_der)?;
     let spki_der = csr.info.public_key.to_der()?;
     let public_key = RsaPublicKey::from_public_key_der(&spki_der)
         .map_err(|e| RaflowError::Other(format!("clé publique de la demande illisible: {e}")))?;
+
+    let key_bits = public_key.n().bits();
+    if key_bits < MIN_RSA_KEY_BITS {
+        return Err(RaflowError::Other(format!(
+            "clé RSA de {key_bits} bits: ETSI TS 119 312 impose au moins {MIN_RSA_KEY_BITS} bits"
+        )));
+    }
 
     let tbs_der = csr.info.to_der()?;
     let digest = Sha256::digest(&tbs_der);

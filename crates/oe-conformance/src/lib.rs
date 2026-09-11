@@ -269,6 +269,28 @@ pub fn render_markdown(m: &Matrix) -> String {
     b
 }
 
+/// Durée de conservation minimale du journal d'audit (ETSI EN 319 401
+/// §7.10). Le choix d'un an reproduit `internal/conformance.MinAuditRetention`
+/// (Go) : durée déjà imposée par les obligations comptables/fiscales
+/// courantes, retenue comme plancher faute d'exigence ETSI plus précise.
+pub const MIN_AUDIT_RETENTION: time::Duration = time::Duration::days(365);
+
+/// ETSI EN 319 401 §7.10 : la durée de conservation du journal d'audit doit
+/// être configurée et au moins égale à [`MIN_AUDIT_RETENTION`].
+pub fn check_audit_retention(retention: time::Duration) -> Result<(), String> {
+    if retention <= time::Duration::ZERO {
+        return Err("durée de conservation du journal d'audit non configurée".to_string());
+    }
+    if retention < MIN_AUDIT_RETENTION {
+        return Err(format!(
+            "durée de conservation du journal de {} jours, minimum requis {} jours",
+            retention.whole_days(),
+            MIN_AUDIT_RETENTION.whole_days()
+        ));
+    }
+    Ok(())
+}
+
 /// La matrice de conformité applicable au portage Rust, à l'instant présent
 /// du chantier (voir la note de module : mise à jour à chaque jalon, jamais
 /// figée).
@@ -283,10 +305,10 @@ pub fn system_matrix() -> Matrix {
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 401", clause: "§7.10", title: "Journalisation des événements et durée de conservation" },
-            status: Status::Gap,
-            mechanism: "Le journal JSON Lines chaîné par SHA-256 est porté et testé (oe-audit) ; la vérification de la durée de conservation configurée (équivalent de CheckAuditRetention, Go) ne l'est pas encore.",
-            test: "crates/oe-audit/src/lib.rs (deux_ecrivains_partagent_la_meme_chaine)",
-            target: "Porter l'équivalent de conformance.CheckAuditRetention et le brancher au démarrage de bin/ca-server, comme le fait cmd/ca-server (Go).",
+            status: Status::Covered,
+            mechanism: "Journal JSON Lines chaîné par SHA-256 (oe-audit) ; durée de conservation contrôlée à la configuration par oe_conformance::check_audit_retention, branché sur bin/ca-server::Config::load.",
+            test: "crates/oe-audit/src/lib.rs (deux_ecrivains_partagent_la_meme_chaine), crates/oe-conformance/src/lib.rs (check_audit_retention_accepts_the_minimum, check_audit_retention_rejects_unconfigured_and_short_durations)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 401", clause: "§7.9", title: "Intégrité démontrable des enregistrements d'audit" },
@@ -381,10 +403,10 @@ pub fn system_matrix() -> Matrix {
         },
         Entry {
             requirement: Requirement { standard: "RFC 5280", clause: "§4.2.1.1-4.2.1.2", title: "Identifiants de clé de sujet et d'autorité présents" },
-            status: Status::Gap,
-            mechanism: "subjectKeyIdentifier et authorityKeyIdentifier sont posés sans condition à l'émission et dans la cérémonie (oe_ca_core::extensions, oe_ca_core::signing::subject_key_id), mais aucun test n'affirme spécifiquement leur présence/valeur — seule la CRL (dont l'AKI a un bug corrigé en pratique) l'est indirectement via `openssl verify -crl_check`.",
-            test: "",
-            target: "Ajouter un test qui décode le certificat émis et vérifie explicitement la présence et la valeur de ces deux extensions.",
+            status: Status::Covered,
+            mechanism: "subjectKeyIdentifier (SHA-1 de la clé, méthode 1) et authorityKeyIdentifier (pointant vers le SKI de l'émetteur) posés sans condition à l'émission et dans la cérémonie : oe_ca_core::extensions, oe_ca_core::signing::subject_key_id.",
+            test: "crates/oe-ca-core/tests/issuance.rs (issue_produces_a_certificate_signed_by_the_issuing_key, assert_ski_and_aki_present_and_linked)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI EN 319 421", clause: "§7.6", title: "Traçabilité de l'heure jusqu'à UTC et suspension en cas de dérive" },
@@ -423,10 +445,10 @@ pub fn system_matrix() -> Matrix {
         },
         Entry {
             requirement: Requirement { standard: "ETSI TS 119 312", clause: "§6.2", title: "Longueur de clé suffisante pour la durée de vie visée" },
-            status: Status::Gap,
-            mechanism: "oe-config et bin/ca-server/src/config.rs imposent OPENEIDAS_KEY_BITS >= 3072 à la configuration (clé de l'autorité elle-même), mais rien ne contrôle la longueur de la clé publique portée par une CSR soumise à l'enrôlement.",
-            test: "crates/oe-config/src/lib.rs (load_fails_on_undersized_key_bits)",
-            target: "Porter l'équivalent de CheckPublicKey et l'appliquer à oe_raflow::parse_and_verify_csr.",
+            status: Status::Covered,
+            mechanism: "oe-config et bin/ca-server/src/config.rs imposent OPENEIDAS_KEY_BITS >= 3072 à la configuration (clé des autorités elles-mêmes) ; oe_raflow::parse_and_verify_csr applique la même exigence à la clé publique portée par une CSR soumise à l'enrôlement.",
+            test: "crates/oe-config/src/lib.rs (load_fails_on_undersized_key_bits), crates/oe-raflow/tests/flow.rs (submit_rejects_a_csr_with_an_undersized_key)",
+            target: "",
         },
         Entry {
             requirement: Requirement { standard: "ETSI TS 119 312", clause: "§6.1", title: "Algorithme de signature et fonction de hachage admis" },
@@ -476,6 +498,17 @@ pub fn system_matrix() -> Matrix {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_audit_retention_accepts_the_minimum() {
+        assert!(check_audit_retention(MIN_AUDIT_RETENTION).is_ok());
+    }
+
+    #[test]
+    fn check_audit_retention_rejects_unconfigured_and_short_durations() {
+        assert!(check_audit_retention(time::Duration::ZERO).is_err());
+        assert!(check_audit_retention(time::Duration::hours(24)).is_err());
+    }
 
     #[test]
     fn system_matrix_is_internally_consistent() {
