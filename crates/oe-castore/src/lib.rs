@@ -8,17 +8,21 @@
 //! correspond à une opération que le moteur de CA doit pouvoir défendre
 //! devant un auditeur.
 //!
-//! **Écart assumé face au binaire Go** : seule l'implémentation en mémoire
-//! ([`Memory`]) est portée à ce stade — l'implémentation PostgreSQL
-//! (`internal/castore/postgres.go`) reste à faire ; elle exige une instance
-//! Postgres et `sqlx`, non montés dans ce jalon. `Memory` suffit à porter et
-//! tester fidèlement `oe-raflow` et `oe-ca-core`, qui ne dépendent que du
-//! trait `Store`, jamais de son implémentation.
+//! Deux implémentations : [`Memory`], pour les tests unitaires d'`oe-raflow`
+//! et `oe-ca-core` (qui ne dépendent que du trait `Store`) ; et, derrière la
+//! feature Cargo `postgres`, [`postgres::Postgres`] — celle
+//! d'exploitation, portage de `internal/castore/postgres.go` sur le même
+//! schéma SQL (`migrations/0001_schema.sql`, repris tel quel du binaire Go).
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use time::OffsetDateTime;
+
+#[cfg(feature = "postgres")]
+pub mod postgres;
+#[cfg(feature = "postgres")]
+pub use postgres::Postgres;
 
 /// Numéro de série, en octets big-endian canoniques (nos tirages font 128
 /// bits, bit de poids fort forcé : la comparaison lexicographique d'octets
