@@ -18,7 +18,14 @@ RUN cargo build --release --bin ca-server \
 
 FROM debian:bookworm-slim
 
-RUN apt-get update \
+# Invalide volontairement le cache Docker de cette couche une fois par jour
+# (CACHEBUST passé par la CI, voir .github/workflows/ci.yml) : sans ça,
+# `cache-from: type=gha` rejoue indéfiniment le même `apt-get upgrade`,
+# gelant les paquets installés à leur version du premier build en cache —
+# exactement ce qui a laissé passer libpcre2-8-0 non corrigé.
+ARG CACHEBUST=unset
+RUN echo "cachebust=${CACHEBUST}" \
+ && apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends softhsm2 opensc ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
