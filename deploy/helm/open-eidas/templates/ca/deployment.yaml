@@ -1,37 +1,12 @@
 {{- $fullname := include "open-eidas.fullname" . -}}
 {{- $name := printf "%s-ca" $fullname -}}
-{{- $postgres := printf "%s-postgres" $fullname -}}
-{{- $generatedSecret := include "open-eidas.generatedSecretName" . -}}
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ $name }}-softhsm
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
-spec:
-  accessModes: ["ReadWriteOnce"]
-  {{- if .Values.ca.persistence.softhsm.storageClassName }}
-  storageClassName: {{ .Values.ca.persistence.softhsm.storageClassName }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.ca.persistence.softhsm.size }}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ $name }}-state
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
-spec:
-  accessModes: ["ReadWriteOnce"]
-  {{- if .Values.ca.persistence.state.storageClassName }}
-  storageClassName: {{ .Values.ca.persistence.state.storageClassName }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.ca.persistence.state.size }}
----
+{{- $secretName := include "open-eidas.secretName" . -}}
+{{- $postgresHost := printf "%s-postgres" $fullname -}}
+{{- $postgresPort := 5432 -}}
+{{- if .Values.postgres.external.enabled -}}
+{{- $postgresHost = .Values.postgres.external.host -}}
+{{- $postgresPort = (.Values.postgres.external.port | int) -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -61,7 +36,7 @@ spec:
             - name: http
               containerPort: {{ .Values.ca.service.port }}
           env:
-            {{- include "open-eidas.caEnv" (dict "context" . "postgres" $postgres "secret" $generatedSecret) | nindent 12 }}
+            {{- include "open-eidas.caEnv" (dict "context" . "postgres" $postgresHost "port" $postgresPort "secret" $secretName) | nindent 12 }}
           volumeMounts:
             - name: softhsm
               mountPath: /var/lib/softhsm/tokens
@@ -128,7 +103,7 @@ spec:
                 sleep {{ .Values.ca.autoApprove.intervalSeconds }}
               done
           env:
-            {{- include "open-eidas.caEnv" (dict "context" . "postgres" $postgres "secret" $generatedSecret) | nindent 12 }}
+            {{- include "open-eidas.caEnv" (dict "context" . "postgres" $postgresHost "port" $postgresPort "secret" $secretName) | nindent 12 }}
           resources:
             {{- toYaml .Values.ca.autoApprove.resources | nindent 12 }}
         {{- end }}
@@ -139,69 +114,3 @@ spec:
         - name: state
           persistentVolumeClaim:
             claimName: {{ $name }}-state
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $name }}
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
-spec:
-  selector:
-    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ca") | nindent 4 }}
-  ports:
-    - name: http
-      port: {{ .Values.ca.service.port }}
-      targetPort: http
-{{- if .Values.ca.ingress.enabled }}
----
-# L'ingress n'est pas un confort : les extensions CDP et AIA des certificats
-# émis pointent vers cet hôte, et un tiers qui vérifie un certificat doit
-# pouvoir y récupérer la CRL et le certificat de la CA.
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{ $name }}
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
-  {{- with .Values.ca.ingress.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-spec:
-  {{- if .Values.ca.ingress.className }}
-  ingressClassName: {{ .Values.ca.ingress.className }}
-  {{- end }}
-  rules:
-    - host: {{ .Values.ca.ingress.host | quote }}
-      http:
-        paths:
-          # Seuls les chemins de publication sont exposés : l'API
-          # d'enrôlement reste interne au cluster, jointe par les services
-          # qui s'y enrôlent.
-          - path: /download
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ $name }}
-                port:
-                  number: {{ .Values.ca.service.port }}
-          - path: /api/v1/ca.pem
-            pathType: Exact
-            backend:
-              service:
-                name: {{ $name }}
-                port:
-                  number: {{ .Values.ca.service.port }}
-          - path: /api/v1/conformance
-            pathType: Exact
-            backend:
-              service:
-                name: {{ $name }}
-                port:
-                  number: {{ .Values.ca.service.port }}
-  {{- with .Values.ca.ingress.tls }}
-  tls:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-{{- end }}

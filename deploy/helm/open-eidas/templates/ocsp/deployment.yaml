@@ -1,36 +1,6 @@
 {{- $fullname := include "open-eidas.fullname" . -}}
 {{- $name := printf "%s-ocsp" $fullname -}}
-{{- $generatedSecret := include "open-eidas.generatedSecretName" . -}}
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ $name }}-softhsm
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
-spec:
-  accessModes: ["ReadWriteOnce"]
-  {{- if .Values.ocsp.persistence.softhsm.storageClassName }}
-  storageClassName: {{ .Values.ocsp.persistence.softhsm.storageClassName }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.ocsp.persistence.softhsm.size }}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ $name }}-state
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
-spec:
-  accessModes: ["ReadWriteOnce"]
-  {{- if .Values.ocsp.persistence.state.storageClassName }}
-  storageClassName: {{ .Values.ocsp.persistence.state.storageClassName }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.ocsp.persistence.state.size }}
----
+{{- $secretName := include "open-eidas.secretName" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -62,7 +32,7 @@ spec:
             - name: OPENEIDAS_PIN
               valueFrom:
                 secretKeyRef:
-                  name: {{ $generatedSecret }}
+                  name: {{ $secretName }}
                   key: ocsp-pin
             - name: OPENEIDAS_TOKEN_LABEL
               value: open-eidas-ocsp
@@ -83,7 +53,7 @@ spec:
             - name: OPENEIDAS_ENROLL_HMAC_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ $generatedSecret }}
+                  name: {{ $secretName }}
                   key: enroll-hmac-key
             # Adresse à laquelle CE SERVICE joint la CA pour interroger sa
             # CRL — interne au cluster, à ne pas confondre avec
@@ -98,7 +68,7 @@ spec:
               mountPath: /var/lib/open-eidas/state
           # Comme pour la TSA : la demande d'enrôlement attend l'approbation
           # d'un opérateur RA, ce qui peut prendre un temps arbitraire (voir
-          # tsa-deployment.yaml) avant que /healthz existe.
+          # tsa/deployment.yaml) avant que /healthz existe.
           startupProbe:
             httpGet:
               path: /healthz
@@ -129,49 +99,3 @@ spec:
         - name: state
           persistentVolumeClaim:
             claimName: {{ $name }}-state
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $name }}
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
-spec:
-  selector:
-    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
-  ports:
-    - name: http
-      port: {{ .Values.ocsp.service.port }}
-      targetPort: http
-{{- if .Values.ocsp.ingress.enabled }}
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{ $name }}
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
-  {{- with .Values.ocsp.ingress.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-spec:
-  {{- if .Values.ocsp.ingress.className }}
-  ingressClassName: {{ .Values.ocsp.ingress.className }}
-  {{- end }}
-  rules:
-    - host: {{ .Values.ocsp.ingress.host | quote }}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ $name }}
-                port:
-                  number: {{ .Values.ocsp.service.port }}
-  {{- with .Values.ocsp.ingress.tls }}
-  tls:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-{{- end }}

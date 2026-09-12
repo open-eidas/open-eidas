@@ -1,37 +1,7 @@
 {{- $fullname := include "open-eidas.fullname" . -}}
 {{- $name := printf "%s-tsa" $fullname -}}
 {{- $auditReplicaHost := printf "%s-audit-replica" $fullname -}}
-{{- $generatedSecret := include "open-eidas.generatedSecretName" . -}}
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ $name }}-softhsm
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "tsa") | nindent 4 }}
-spec:
-  accessModes: ["ReadWriteOnce"]
-  {{- if .Values.tsa.persistence.softhsm.storageClassName }}
-  storageClassName: {{ .Values.tsa.persistence.softhsm.storageClassName }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.tsa.persistence.softhsm.size }}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ $name }}-state
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "tsa") | nindent 4 }}
-spec:
-  accessModes: ["ReadWriteOnce"]
-  {{- if .Values.tsa.persistence.state.storageClassName }}
-  storageClassName: {{ .Values.tsa.persistence.state.storageClassName }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.tsa.persistence.state.size }}
----
+{{- $secretName := include "open-eidas.secretName" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -63,7 +33,7 @@ spec:
             - name: OPENEIDAS_PIN
               valueFrom:
                 secretKeyRef:
-                  name: {{ $generatedSecret }}
+                  name: {{ $secretName }}
                   key: tsa-pin
             - name: OPENEIDAS_TOKEN_LABEL
               value: open-eidas-tsa
@@ -96,7 +66,7 @@ spec:
             - name: OPENEIDAS_AUDIT_REPLICA_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ $generatedSecret }}
+                  name: {{ $secretName }}
                   key: webdav-password
             - name: OPENEIDAS_CERT_FILE
               value: /var/lib/open-eidas/state/tsu.pem
@@ -109,7 +79,7 @@ spec:
             - name: OPENEIDAS_ENROLL_HMAC_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ $generatedSecret }}
+                  name: {{ $secretName }}
                   key: enroll-hmac-key
             # Seul le nom courant est demandé : unité, organisation et pays
             # sont imposés par le profil côté autorité.
@@ -155,49 +125,3 @@ spec:
         - name: state
           persistentVolumeClaim:
             claimName: {{ $name }}-state
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $name }}
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "tsa") | nindent 4 }}
-spec:
-  selector:
-    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "tsa") | nindent 4 }}
-  ports:
-    - name: http
-      port: {{ .Values.tsa.service.port }}
-      targetPort: http
-{{- if .Values.tsa.ingress.enabled }}
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{ $name }}
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "tsa") | nindent 4 }}
-  {{- with .Values.tsa.ingress.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-spec:
-  {{- if .Values.tsa.ingress.className }}
-  ingressClassName: {{ .Values.tsa.ingress.className }}
-  {{- end }}
-  rules:
-    - host: {{ .Values.tsa.ingress.host | quote }}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ $name }}
-                port:
-                  number: {{ .Values.tsa.service.port }}
-  {{- with .Values.tsa.ingress.tls }}
-  tls:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-{{- end }}

@@ -60,26 +60,34 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{/*
-Nom du Secret contenant les valeurs générées automatiquement (mots de passe,
-PIN des tokens, secret HMAC d'enrôlement) et stables d'un `helm upgrade` à
-l'autre.
+Nom du Secret des valeurs sensibles (mots de passe, PIN des tokens, secret
+HMAC d'enrôlement) : celui désigné par secrets.existingSecret s'il est
+fourni (secret existant, typiquement scellé via kubeseal et committé dans un
+dépôt de déploiement), sinon celui généré par
+templates/secrets/generated.yaml (motif `lookup`, stable d'un
+`helm upgrade` à l'autre).
 */}}
-{{- define "open-eidas.generatedSecretName" -}}
+{{- define "open-eidas.secretName" -}}
+{{- if .Values.secrets.existingSecret -}}
+{{- .Values.secrets.existingSecret -}}
+{{- else -}}
 {{- printf "%s-generated" (include "open-eidas.fullname" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
 Adresse publique à laquelle un tiers vérifiant un certificat TSU ira
 chercher la CRL et le certificat de la CA émettrice (points CRL/AIA). Priorité
-à une valeur explicite (values.ca.publicURL), puis à l'hôte d'ingress s'il est
-activé ; à défaut, le nom DNS interne au cluster — non résoluble de
-l'extérieur, mais qui garde le chart utilisable sans configuration.
+à une valeur explicite (values.ca.publicURL), puis à l'hôte de la Gateway
+API s'il est activé ; à défaut, le nom DNS interne au cluster — non
+résoluble de l'extérieur, mais qui garde le chart utilisable sans
+configuration.
 */}}
 {{- define "open-eidas.pkiPublicURL" -}}
 {{- if .Values.ca.publicURL -}}
 {{- .Values.ca.publicURL -}}
-{{- else if .Values.ca.ingress.enabled -}}
-{{- printf "https://%s" .Values.ca.ingress.host -}}
+{{- else if .Values.ca.gateway.enabled -}}
+{{- printf "https://%s" .Values.ca.gateway.host -}}
 {{- else -}}
 {{- printf "http://%s-ca:%d" (include "open-eidas.fullname" .) (.Values.ca.service.port | int) -}}
 {{- end -}}
@@ -109,7 +117,7 @@ une fois pour que les deux ne puissent pas diverger sur le DSN ou les secrets.
       name: {{ .secret }}
       key: postgres-password
 - name: OPENEIDAS_DB_DSN
-  value: {{ printf "postgres://%s:$(OPENEIDAS_DB_PASSWORD)@%s:5432/%s?sslmode=disable" $ctx.Values.postgres.user .postgres $ctx.Values.postgres.database | quote }}
+  value: {{ printf "postgres://%s:$(OPENEIDAS_DB_PASSWORD)@%s:%d/%s?sslmode=disable" $ctx.Values.postgres.user .postgres (.port | int) $ctx.Values.postgres.database | quote }}
 - name: OPENEIDAS_ISSUING_PIN
   valueFrom:
     secretKeyRef:
@@ -154,14 +162,14 @@ une fois pour que les deux ne puissent pas diverger sur le DSN ou les secrets.
 {{/*
 Adresse publique du répondeur OCSP, gravée dans l'extension AIA du
 certificat TSU. Même logique de priorité que open-eidas.pkiPublicURL. Le
-service n'est jamais exposé en TLS lui-même (terminaison à l'ingress) : le
+service n'est jamais exposé en TLS lui-même (terminaison à la Gateway) : le
 repli interne au cluster est donc en http, pas https.
 */}}
 {{- define "open-eidas.ocspPublicURL" -}}
 {{- if .Values.ocsp.publicURL -}}
 {{- .Values.ocsp.publicURL -}}
-{{- else if .Values.ocsp.ingress.enabled -}}
-{{- printf "https://%s" .Values.ocsp.ingress.host -}}
+{{- else if .Values.ocsp.gateway.enabled -}}
+{{- printf "https://%s" .Values.ocsp.gateway.host -}}
 {{- else -}}
 {{- printf "http://%s-ocsp:%d" (include "open-eidas.fullname" .) (.Values.ocsp.service.port | int) -}}
 {{- end -}}

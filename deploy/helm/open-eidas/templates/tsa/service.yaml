@@ -1,0 +1,14 @@
+{{- $name := printf "%s-tsa" (include "open-eidas.fullname" .) -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "tsa") | nindent 4 }}
+spec:
+  selector:
+    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "tsa") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.tsa.service.port }}
+      targetPort: http

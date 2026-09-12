@@ -1,0 +1,16 @@
+{{- if not .Values.postgres.external.enabled }}
+{{- $name := printf "%s-postgres" (include "open-eidas.fullname" .) -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "postgres") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "postgres") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+{{- end }}

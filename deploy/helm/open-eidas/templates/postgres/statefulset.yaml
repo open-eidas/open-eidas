@@ -1,5 +1,5 @@
-{{- $fullname := include "open-eidas.fullname" . -}}
-{{- $name := printf "%s-postgres" $fullname -}}
+{{- if not .Values.postgres.external.enabled }}
+{{- $name := printf "%s-postgres" (include "open-eidas.fullname" .) -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -31,7 +31,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "open-eidas.generatedSecretName" . }}
+                  name: {{ include "open-eidas.secretName" . }}
                   key: postgres-password
             # L'image range ses données dans un sous-répertoire du volume :
             # monter celui-ci directement sur /var/lib/postgresql/data
@@ -70,17 +70,4 @@ spec:
         resources:
           requests:
             storage: {{ .Values.postgres.persistence.size }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $name }}
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "postgres") | nindent 4 }}
-spec:
-  clusterIP: None
-  selector:
-    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "postgres") | nindent 4 }}
-  ports:
-    - name: postgres
-      port: 5432
+{{- end }}

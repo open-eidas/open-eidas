@@ -50,30 +50,24 @@ Guide détaillé pas-à-pas : [docs/STAGING.md](../../../docs/STAGING.md).
 
 `values-staging.yaml` expose la TSA sur `staging-api.open-eidas.eu` et la
 publication de la CA (CRL, certificat de la CA émettrice) sur
-`staging-pki.open-eidas.eu`, avec un certificat TLS public géré par
-cert-manager/Let's Encrypt. L'API d'enrôlement, elle, n'est jamais exposée :
-seuls les services du cluster s'y adressent.
+`staging-pki.open-eidas.eu`, via des `HTTPRoute` Gateway API (pas d'Ingress).
+L'API d'enrôlement, elle, n'est jamais exposée : seuls les services du
+cluster s'y adressent.
 
 Préalables sur le cluster cible (à provisionner séparément, non gérés par ce
-chart) :
+chart — voir [open-eidas/deploy](https://github.com/open-eidas/deploy) pour
+ce qui EST géré par ce dépôt) :
 
-1. Un ingress controller exposé publiquement, par exemple :
-   ```bash
-   helm install ingress-nginx ingress-nginx \
-       --repo https://kubernetes.github.io/ingress-nginx \
-       --namespace ingress-nginx --create-namespace
-   ```
-2. [cert-manager](https://cert-manager.io/docs/installation/), puis le
-   `ClusterIssuer` Let's Encrypt :
-   ```bash
-   kubectl apply -f deploy/cert-manager/cluster-issuer-letsencrypt.yaml
-   ```
-   (adapter l'e-mail de contact du `ClusterIssuer` avant application).
-3. Deux enregistrements DNS pointant vers l'adresse publique de l'ingress
-   controller (`kubectl -n ingress-nginx get svc ingress-nginx-controller`) :
-   `staging-api.open-eidas.eu` et `staging-pki.open-eidas.eu`. Le défi
-   HTTP-01 de Let's Encrypt exige que ces noms résolvent déjà vers l'ingress
-   avant la première émission de certificat.
+1. Une Gateway API (`gateway.networking.k8s.io`) nommée `shared-gateway`
+   dans le namespace `ingress`, avec un listener HTTPS par hôte
+   (`staging-api`/`staging-pki`/`staging-ocsp.open-eidas.eu`), chacun avec
+   son `Certificate` cert-manager.
+2. Trois enregistrements DNS pointant vers l'adresse publique de cette
+   Gateway : `staging-api.open-eidas.eu`, `staging-pki.open-eidas.eu` et
+   `staging-ocsp.open-eidas.eu`.
+3. Le Secret `open-eidas-generated` (scellé via kubeseal, voir
+   `open-eidas/deploy`) déjà présent dans le namespace `open-eidas-staging`,
+   ainsi que le Cluster CloudNativePG qu'il amorce.
 
 Puis, soit en `helm install` direct :
 
@@ -85,10 +79,6 @@ helm install open-eidas deploy/helm/open-eidas \
 
 soit via ArgoCD : [apps/open-eidas-staging.yaml](https://github.com/open-eidas/deploy/blob/main/apps/open-eidas-staging.yaml)
 dans le dépôt [open-eidas/deploy](https://github.com/open-eidas/deploy).
-
-La première émission de certificat TLS par cert-manager peut prendre
-quelques minutes après que l'ingress soit joignable ; suivre avec
-`kubectl -n open-eidas-staging get certificate,challenge`.
 
 ## Architecture du chart
 
@@ -158,14 +148,16 @@ Voir `values.yaml` pour la liste complète. Les plus utiles :
 |---|---|
 | `tsa.image.repository` / `tsa.image.tag` | Image du service d'horodatage |
 | `tsa.time.policy` | `enforce`, `monitor` ou `disabled` — passer à `monitor` si le cluster n'a pas de sortie UDP/123 |
-| `tsa.ingress.enabled` / `tsa.ingress.host` | Exposition HTTP du service |
+| `tsa.gateway.enabled` / `tsa.gateway.name` / `tsa.gateway.namespace` / `tsa.gateway.host` | Exposition HTTP(S) du service via une `HTTPRoute` Gateway API |
 | `tsa.pin` / `ocsp.pin` / `auditReplica.password` | Valeurs explicites plutôt que générées aléatoirement |
-| `ca.publicURL` / `ca.ingress.enabled` / `ca.ingress.host` | Adresse publique gravée dans les points CRL et AIA des certificats émis — à fixer si les certificats seront vérifiés par des tiers hors du cluster |
+| `ca.publicURL` / `ca.gateway.enabled` / `ca.gateway.host` | Adresse publique gravée dans les points CRL et AIA des certificats émis — à fixer si les certificats seront vérifiés par des tiers hors du cluster |
 | `ca.autoApprove.enabled` / `ca.autoApprove.operator` | Approbation RA automatique (voir ci-dessus) |
 | `ca.keyBits`, `ca.rootCommonName`, `ca.issuingCommonName` | Paramètres de la cérémonie de clé — sans effet une fois la hiérarchie créée |
 | `ca.crl.validity` / `ca.crl.refresh` | Fenêtre de validité des CRL et fréquence de republication |
 | `ca.audit.retention` | Durée de conservation du journal (ETSI EN 319 401 §7.10) ; le service refuse de démarrer en deçà d'un an |
-| `ocsp.publicURL` / `ocsp.ingress.enabled` / `ocsp.ingress.host` | Adresse publique gravée dans l'extension AIA du certificat TSU, et son exposition HTTP |
+| `ocsp.publicURL` / `ocsp.gateway.enabled` / `ocsp.gateway.host` | Adresse publique gravée dans l'extension AIA du certificat TSU, et son exposition HTTP(S) |
+| `secrets.existingSecret` | Secret existant (ex. scellé via kubeseal) à utiliser à la place de celui généré par le motif `lookup` |
+| `postgres.external.enabled` / `postgres.external.host` / `postgres.external.port` | PostgreSQL externe (ex. CloudNativePG) à la place du StatefulSet intégré |
 | `postgres.persistence.size`, `tsa.persistence.*.size`, `ocsp.persistence.*.size`, `auditReplica.persistence.size` | Tailles des volumes persistants |
 
 ## Développement local (kind)

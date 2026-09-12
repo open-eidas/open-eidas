@@ -1,0 +1,23 @@
+{{- if .Values.ocsp.gateway.enabled }}
+{{- $name := printf "%s-ocsp" (include "open-eidas.fullname" .) -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ocsp") | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.ocsp.gateway.name }}
+      namespace: {{ .Values.ocsp.gateway.namespace }}
+  hostnames:
+    - {{ .Values.ocsp.gateway.host | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ $name }}
+          port: {{ .Values.ocsp.service.port }}
+{{- end }}

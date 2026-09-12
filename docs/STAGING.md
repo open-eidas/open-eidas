@@ -17,68 +17,64 @@ pile complète — PostgreSQL, autorité de certification, TSA, répondeur OCSP,
 réplica d'audit — représente au
 total moins de 2 Go de limites mémoire cumulées, voir `values.yaml`).
 
+L'exposition externe se fait via la [Gateway API](https://gateway-api.sigs.k8s.io/)
+(`HTTPRoute`), pas via un Ingress classique ; les secrets sensibles et le
+PostgreSQL de staging sont gérés en dehors du chart, dans le dépôt
+app-of-apps [open-eidas/deploy](https://github.com/open-eidas/deploy).
+
 ## 0. Outils requis en local
 
 - `kubectl` configuré sur le cluster cible (`kubectl config current-context`
   doit pointer dessus)
 - `helm` (v3)
+- `kubeseal` (CLI de [sealed-secrets](https://github.com/bitnami-labs/sealed-secrets)),
+  pour sceller le Secret de l'étape 4
 - Optionnel : `argocd` CLI, si vous préférez piloter le déploiement via
   ArgoCD plutôt qu'en `helm install` direct
 
-## 1. Installer un ingress controller
+## 1. Installer les CRD et contrôleurs requis
 
-Expose les services du cluster sur une adresse IP publique. `ingress-nginx`
-est le plus répandu et celui déjà référencé par
-`deploy/helm/open-eidas/values-staging.yaml` (`ingressClassName: nginx`) :
+Trois briques tournent en dehors du chart open-eidas et sont prérequises :
 
-```bash
-helm install ingress-nginx ingress-nginx \
-    --repo https://kubernetes.github.io/ingress-nginx \
-    --namespace ingress-nginx --create-namespace
-```
+1. **Gateway API** (CRD) + un contrôleur qui les implémente (ex. Cilium en
+   mode Gateway API, ou tout contrôleur listé par le projet upstream).
+2. **[sealed-secrets](https://github.com/bitnami-labs/sealed-secrets)**, pour
+   déchiffrer côté cluster les Secret scellés committés dans
+   `open-eidas/deploy` :
+   ```bash
+   helm install sealed-secrets sealed-secrets \
+       --repo https://bitnami-labs.github.io/sealed-secrets \
+       --namespace sealed-secrets --create-namespace
+   ```
+3. **[CloudNativePG](https://cloudnative-pg.io/)**, pour le PostgreSQL de
+   staging (un Cluster CR géré par `open-eidas/deploy`, pas le StatefulSet
+   intégré au chart) :
+   ```bash
+   kubectl apply --server-side -f \
+       https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.29/releases/cnpg-1.29.1.yaml
+   ```
 
-Attendre qu'une adresse IP externe soit attribuée (peut prendre 1 à 2
-minutes selon l'hébergeur) :
+Puis une `Gateway` (nommée par exemple `shared-gateway`, dans un namespace
+`ingress`) avec un listener HTTPS par hôte de staging
+(`staging-api`/`staging-pki`/`staging-ocsp.open-eidas.eu`), chacun avec son
+`Certificate` cert-manager — voir
+[cert-manager](https://cert-manager.io/docs/installation/) et son intégration
+[Gateway API (gateway-shim)](https://cert-manager.io/docs/usage/gateway/).
+Cette Gateway est une ressource partagée, généralement gérée dans un dépôt
+d'infrastructure distinct plutôt que dans celui-ci.
 
-```bash
-kubectl -n ingress-nginx get svc ingress-nginx-controller -w
-```
+## 2. Configurer le DNS
 
-Noter l'`EXTERNAL-IP` affichée (Ctrl+C une fois qu'elle n'est plus
-`<pending>`) — c'est l'adresse à utiliser à l'étape 3.
-
-## 2. Installer cert-manager
-
-Gère automatiquement l'émission et le renouvellement des certificats TLS
-publics via Let's Encrypt :
-
-```bash
-helm install cert-manager cert-manager \
-    --repo https://charts.jetstack.io \
-    --namespace cert-manager --create-namespace \
-    --set crds.enabled=true
-```
-
-Vérifier que les 3 pods du contrôleur sont `Running` :
-
-```bash
-kubectl -n cert-manager get pods
-```
-
-## 3. Configurer le DNS
-
-Créer trois enregistrements DNS (A si `EXTERNAL-IP` est une IPv4, CNAME si
-l'hébergeur fournit un nom d'hôte de load-balancer) pointant vers l'adresse
-notée à l'étape 1 :
+Créer trois enregistrements DNS (A ou CNAME selon ce qu'expose la Gateway)
+pointant vers son adresse publique :
 
 | Nom | Cible |
 |---|---|
-| `staging-api.open-eidas.eu` | `EXTERNAL-IP` de l'étape 1 |
-| `staging-pki.open-eidas.eu` | `EXTERNAL-IP` de l'étape 1 |
-| `staging-ocsp.open-eidas.eu` | `EXTERNAL-IP` de l'étape 1 |
+| `staging-api.open-eidas.eu` | adresse publique de la Gateway |
+| `staging-pki.open-eidas.eu` | adresse publique de la Gateway |
+| `staging-ocsp.open-eidas.eu` | adresse publique de la Gateway |
 
-Vérifier la propagation avant de continuer (le défi HTTP-01 de Let's
-Encrypt à l'étape 5 échouera tant que ce n'est pas résolu) :
+Vérifier la propagation avant de continuer :
 
 ```bash
 dig +short staging-api.open-eidas.eu
@@ -86,16 +82,55 @@ dig +short staging-pki.open-eidas.eu
 dig +short staging-ocsp.open-eidas.eu
 ```
 
-## 4. Appliquer le ClusterIssuer Let's Encrypt
-
-Ouvrir `deploy/cert-manager/cluster-issuer-letsencrypt.yaml` et adapter le
-champ `email` (adresse recevant les notifications d'expiration de
-certificat), puis :
+## 3. Créer le namespace et générer les secrets
 
 ```bash
-kubectl apply -f deploy/cert-manager/cluster-issuer-letsencrypt.yaml
-kubectl get clusterissuer letsencrypt-prod
-# READY doit passer à True après quelques secondes
+kubectl create namespace open-eidas-staging
+```
+
+Générer les valeurs sensibles (mot de passe PostgreSQL, PIN des tokens
+PKCS#11, secret HMAC d'enrôlement) — elles ne sont produites qu'une fois ici,
+puis scellées et committées, à la différence du motif `lookup` du chart
+(utilisé par défaut hors staging) :
+
+```bash
+kubectl create secret generic open-eidas-generated \
+    --namespace open-eidas-staging --dry-run=client -o yaml \
+    --from-literal=postgres-password="$(openssl rand -base64 24)" \
+    --from-literal=username=openeidas \
+    --from-literal=password="$(openssl rand -base64 24)" \
+    --from-literal=tsa-pin="$(shuf -i 10000000-99999999 -n1)" \
+    --from-literal=ocsp-pin="$(shuf -i 10000000-99999999 -n1)" \
+    --from-literal=ca-root-pin="$(shuf -i 10000000-99999999 -n1)" \
+    --from-literal=ca-issuing-pin="$(shuf -i 10000000-99999999 -n1)" \
+    --from-literal=webdav-password="$(openssl rand -base64 18)" \
+    --from-literal=enroll-hmac-key="$(openssl rand -base64 36)" \
+    > /tmp/open-eidas-generated.yaml
+```
+
+(`password` doit reprendre la même valeur que `postgres-password` : c'est le
+Secret que CloudNativePG utilise pour amorcer l'utilisateur applicatif.)
+
+## 4. Sceller le secret et provisionner PostgreSQL
+
+Sceller le Secret généré à l'étape précédente avec `kubeseal`, en ciblant le
+contrôleur sealed-secrets du cluster :
+
+```bash
+kubeseal --controller-namespace sealed-secrets \
+    -f /tmp/open-eidas-generated.yaml -w sealed-secret.yaml
+shred -u /tmp/open-eidas-generated.yaml
+```
+
+Committer `sealed-secret.yaml` dans `open-eidas/deploy` (voir son README),
+avec le Cluster CloudNativePG qui le consomme via
+`bootstrap.initdb.secret.name`. Une fois ces manifestes fusionnés et
+synchronisés (ArgoCD ou `kubectl apply` direct), vérifier que le Secret a
+bien été déchiffré et que le Cluster est prêt :
+
+```bash
+kubectl -n open-eidas-staging get secret open-eidas-generated
+kubectl -n open-eidas-staging get cluster.postgresql.cnpg.io -w
 ```
 
 ## 5. Déployer Open eIDAS
@@ -106,7 +141,7 @@ Deux options équivalentes :
 
 ```bash
 helm install open-eidas deploy/helm/open-eidas \
-    --namespace open-eidas-staging --create-namespace \
+    --namespace open-eidas-staging \
     -f deploy/helm/open-eidas/values-staging.yaml
 ```
 
@@ -120,26 +155,26 @@ app-of-apps) :
 kubectl apply -f root-app.yaml
 ```
 
-ArgoCD crée alors l'Application `open-eidas-staging` (définie dans
-`apps/open-eidas-staging.yaml` de ce même dépôt) et synchronise
-automatiquement tout changement fusionné dans `deploy/helm/open-eidas/` sur
-`main`.
+ArgoCD crée alors les Applications `open-eidas-staging-postgres` (Secret
+scellé + Cluster CloudNativePG) et `open-eidas-staging` (ce chart), et
+synchronise ensuite automatiquement tout changement fusionné sur `main`.
 
 ## 6. Suivre l'amorçage
 
 Compter 1 à 3 minutes pour l'amorçage complet — cérémonie de clé, première
 CRL, puis enrôlement et approbation de la TSU et du répondeur OCSP (voir
-`docs/CA.md`) — puis quelques minutes de plus pour l'émission du certificat
-TLS par cert-manager :
+`docs/CA.md`) :
 
 ```bash
 kubectl -n open-eidas-staging get pods -w
 kubectl -n open-eidas-staging logs deploy/open-eidas-ca -c ca -f
-kubectl -n open-eidas-staging get certificate,challenge
 ```
 
-Un `Certificate` passe à `READY: True` une fois le défi HTTP-01 validé et
-le certificat émis.
+Vérifier que les `HTTPRoute` sont bien acceptées par la Gateway :
+
+```bash
+kubectl -n open-eidas-staging get httproute -o wide
+```
 
 ## 7. Vérifier le déploiement
 
@@ -165,14 +200,19 @@ openssl ocsp -issuer ca.pem -cert tsu.pem -CAfile ca.pem -no_nonce \
 
 ## Dépannage
 
-- **`Certificate` reste `False` / `Challenge` en échec** : vérifier que le
-  DNS pointe bien vers l'ingress (`dig`) et que rien ne bloque le port 80
-  entrant depuis Internet (certains hébergeurs filtrent par défaut au
-  niveau du security group / firewall cloud, à ouvrir explicitement).
+- **Une `HTTPRoute` n'apparaît jamais `Accepted`** : vérifier que le nom et
+  le namespace de la Gateway référencés (`tsa.gateway.name`/`.namespace`
+  dans `values-staging.yaml`) sont corrects, et que son listener HTTPS
+  couvre bien l'hôte demandé (`kubectl -n ingress describe gateway
+  shared-gateway`).
 - **`kubectl wait` ou `helm install` semblent bloqués sur le Pod `ca`** :
   la cérémonie génère deux bi-clés RSA-4096 dans SoftHSM, ce qui prend
   jusqu'à quelques minutes sur un nœud modeste. Suivre
   `kubectl logs deploy/open-eidas-ca -c ca -f`.
+- **Les Pods ne démarrent pas, erreur de connexion PostgreSQL** : vérifier
+  que le Cluster CloudNativePG de `open-eidas-staging-postgres` est bien
+  `Ready` et que son Service `-rw` correspond à `postgres.external.host`
+  dans `values-staging.yaml`.
 - **La TSA ou le répondeur OCSP restent en attente de certificat** : leur
   demande attend une décision de l'autorité d'enregistrement. Vérifier que le
   conteneur d'approbation automatique tourne

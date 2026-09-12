@@ -1,19 +1,4 @@
 {{- $name := printf "%s-audit-replica" (include "open-eidas.fullname" .) -}}
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ $name }}
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "audit-replica") | nindent 4 }}
-spec:
-  accessModes: ["ReadWriteOnce"]
-  {{- if .Values.auditReplica.persistence.storageClassName }}
-  storageClassName: {{ .Values.auditReplica.persistence.storageClassName }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.auditReplica.persistence.size }}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -44,7 +29,7 @@ spec:
             - name: PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "open-eidas.generatedSecretName" . }}
+                  name: {{ include "open-eidas.secretName" . }}
                   key: webdav-password
           ports:
             - name: http
@@ -68,17 +53,3 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ $name }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $name }}
-  labels:
-    {{- include "open-eidas.componentLabels" (dict "context" . "component" "audit-replica") | nindent 4 }}
-spec:
-  selector:
-    {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "audit-replica") | nindent 4 }}
-  ports:
-    - name: http
-      port: 80
-      targetPort: http

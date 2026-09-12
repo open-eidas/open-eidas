@@ -22,9 +22,9 @@ service et vérifiez l'horodatage :
        -H 'Content-Type: application/json' \
        -d "{\"hash\":\"$DIGEST\"}"
 
-{{- if .Values.tsa.ingress.enabled }}
+{{- if .Values.tsa.gateway.enabled }}
 
-L'ingress expose également le service sur : http://{{ .Values.tsa.ingress.host }}
+La Gateway API expose également le service sur : https://{{ .Values.tsa.gateway.host }}
 {{- end }}
 
 Relire les journaux d'audit (chaînés par hachage, l'un et l'autre) :

@@ -29,9 +29,12 @@ tsa:
   replicaCount: 1
   service:
     port: 8318
+  # Dimensionné par mesure directe (voir docs/SIZING.md) : enrôlement et
+  # signature sous charge stables dès 16Mi (usage observé jusqu'à 9,3Mi).
+  # 32/128 garde une marge large.
   resources:
-    requests: { cpu: 50m, memory: 64Mi }
-    limits: { cpu: 500m, memory: 256Mi }
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { cpu: 250m, memory: 128Mi }
   persistence:
     softhsm:
       size: 256Mi
@@ -57,12 +60,14 @@ tsa:
   # PIN du token PKCS#11, généré aléatoirement et conservé dans un Secret
   # si laissé vide (voir templates/secret-generated.yaml).
   pin: ""
-  ingress:
+  # Exposition externe via Gateway API (HTTPRoute), pas Ingress : la
+  # terminaison TLS est de la responsabilité du Gateway référencé, pas de ce
+  # chart.
+  gateway:
     enabled: false
-    className: ""
+    name: shared-gateway
+    namespace: ingress
     host: tsa.open-eidas.example
-    annotations: {}
-    tls: []
 
 ocsp:
   image:
@@ -71,9 +76,12 @@ ocsp:
   replicaCount: 1
   service:
     port: 8319
+  # Dimensionné par mesure directe (voir docs/SIZING.md) : même profil que
+  # la TSA, en plus léger (usage observé : 3,3Mi sous charge à 16Mi de
+  # limite).
   resources:
-    requests: { cpu: 25m, memory: 32Mi }
-    limits: { cpu: 250m, memory: 128Mi }
+    requests: { cpu: 15m, memory: 24Mi }
+    limits: { cpu: 150m, memory: 96Mi }
   persistence:
     softhsm:
       size: 128Mi
@@ -92,12 +100,11 @@ ocsp:
   # cluster (non résoluble de l'extérieur — à fixer explicitement pour tout
   # déploiement dont le certificat sera vérifié par des tiers).
   publicURL: ""
-  ingress:
+  gateway:
     enabled: false
-    className: ""
+    name: shared-gateway
+    namespace: ingress
     host: ocsp.open-eidas.example
-    annotations: {}
-    tls: []
 
 # Autorité de certification et d'enregistrement (cmd/ca-server). Elle
 # remplace OpenXPKI : voir INDEPENDANCE.md.
@@ -107,9 +114,15 @@ ca:
     tag: "latest"
   service:
     port: 8320
+  # Dimensionné par mesure directe (voir docs/SIZING.md) : la cérémonie de
+  # clé (2x RSA-4096) réussit même au plancher minimal accepté par Docker
+  # (6Mi) ; le régime `serve` sous charge réelle d'enrôlement est stable dès
+  # 16Mi (usage observé : 4-5Mi). 32/128 garde une marge large. Le CPU
+  # n'est limitant que pour la durée de la cérémonie (0,25 CPU -> ~9s,
+  # 0,05 CPU -> ~40s) ; 1 CPU de limite la ramène sous la seconde.
   resources:
-    requests: { cpu: 50m, memory: 96Mi }
-    limits: { cpu: "1", memory: 512Mi }
+    requests: { cpu: 100m, memory: 32Mi }
+    limits: { cpu: "1", memory: 128Mi }
   persistence:
     softhsm:
       size: 256Mi
@@ -148,34 +161,55 @@ ca:
     enabled: true
     operator: "ci-bootstrap"
     intervalSeconds: 5
+    # N'ouvre aucun token PKCS#11 (voir plus haut : approuver, c'est
+    # décider, pas signer) — footprint minimal.
     resources:
-      requests: { cpu: 10m, memory: 32Mi }
-      limits: { cpu: 100m, memory: 128Mi }
+      requests: { cpu: 5m, memory: 16Mi }
+      limits: { cpu: 50m, memory: 64Mi }
   # Adresse publique de la CA, gravée dans les points de distribution de CRL
   # et d'accès au certificat de la CA émettrice (CDP/AIA) des certificats
   # émis. Vide = déduite de l'ingress si activé, sinon du nom DNS interne au
   # cluster (non résoluble de l'extérieur — à fixer explicitement pour tout
   # déploiement dont les certificats seront vérifiés par des tiers).
   publicURL: ""
-  ingress:
+  gateway:
     enabled: false
-    className: ""
+    name: shared-gateway
+    namespace: ingress
     host: pki.open-eidas.example
-    annotations: {}
-    tls: []
 
 postgres:
   image:
     repository: postgres
     tag: "17-alpine"
+  # Dimensionné par mesure directe (voir docs/SIZING.md) : échec net (OOM
+  # pendant initdb) en dessous de 32Mi, marche fiable dès 40Mi. 64/256
+  # laisse une marge confortable sans sur-provisionner.
   resources:
-    requests: { cpu: 50m, memory: 128Mi }
-    limits: { cpu: "1", memory: 512Mi }
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
   persistence:
     size: 1Gi
     storageClassName: ""
   database: openeidas
   user: openeidas
+  # PostgreSQL externe (ex. un Cluster CloudNativePG géré hors de ce chart) :
+  # le StatefulSet postgres intégré n'est alors ni créé ni utilisé. Le mot de
+  # passe reste lu depuis la clé "postgres-password" du Secret désigné par
+  # secrets.existingSecret, qui doit correspondre à celui de la base externe.
+  external:
+    enabled: false
+    host: ""
+    port: 5432
+
+# Nom d'un Secret existant à utiliser à la place de celui généré par
+# templates/secrets/generated.yaml (motif `lookup`, voir ce fichier). Doit
+# contenir les mêmes clés (postgres-password, tsa-pin, ocsp-pin,
+# ca-root-pin, ca-issuing-pin, webdav-password, enroll-hmac-key) : c'est le
+# mécanisme prévu pour committer ces secrets scellés (kubeseal) dans un dépôt
+# de déploiement plutôt que de les laisser générer sur le cluster.
+secrets:
+  existingSecret: ""
 
 auditReplica:
   image:
@@ -185,8 +219,8 @@ auditReplica:
   # Mot de passe généré aléatoirement si laissé vide.
   password: ""
   resources:
-    requests: { cpu: 25m, memory: 32Mi }
-    limits: { cpu: 250m, memory: 128Mi }
+    requests: { cpu: 10m, memory: 24Mi }
+    limits: { cpu: 100m, memory: 96Mi }
   persistence:
     size: 512Mi
     storageClassName: ""
