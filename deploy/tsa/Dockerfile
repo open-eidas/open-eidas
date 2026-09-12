@@ -18,6 +18,7 @@ RUN cargo build --release --bin tsa-server \
 FROM debian:bookworm-slim
 
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends softhsm2 opensc ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --create-home --home-dir /var/lib/open-eidas --groups softhsm tsa \
