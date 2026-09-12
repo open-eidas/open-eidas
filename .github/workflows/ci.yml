@@ -94,6 +94,16 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # cache-from/cache-to: type=gha rejoue sinon indéfiniment la couche
+      # apt-get de chaque Dockerfile, gelant les paquets Debian installés à
+      # leur version du premier build mis en cache — c'est ce qui a laissé
+      # passer un correctif de sécurité (libpcre2-8-0) malgré apt-get
+      # update. CACHEBUST change une fois par jour pour forcer sa
+      # réexécution au moins quotidiennement.
+      - name: Calcule le cache-bust journalier
+        id: cachebust
+        run: echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
       - name: Construit l'image de la CA (sans publication)
         uses: docker/build-push-action@v6
         with:
@@ -106,6 +116,7 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             VERSION=${{ github.sha }}
+            CACHEBUST=${{ steps.cachebust.outputs.value }}
 
       - name: Vérifie que le binaire de la CA démarre
         # SoftHSM exige un PIN de 4 à 255 caractères, comme pour la TSA et le
@@ -134,6 +145,7 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             VERSION=${{ github.sha }}
+            CACHEBUST=${{ steps.cachebust.outputs.value }}
 
       - name: Vérifie que le binaire TSA démarre
         # SoftHSM exige un PIN de 4 à 255 caractères.
@@ -160,6 +172,7 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             VERSION=${{ github.sha }}
+            CACHEBUST=${{ steps.cachebust.outputs.value }}
 
       - name: Vérifie que le binaire du répondeur OCSP démarre
         run: docker run --rm -e OPENEIDAS_PIN=1234 openeidas-ocsp-responder:ci version
@@ -209,6 +222,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Voir le commentaire équivalent du job build : sans cache-bust, le
+      # cache GHA gèlerait les paquets Debian installés à leur version du
+      # premier build en cache.
+      - name: Calcule le cache-bust journalier
+        id: cachebust
+        run: echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
       - name: Construit et publie l'image
         uses: docker/build-push-action@v6
         with:
@@ -222,6 +242,7 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             VERSION=${{ github.sha }}
+            CACHEBUST=${{ steps.cachebust.outputs.value }}
 
   helm-lint:
     name: Lint du chart Helm
@@ -243,6 +264,10 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: Calcule le cache-bust journalier
+        id: cachebust
+        run: echo "value=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
       - name: Construit l'image de la CA
         uses: docker/build-push-action@v6
         with:
@@ -253,6 +278,8 @@ jobs:
           tags: openeidas-ca:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            CACHEBUST=${{ steps.cachebust.outputs.value }}
 
       - name: Construit l'image TSA
         uses: docker/build-push-action@v6
@@ -264,6 +291,8 @@ jobs:
           tags: openeidas-tsa:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            CACHEBUST=${{ steps.cachebust.outputs.value }}
 
       - name: Construit l'image du répondeur OCSP
         uses: docker/build-push-action@v6
@@ -275,6 +304,8 @@ jobs:
           tags: openeidas-ocsp-responder:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            CACHEBUST=${{ steps.cachebust.outputs.value }}
 
       - name: Crée un cluster kind
         uses: helm/kind-action@v1
