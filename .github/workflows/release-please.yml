@@ -1,0 +1,22 @@
+name: release-please
+
+# La version (SemVer) est attribuée sur dev, à partir des Conventional
+# Commits fusionnés : ce job maintient une PR de release à jour (CHANGELOG +
+# numéro de version) et crée le tag + la Release GitHub quand elle est
+# fusionnée. La promotion en production reste un acte séparé et validé :
+# une pull request dev→main (voir main-guard.yml et la protection de main).
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          target-branch: dev

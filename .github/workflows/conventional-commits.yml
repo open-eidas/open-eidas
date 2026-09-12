@@ -1,0 +1,21 @@
+name: Conventional Commits
+
+# Le titre de la PR (celui du commit de squash-merge, ce qui alimente
+# release-please sur dev) doit respecter Conventional Commits — c'est ce qui
+# permet de calculer automatiquement le prochain semver.
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint-pr-title:
+    name: Titre de PR conventionnel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

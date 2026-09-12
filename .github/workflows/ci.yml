@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
   pull_request:
 
 permissions:
@@ -182,10 +182,10 @@ jobs:
     name: Publication des images (GHCR)
     runs-on: ubuntu-latest
     needs: build
-    # Seuls les push sur main publient : une pull_request (y compris depuis
+    # Seuls les push sur dev publient : une pull_request (y compris depuis
     # un fork) n'a pas vocation à pousser d'image, et GITHUB_TOKEN y est de
     # toute façon en lecture seule.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     permissions:
       contents: read
       packages: write

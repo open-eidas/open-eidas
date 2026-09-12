@@ -22,31 +22,54 @@ pour le détail de chaque point :
 - conformité fine à ETSI EN 319 421 / 319 422 ;
 - durcissement de la configuration OpenXPKI de démonstration.
 
-## Mettre en place l'environnement de développement
+## Workflow git (gitflow)
+
+- **`dev`** est la branche de développement : toute contribution y arrive
+  par pull request depuis une branche de fonctionnalité (`feat/...`,
+  `fix/...`...), jamais par push direct. Une CI verte et au moins une
+  approbation sont exigées.
+- **`main`** ne suit que la production certifiée. Elle n'avance que par
+  pull request **depuis `dev`**, avec deux approbations de l'équipe
+  `maintainers` — sans possibilité de contournement, y compris pour les
+  administrateurs du dépôt. N'ouvrez jamais de PR directement vers `main`.
+- Les titres de commit/PR suivent
+  [Conventional Commits](https://www.conventionalcommits.org/fr/)
+  (`feat: ...`, `fix: ...`, `docs: ...`, `feat!: ...` pour un changement
+  incompatible, etc.) : c'est ce qui alimente le calcul automatique du
+  numéro de version ([SemVer](https://semver.org/lang/fr/)) par
+  `release-please` sur `dev`.
 
 ```bash
 git clone https://github.com/open-eidas/open-eidas.git
 cd open-eidas
-make up      # amorce la pile complète (PKI + TSA)
+git checkout dev
+git checkout -b feat/ma-contribution
+```
+
+## Mettre en place l'environnement de développement
+
+```bash
+make up      # amorce la pile complète (PKI + TSA) via docker compose
 make demo    # vérifie qu'un jeton s'émet et se valide
 ```
 
-Le développement du service Go seul ne nécessite pas Go installé localement :
-`make test` et `make lint` s'exécutent dans un conteneur `golang`. Aucune
-version de Go n'est donc requise sur la machine de développement, seul Docker
-l'est.
+Le code est en Rust (édition 2021+, workspace Cargo) ; `rustup` avec les
+composants `clippy` et `rustfmt` suffit pour développer localement.
 
 ## Avant d'envoyer une pull request
 
 ```bash
-make lint   # gofmt + go vet
-make test   # tests unitaires
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 make demo   # bout en bout, si le changement touche à l'horodatage, l'enrôlement
             # ou la PKI
 ```
 
-La CI exécute les mêmes vérifications, plus un scan de vulnérabilités de
-l'image et un amorçage complet de la pile en conteneurs.
+La CI (déclenchée sur `dev` et sur toute pull request) exécute les mêmes
+vérifications, plus la matrice de conformité ETSI, un scan de
+vulnérabilités des images (Trivy) et un amorçage complet de la pile
+(`docker compose` et Helm sur `kind`).
 
 ## Style de code
 

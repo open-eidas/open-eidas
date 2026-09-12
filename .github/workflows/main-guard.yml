@@ -1,0 +1,20 @@
+name: Garde-fou main
+
+# main ne suit que la production certifiée : les seules pull requests
+# acceptées vers cette branche viennent de dev (fusion « promotion »), jamais
+# d'une feature branch ou d'un fork directement.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  only-from-dev:
+    name: PR vers main uniquement depuis dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vérifie la branche source
+        run: |
+          if [ "${{ github.head_ref }}" != "dev" ]; then
+            echo "Les pull requests vers main ne peuvent venir que de dev (source: '${{ github.head_ref }}')." >&2
+            exit 1
+          fi
