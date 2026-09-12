@@ -9,6 +9,12 @@ services:
   db:
     container_name: openeidas_db
     image: postgres:17-alpine
+    # Dimensionné par mesure directe (voir docs/SIZING.md) : échec net
+    # (OOM pendant initdb) en dessous de 32 Mio, marche fiable dès 40 Mio.
+    # 64/256 laisse une marge confortable sans sur-provisionner.
+    mem_reservation: 64m
+    mem_limit: 256m
+    cpus: 0.5
     environment:
       POSTGRES_DB: openeidas
       POSTGRES_USER: openeidas
@@ -26,6 +32,15 @@ services:
   # le certificat de la CA et la CRL.
   ca:
     container_name: openeidas_ca
+    # La cérémonie de clé (2x RSA-4096) réussit même au plancher minimal
+    # accepté par Docker (6 Mio) ; le régime `serve` sous charge réelle
+    # d'enrôlement est stable dès 16 Mio (usage observé : 4-5 Mio). 32/128
+    # garde une marge large. Le CPU n'est limitant que pour la durée de la
+    # cérémonie (0,25 CPU -> ~9 s, 0,05 CPU -> ~40 s) ; 1 CPU de burst la
+    # ramène sous la seconde.
+    mem_reservation: 32m
+    mem_limit: 128m
+    cpus: 1.0
     build:
       context: .
       dockerfile: deploy/ca-server/Dockerfile
@@ -71,6 +86,9 @@ services:
   audit-replica:
     container_name: openeidas_audit_replica
     image: bytemark/webdav:2.4
+    mem_reservation: 24m
+    mem_limit: 96m
+    cpus: 0.25
     environment:
       AUTH_TYPE: Basic
       USERNAME: ${OPENEIDAS_AUDIT_REPLICA_USER:-openeidas}
@@ -85,6 +103,12 @@ services:
 
   tsa:
     container_name: openeidas_tsa
+    # Enrôlement (1x RSA-3072) et signature de jetons sous charge stables
+    # dès 16 Mio (usage observé : jusqu'à 9,3 Mio après dix horodatages
+    # consécutifs). 32/128 garde une marge large.
+    mem_reservation: 32m
+    mem_limit: 128m
+    cpus: 0.5
     build:
       context: .
       dockerfile: deploy/tsa/Dockerfile
@@ -139,6 +163,11 @@ services:
   # il ne voit ainsi que ce qu'un tiers pourrait voir lui-même.
   ocsp-responder:
     container_name: openeidas_ocsp_responder
+    # Même profil que la TSA, en plus léger (usage observé : 3,3 Mio sous
+    # charge à 16 Mio de limite).
+    mem_reservation: 24m
+    mem_limit: 96m
+    cpus: 0.25
     build:
       context: .
       dockerfile: deploy/ocsp-responder/Dockerfile
