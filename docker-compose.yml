@@ -36,8 +36,8 @@ services:
     # accepté par Docker (6 Mio) ; le régime `serve` sous charge réelle
     # d'enrôlement est stable dès 16 Mio (usage observé : 4-5 Mio). 32/128
     # garde une marge large. Le CPU n'est limitant que pour la durée de la
-    # cérémonie (0,25 CPU -> ~9 s, 0,05 CPU -> ~40 s) ; 1 CPU de burst la
-    # ramène sous la seconde.
+    # cérémonie (0,25 CPU -> ~9 s, 0,05 CPU -> ~40 s) ; 1 CPU de limite la
+    # ramène à ~2 s (voir docs/SIZING.md).
     mem_reservation: 32m
     mem_limit: 128m
     cpus: 1.0
@@ -88,7 +88,7 @@ services:
     image: bytemark/webdav:2.4
     mem_reservation: 24m
     mem_limit: 96m
-    cpus: 0.25
+    cpus: 0.10
     environment:
       AUTH_TYPE: Basic
       USERNAME: ${OPENEIDAS_AUDIT_REPLICA_USER:-openeidas}
@@ -108,7 +108,7 @@ services:
     # consécutifs). 32/128 garde une marge large.
     mem_reservation: 32m
     mem_limit: 128m
-    cpus: 0.5
+    cpus: 0.25
     build:
       context: .
       dockerfile: deploy/tsa/Dockerfile
@@ -167,7 +167,7 @@ services:
     # charge à 16 Mio de limite).
     mem_reservation: 24m
     mem_limit: 96m
-    cpus: 0.25
+    cpus: 0.15
     build:
       context: .
       dockerfile: deploy/ocsp-responder/Dockerfile

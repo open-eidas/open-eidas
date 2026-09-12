@@ -13,8 +13,8 @@
 >    de test actuel (`1.3.6.1.4.1.99999.1.1.1`).
 >
 > Le contenu technique (profils, algorithmes, durées de vie, journalisation)
-> est en revanche tiré du code réellement en service — `internal/ca`,
-> `internal/tsa`, `internal/conformance` — et non inventé. Voir
+> est en revanche tiré du code réellement en service — `oe_ca_core`,
+> `oe_tsa_core`, `oe_conformance` — et non inventé. Voir
 > [ARCHITECTURE.md](ARCHITECTURE.md) pour le fonctionnement, [CA.md](CA.md)
 > pour les procédures d'exploitation, et
 > [CONFORMITE-ETSI.md](CONFORMITE-ETSI.md) pour l'état exigence par exigence.
@@ -37,7 +37,7 @@
 ## Partie A — Politique de Certification et Déclaration des Pratiques (CA)
 
 Couvre l'autorité de certification et d'enregistrement d'Open eIDAS
-(`cmd/ca-server`), racine et CA émettrice, telle que documentée dans
+(`bin/ca-server`), racine et CA émettrice, telle que documentée dans
 [CA.md](CA.md).
 
 ### A.1 Introduction
@@ -60,10 +60,10 @@ reprendre).
 
 | Rôle | Qui | Référence technique |
 |---|---|---|
-| Autorité de certification racine | `[À COMPLÉTER — nom légal de l'association]` | `internal/ca.RunCeremony`, autorité `root` |
+| Autorité de certification racine | `[À COMPLÉTER — nom légal de l'association]` | `oe_ca_core::ceremony::run_ceremony`, autorité `root` |
 | Autorité de certification émettrice | `[À COMPLÉTER]` | autorité `issuing` |
-| Autorité d'enregistrement (RA) | `[À COMPLÉTER — désignation du ou des opérateurs RA nominatifs]` | `internal/raflow`, `ca-server ra` |
-| Porteurs de certificat | Les services d'Open eIDAS opérés par l'association (unité d'horodatage, répondeur OCSP) — pas de tiers externes à ce jour | `internal/ca/profile.go` |
+| Autorité d'enregistrement (RA) | `[À COMPLÉTER — désignation du ou des opérateurs RA nominatifs]` | `oe_raflow`, `ca-server ra` |
+| Porteurs de certificat | Les services d'Open eIDAS opérés par l'association (unité d'horodatage, répondeur OCSP) — pas de tiers externes à ce jour | `oe_ca_core::profile` |
 | Parties utilisatrices | Quiconque vérifie un jeton d'horodatage ou interroge le statut de révocation | — |
 
 #### A.1.4 Usage des certificats
@@ -92,9 +92,9 @@ doit être révisée avant toute émission hors des deux profils ci-dessus]`.
 | Ce qui est publié | Où | Mécanisme |
 |---|---|---|
 | Ce document (CP/CPS) | `[À COMPLÉTER — URL de publication définitive]` | — |
-| Certificat de la CA émettrice | `GET /download/<CN>.cer` (DER) | `cmd/ca-server`, voir CA.md §6 |
+| Certificat de la CA émettrice | `GET /download/<CN>.cer` (DER) | `bin/ca-server`, voir CA.md §6 |
 | CRL de la CA émettrice | `GET /download/<CN>.crl` | Republiée toutes les heures, fenêtre de validité 24 h |
-| Matrice de conformité ETSI | `GET /api/v1/conformance` et [CONFORMITE-ETSI.md](CONFORMITE-ETSI.md) | Générée depuis `internal/conformance`, ne peut pas diverger du code |
+| Matrice de conformité ETSI | `GET /api/v1/conformance` et [CONFORMITE-ETSI.md](CONFORMITE-ETSI.md) | Générée depuis `oe_conformance`, ne peut pas diverger du code |
 | Code source complet | `[À COMPLÉTER — URL du dépôt public]` | Dépôt public par principe (voir README.md, gouvernance de transparence) |
 
 Fréquence de publication de la CRL, délai de republication après révocation,
@@ -105,7 +105,7 @@ et conservation des CRL historiques : voir [CA.md](CA.md) §6.
 #### A.3.1 Nommage
 
 Le sujet d'un certificat émis est composé pour partie de la demande, pour
-partie imposé par le profil (voir `internal/ca/profile.go`) :
+partie imposé par le profil (voir `oe_ca_core::profile`) :
 
 - `CN` : nom courant du service, fourni par la demande d'enrôlement ;
 - `OU`, `O`, `C` : imposés par le profil, non modifiables par le demandeur.
@@ -118,7 +118,7 @@ la sienne.
 Les porteurs de certificat sont exclusivement les services internes
 d'Open eIDAS (TSA, répondeur OCSP). L'authentification de la demande repose
 sur un secret HMAC-SHA256 partagé, provisionné hors bande à chaque service au
-déploiement (voir `internal/raflow`, `docker-compose.yml`).
+déploiement (voir `oe_raflow`, `docker-compose.yml`).
 
 `[À COMPLÉTER — si des porteurs externes à l'association devaient un jour être
 admis, cette section doit décrire une procédure de vérification d'identité
@@ -141,7 +141,7 @@ révocation anonyme ou automatique par un tiers n'est possible.
 
 #### A.4.1 Demande de certificat
 
-Décrit intégralement par la machine à états `internal/raflow` :
+Décrit intégralement par la machine à états `oe_raflow` :
 authentification HMAC → état `PENDING` → décision d'un opérateur RA → état
 `APPROVED` → émission par le service détenant la clé → état `ISSUED`. Aucun
 chemin du code ne permet de sauter la décision de l'opérateur.
@@ -156,8 +156,8 @@ secondes, ce qui n'est pas représentatif d'un délai humain réel]`.
 #### A.4.3 Émission du certificat
 
 Automatique dès approbation, par le processus qui détient la clé de
-l'autorité émettrice (`cmd/ca-server serve`). Le certificat produit est relu
-depuis son DER et soumis aux règles d'`internal/conformance` avant d'être
+l'autorité émettrice (`ca-server serve`). Le certificat produit est relu
+depuis son DER et soumis aux règles d'`oe_conformance` avant d'être
 délivré : un certificat non conforme n'est jamais enregistré ni rendu.
 
 #### A.4.4 Acceptation du certificat
@@ -168,7 +168,7 @@ d'enrôlement et l'utilise directement.
 #### A.4.5 Usage de la paire de clés et du certificat
 
 Voir A.1.4. La clé privée ne quitte jamais le module PKCS#11
-(`internal/hsm`).
+(`oe_hsm`).
 
 #### A.4.6 Renouvellement de certificat
 
@@ -183,7 +183,7 @@ l'expiration (`OPENEIDAS_RENEW_BEFORE`).
 | Délai de publication après révocation | Immédiat : `ca-server revoke` republie la CRL dans le même appel |
 | Fréquence de publication de la CRL | Toutes les heures, fenêtre de validité 24 h (`OPENEIDAS_CRL_REFRESH`, `OPENEIDAS_CRL_VALIDITY`) |
 | Suspension | Non implémentée : un certificat est actif ou révoqué, pas d'état intermédiaire |
-| Vérification du statut en ligne | OCSP (RFC 6960), `internal/ocspresponder`, refuse de répondre plutôt que de garantir un statut obsolète |
+| Vérification du statut en ligne | OCSP (RFC 6960), `oe_ocsp_core::Responder`, refuse de répondre plutôt que de garantir un statut obsolète |
 
 #### A.4.8 Services d'état de certificat
 
@@ -213,31 +213,32 @@ décider par l'association.]`
 ### A.6 Contrôles techniques de sécurité
 
 Section presque entièrement factuelle — reprise directement de ce que le
-code applique et vérifie automatiquement (`internal/conformance`) :
+code applique et vérifie automatiquement (`oe_conformance`) :
 
 | Contrôle | Valeur appliquée | Mécanisme |
 |---|---|---|
-| Génération de la paire de clés | Dans le module PKCS#11, jamais exportée | `internal/hsm`, `ca-server ceremony` |
-| Taille de clé — autorités | RSA ≥ 3072 bits (4096 par défaut) | `OPENEIDAS_CA_KEY_BITS`, `internal/conformance.CheckPublicKey` |
-| Taille de clé — TSU / OCSP | RSA ≥ 3072 bits | `internal/conformance.CheckPublicKey` |
-| Algorithmes de signature admis | SHA-256/384/512 avec RSA ou ECDSA ; SHA-1 et MD5 explicitement refusés | `internal/conformance.CheckSignatureAlgorithm` |
-| Protection de l'activation de la clé | PIN du token PKCS#11 | `internal/hsm` |
+| Génération de la paire de clés | Dans le module PKCS#11, jamais exportée | `oe_hsm`, `ca-server ceremony` |
+| Taille de clé — autorités | RSA ≥ 3072 bits (4096 par défaut) | `OPENEIDAS_CA_KEY_BITS`, validé à la configuration (`oe-config`, `bin/ca-server/src/config.rs`) |
+| Taille de clé — TSU / OCSP | RSA ≥ 3072 bits | `oe_raflow::parse_and_verify_csr`, appliqué à la CSR soumise à l'enrôlement |
+| Algorithmes de signature admis | SHA-256/384/512 avec RSA ; SHA-1, MD5 et ECDSA explicitement refusés (implémentation actuelle : RSA uniquement, côté génération de clé comme côté vérification) | `oe_conformance::check_signature_algorithm` |
+| Protection de l'activation de la clé | PIN du token PKCS#11 | `oe_hsm` |
 | Durée de vie — racine | ~20 ans | `OPENEIDAS_ROOT_VALIDITY` |
 | Durée de vie — CA émettrice | ~10 ans, jamais au-delà de l'expiration de la racine | `OPENEIDAS_ISSUING_VALIDITY` |
-| Durée de vie — TSU | 1 an | `internal/ca/profile.go` |
-| Durée de vie — répondeur OCSP | 3 mois | `internal/ca/profile.go` |
+| Durée de vie — TSU | 1 an | `oe_ca_core::profile` |
+| Durée de vie — répondeur OCSP | 3 mois | `oe_ca_core::profile` |
 | Module cryptographique | SoftHSM2 (démonstration) | `[À COMPLÉTER — HSM certifié FIPS 140-2 niv. 3 / CC EAL4+ retenu pour la production]` |
 
 ### A.7 Profils de certificat, CRL et OCSP
 
 Renvoi direct au code, qui en est la source unique :
 
-- profils de certificat : `internal/ca/profile.go`, vérifiés par
-  `internal/conformance.CheckTSUCertificate` et
-  `CheckOCSPResponderCertificate` ;
-- profil de CRL : `internal/ca.PublishCRL`, vérifié par
-  `internal/conformance.CheckCRL` ;
-- profil de réponse OCSP : `internal/ocspresponder`.
+- profils de certificat : `oe_ca_core::profile`, vérifiés par
+  `oe_conformance::check_tsu_certificate` et
+  `check_ocsp_responder_certificate` ;
+- profil de CRL : `oe_ca_core::Issuer::publish_crl`, republiée
+  périodiquement et sa fraîcheur contrôlée par `/healthz`
+  (`bin/ca-server`) ;
+- profil de réponse OCSP : `oe_ocsp_core::Responder`.
 
 ### A.8 Audit de conformité et autres évaluations
 
@@ -286,11 +287,9 @@ couvertes par une CP/CPS générique de CA.
 
 | | |
 |---|---|
-| Chaînage | SHA-256, vérifié intégralement à l'ouverture (`internal/audit`) |
-| Scellement | Périodique (`OPENEIDAS_AUDIT_SEAL_INTERVAL`), horodaté par la TSU elle-même |
-| Contreseing tiers | TSA publiques indépendantes (`OPENEIDAS_CROSS_TSA_URLS`) |
-| Réplication | Hors site à chaque scellement (WebDAV) |
-| Durée de conservation **technique actuelle** | 1 an minimum imposé au démarrage (`OPENEIDAS_AUDIT_RETENTION`) |
+| Chaînage | SHA-256, vérifié intégralement à l'ouverture et par `tsa-server verify-audit` (`oe_audit`) |
+| Scellement, contreseing tiers, réplication | **Écart non résolu** — `OPENEIDAS_AUDIT_SEAL_INTERVAL`, `OPENEIDAS_CROSS_TSA_URLS` et la réplication WebDAV sont acceptés en configuration mais `tsa-server` ne les exploite pas actuellement : il ouvre le journal et y ajoute des événements, sans boucle de scellement, sans contreseing par une TSA tierce, sans appel au réplica d'audit. `[À COMPLÉTER — soit implémenter ces mécanismes côté tsa-server, soit retirer ces variables de configuration tant qu'ils n'existent pas]` |
+| Durée de conservation **technique actuelle** | 1 an minimum imposé au démarrage côté CA (`OPENEIDAS_AUDIT_RETENTION`, vérifié par `bin/ca-server/src/config.rs`) — **non vérifié côté TSA**, qui n'implémente aucun contrôle de rétention à ce jour |
 | Durée de conservation **engagée** | `[À COMPLÉTER — durée contractuelle publiée, qui peut légitimement excéder le minimum technique ci-dessus ; vérifier les obligations eIDAS applicables aux journaux d'une TSA qualifiée]` |
 
 ### B.4 Cessation de service de la TSA

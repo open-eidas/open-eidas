@@ -1,10 +1,19 @@
 # Dimensionnement de la pile
 
-Mesures directes du plancher réel de CPU et de RAM de chaque service, pour
-que les demandes/limites déclarées dans `docker-compose.yml` et
-`deploy/helm/open-eidas/values.yaml` soient des faits vérifiés plutôt que des
-estimations. Un service produisant des signatures cryptographiques pour un
-tiers de confiance mérite mieux qu'un chiffre au doigt mouillé.
+Mesures directes du plancher réel de RAM de chaque service, et de CPU pour
+`ca-server` (le seul dont l'opération dominante — la cérémonie de clé — est
+sensiblement limitée par le CPU), pour que les demandes/limites déclarées
+dans `docker-compose.yml` et `deploy/helm/open-eidas/values.yaml` soient des
+faits vérifiés plutôt que des estimations. Un service produisant des
+signatures cryptographiques pour un tiers de confiance mérite mieux qu'un
+chiffre au doigt mouillé.
+
+Les limites CPU de `postgres`, `tsa`, `ocsp-responder` et du réplica
+d'audit, elles, ne sont pas issues d'une mesure de plancher de rupture :
+faute d'opération CPU-bound comparable à la cérémonie de clé chez ces
+services, elles reprennent un ratio raisonnable par rapport à leur RAM
+retenue plutôt qu'un chiffre mesuré. `[À COMPLÉTER — mesurer effectivement
+ces plancher CPU si une contrainte de capacité concrète l'exige]`
 
 Cohérent avec la mission de l'association (voir README.md) : une
 infrastructure aussi frugale que possible réduit le coût d'exploitation, donc
@@ -27,8 +36,8 @@ normal) et testé sous contrainte croissante avec `docker run
 Les valeurs retenues dans la configuration ne sont **pas** les planchers de
 rupture : elles portent une marge (typiquement ×2 sur la mémoire) pour
 absorber la variabilité d'un hôte de production (bruit voisin, pics de
-Garbage Collector Go, connexions concurrentes) que ce protocole de mesure,
-volontairement isolé, ne reproduit pas.
+l'allocateur mémoire sous charge, connexions concurrentes) que ce protocole
+de mesure, volontairement isolé, ne reproduit pas.
 
 ## Résultats
 
@@ -103,10 +112,18 @@ l'usage observé.
 | `postgres` | 50m | 500m | 64Mi | 256Mi |
 | réplica d'audit (WebDAV) | 10m | 100m | 24Mi | 96Mi |
 
-**Total pour la pile complète** : ~205m CPU demandés (2,05 CPU en limite),
-~192 Mio de RAM demandée (~768 Mio en limite) — sur un unique nœud modeste,
-là où la pile OpenXPKI précédente exigeait 4 conteneurs supplémentaires
-(MariaDB compris) pour un service fonctionnellement plus restreint (voir
+**Total `docker-compose.yml`** (`ca`, `tsa`, `ocsp-responder`, `postgres`,
+réplica d'audit — l'approbation RA y est une boucle dans
+`scripts/bootstrap.sh`, pas un conteneur séparé) : ~200m CPU demandés (2,0
+CPU en limite), ~176 Mio de RAM demandée (~704 Mio en limite).
+
+**Total chart Helm** (les mêmes, plus le conteneur `ra-autoapprove`) : ~205m
+CPU demandés (2,05 CPU en limite), ~192 Mio de RAM demandée (~768 Mio en
+limite).
+
+Sur un unique nœud modeste dans les deux cas, là où la pile OpenXPKI
+précédente exigeait 4 conteneurs supplémentaires (MariaDB compris) pour un
+service fonctionnellement plus restreint (voir
 [INDEPENDANCE.md](../INDEPENDANCE.md)).
 
 ## Limite de la méthode
