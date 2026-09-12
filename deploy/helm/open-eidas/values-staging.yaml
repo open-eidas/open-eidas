@@ -1,18 +1,18 @@
 # Surcouche de valeurs pour le déploiement public de démonstration sur
-# staging-api.open-eidas.eu (TSA), staging-pki.open-eidas.eu (autorité de
-# certification) et staging-ocsp.open-eidas.eu (répondeur OCSP).
+# api.staging.open-eidas.eu (TSA), pki.staging.open-eidas.eu (autorité de
+# certification) et ocsp.staging.open-eidas.eu (répondeur OCSP).
 #
 # Préalables sur le cluster cible, gérés hors de ce chart :
-#   - un listener HTTPS par hôte (staging-api/pki/ocsp.open-eidas.eu) sur la
+#   - un listener HTTPS par hôte (api/pki/ocsp.staging.open-eidas.eu) sur la
 #     Gateway API "shared-gateway" (namespace "ingress"), chacun avec son
 #     Certificate cert-manager — voir open-eidas/deploy pour ce qui EST géré
 #     par ce dépôt (Application ArgoCD, Cluster CloudNativePG, SealedSecret) ;
 #   - trois enregistrements DNS (A ou CNAME) pointant vers l'adresse publique
 #     de shared-gateway :
-#       staging-api.open-eidas.eu   -> TSA (API RFC 3161)
-#       staging-pki.open-eidas.eu   -> CA (publication de la CRL et du
+#       api.staging.open-eidas.eu   -> TSA (API RFC 3161)
+#       pki.staging.open-eidas.eu   -> CA (publication de la CRL et du
 #                                      certificat de la CA émettrice)
-#       staging-ocsp.open-eidas.eu  -> répondeur OCSP (AIA ocsp)
+#       ocsp.staging.open-eidas.eu  -> répondeur OCSP (AIA ocsp)
 #   - le Secret "open-eidas-generated" (scellé via kubeseal, voir
 #     open-eidas/deploy) présent dans le namespace open-eidas-staging avant
 #     le premier déploiement — il fournit à la fois les valeurs sensibles de
@@ -43,20 +43,20 @@ postgres:
 tsa:
   gateway:
     enabled: true
-    host: staging-api.open-eidas.eu
+    host: api.staging.open-eidas.eu
 
 ca:
   # Gravée dans les points CRL et AIA des certificats émis : doit correspondre
   # à l'hôte de la Gateway ci-dessous pour que la CRL et le certificat de la
   # CA soient réellement récupérables par un tiers qui vérifie.
-  publicURL: "https://staging-pki.open-eidas.eu"
+  publicURL: "https://pki.staging.open-eidas.eu"
   gateway:
     enabled: true
-    host: staging-pki.open-eidas.eu
+    host: pki.staging.open-eidas.eu
 
 ocsp:
   # Gravée dans l'extension AIA (champ "ocsp") du certificat TSU.
-  publicURL: "https://staging-ocsp.open-eidas.eu"
+  publicURL: "https://ocsp.staging.open-eidas.eu"
   gateway:
     enabled: true
-    host: staging-ocsp.open-eidas.eu
+    host: ocsp.staging.open-eidas.eu

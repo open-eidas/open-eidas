@@ -1,7 +1,7 @@
 # Déploiement de staging public
 
 Guide pas-à-pas pour mettre en ligne la démonstration Open eIDAS sur
-`staging-api.open-eidas.eu` (TSA) et `staging-pki.open-eidas.eu` (PKI —
+`api.staging.open-eidas.eu` (TSA) et `pki.staging.open-eidas.eu` (PKI —
 interface, CRL, AIA), à partir d'un cluster Kubernetes managé vierge.
 
 Ce guide part du principe que le cluster est déjà créé et que `kubectl` y
@@ -56,7 +56,7 @@ Trois briques tournent en dehors du chart open-eidas et sont prérequises :
 
 Puis une `Gateway` (nommée par exemple `shared-gateway`, dans un namespace
 `ingress`) avec un listener HTTPS par hôte de staging
-(`staging-api`/`staging-pki`/`staging-ocsp.open-eidas.eu`), chacun avec son
+(`api`/`pki`/`ocsp.staging.open-eidas.eu`), chacun avec son
 `Certificate` cert-manager — voir
 [cert-manager](https://cert-manager.io/docs/installation/) et son intégration
 [Gateway API (gateway-shim)](https://cert-manager.io/docs/usage/gateway/).
@@ -70,16 +70,16 @@ pointant vers son adresse publique :
 
 | Nom | Cible |
 |---|---|
-| `staging-api.open-eidas.eu` | adresse publique de la Gateway |
-| `staging-pki.open-eidas.eu` | adresse publique de la Gateway |
-| `staging-ocsp.open-eidas.eu` | adresse publique de la Gateway |
+| `api.staging.open-eidas.eu` | adresse publique de la Gateway |
+| `pki.staging.open-eidas.eu` | adresse publique de la Gateway |
+| `ocsp.staging.open-eidas.eu` | adresse publique de la Gateway |
 
 Vérifier la propagation avant de continuer :
 
 ```bash
-dig +short staging-api.open-eidas.eu
-dig +short staging-pki.open-eidas.eu
-dig +short staging-ocsp.open-eidas.eu
+dig +short api.staging.open-eidas.eu
+dig +short pki.staging.open-eidas.eu
+dig +short ocsp.staging.open-eidas.eu
 ```
 
 ## 3. Créer le namespace et générer les secrets
@@ -182,20 +182,20 @@ kubectl -n open-eidas-staging get httproute -o wide
 echo "test staging $(date -Is)" > facture.txt
 openssl ts -query -data facture.txt -sha256 -cert -out facture.tsq
 curl -sf -H 'Content-Type: application/timestamp-query' \
-    --data-binary @facture.tsq https://staging-api.open-eidas.eu/tsa \
+    --data-binary @facture.tsq https://api.staging.open-eidas.eu/tsa \
     -o facture.tsr
-curl -sf https://staging-api.open-eidas.eu/api/v1/certificate -o chain.pem
+curl -sf https://api.staging.open-eidas.eu/api/v1/certificate -o chain.pem
 awk '/BEGIN CERTIFICATE/{n++} {print > (n == 1 ? "tsu.pem" : "ca.pem")}' chain.pem
 openssl ts -verify -in facture.tsr -queryfile facture.tsq -CAfile ca.pem
 
 # Vérifie que la CRL publiée est effectivement récupérable publiquement :
-curl -sf https://staging-pki.open-eidas.eu/download/*.crl -o staging.crl \
+curl -sf https://pki.staging.open-eidas.eu/download/*.crl -o staging.crl \
     2>/dev/null || echo "adapter le nom de fichier — voir l'AIA du certificat TSU"
 openssl x509 -in tsu.pem -noout -text | grep -A3 "CRL Distribution"
 
 # Vérifie que le répondeur OCSP répond publiquement pour ce certificat :
 openssl ocsp -issuer ca.pem -cert tsu.pem -CAfile ca.pem -no_nonce \
-    -url https://staging-ocsp.open-eidas.eu/ocsp -resp_text
+    -url https://ocsp.staging.open-eidas.eu/ocsp -resp_text
 ```
 
 ## Dépannage

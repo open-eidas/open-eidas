@@ -48,9 +48,9 @@ app-of-apps qui référence ce chart.
 
 Guide détaillé pas-à-pas : [docs/STAGING.md](../../../docs/STAGING.md).
 
-`values-staging.yaml` expose la TSA sur `staging-api.open-eidas.eu` et la
+`values-staging.yaml` expose la TSA sur `api.staging.open-eidas.eu` et la
 publication de la CA (CRL, certificat de la CA émettrice) sur
-`staging-pki.open-eidas.eu`, via des `HTTPRoute` Gateway API (pas d'Ingress).
+`pki.staging.open-eidas.eu`, via des `HTTPRoute` Gateway API (pas d'Ingress).
 L'API d'enrôlement, elle, n'est jamais exposée : seuls les services du
 cluster s'y adressent.
 
@@ -60,11 +60,11 @@ ce qui EST géré par ce dépôt) :
 
 1. Une Gateway API (`gateway.networking.k8s.io`) nommée `shared-gateway`
    dans le namespace `ingress`, avec un listener HTTPS par hôte
-   (`staging-api`/`staging-pki`/`staging-ocsp.open-eidas.eu`), chacun avec
+   (`api`/`pki`/`ocsp.staging.open-eidas.eu`), chacun avec
    son `Certificate` cert-manager.
 2. Trois enregistrements DNS pointant vers l'adresse publique de cette
-   Gateway : `staging-api.open-eidas.eu`, `staging-pki.open-eidas.eu` et
-   `staging-ocsp.open-eidas.eu`.
+   Gateway : `api.staging.open-eidas.eu`, `pki.staging.open-eidas.eu` et
+   `ocsp.staging.open-eidas.eu`.
 3. Le Secret `open-eidas-generated` (scellé via kubeseal, voir
    `open-eidas/deploy`) déjà présent dans le namespace `open-eidas-staging`,
    ainsi que le Cluster CloudNativePG qu'il amorce.
