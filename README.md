@@ -142,7 +142,7 @@ helm install open-eidas deploy/helm/open-eidas --namespace open-eidas --create-n
 ```
 
 Voir [deploy/helm/open-eidas/README.md](deploy/helm/open-eidas/README.md) et
-[deploy/argocd/application.yaml](deploy/argocd/application.yaml).
+le dépôt app-of-apps [open-eidas/deploy](https://github.com/open-eidas/deploy).
 
 ## Documentation
 

@@ -41,7 +41,8 @@ curl -s -X POST http://localhost:8318/api/v1/timestamp \
 
 ## Déploiement avec ArgoCD
 
-Voir [deploy/argocd/application.yaml](../../argocd/application.yaml).
+Voir [open-eidas/deploy](https://github.com/open-eidas/deploy), dépôt
+app-of-apps qui référence ce chart.
 
 ## Déploiement public de démonstration (staging)
 
@@ -82,7 +83,8 @@ helm install open-eidas deploy/helm/open-eidas \
     -f deploy/helm/open-eidas/values-staging.yaml
 ```
 
-soit via ArgoCD : [deploy/argocd/application-staging.yaml](../../argocd/application-staging.yaml).
+soit via ArgoCD : [apps/open-eidas-staging.yaml](https://github.com/open-eidas/deploy/blob/main/apps/open-eidas-staging.yaml)
+dans le dépôt [open-eidas/deploy](https://github.com/open-eidas/deploy).
 
 La première émission de certificat TLS par cert-manager peut prendre
 quelques minutes après que l'ingress soit joignable ; suivre avec

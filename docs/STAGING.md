@@ -112,12 +112,18 @@ helm install open-eidas deploy/helm/open-eidas \
 
 **Option B — ArgoCD** (si déjà installé sur le cluster) :
 
+Appliquer une fois `root-app.yaml` du dépôt
+[open-eidas/deploy](https://github.com/open-eidas/deploy) (motif
+app-of-apps) :
+
 ```bash
-kubectl apply -f deploy/argocd/application-staging.yaml
+kubectl apply -f root-app.yaml
 ```
 
-ArgoCD synchronise alors automatiquement tout changement fusionné dans
-`deploy/helm/open-eidas/` sur `main`.
+ArgoCD crée alors l'Application `open-eidas-staging` (définie dans
+`apps/open-eidas-staging.yaml` de ce même dépôt) et synchronise
+automatiquement tout changement fusionné dans `deploy/helm/open-eidas/` sur
+`main`.
 
 ## 6. Suivre l'amorçage
 
