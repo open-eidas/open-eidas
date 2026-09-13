@@ -39,4 +39,14 @@ spec:
       backendRefs:
         - name: {{ $name }}
           port: {{ .Values.ca.service.port }}
+    # Dépôt public (page HTML : sujets, validité, empreintes des
+    # certificats de la hiérarchie) — même logique que les chemins
+    # ci-dessus, exposé uniquement parce qu'il ne fait que publier.
+    - matches:
+        - path:
+            type: Exact
+            value: /
+      backendRefs:
+        - name: {{ $name }}
+          port: {{ .Values.ca.service.port }}
 {{- end }}
