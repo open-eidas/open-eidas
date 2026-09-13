@@ -90,7 +90,11 @@ jobs:
   # ci-dessous — c'est ce qui faisait traîner la CI (~3x le temps d'une
   # seule image, compilation Rust + scan Trivy compris).
   build:
-    name: Construction et scan des images
+    # Sans référencer explicitement matrix.image ici, GitHub affiche toutes
+    # les clés de la matrice dans le nom du check (illisible, et ça aurait
+    # changé le nom à chaque modification d'un champ interne comme
+    # dockerfile ou pin_env).
+    name: Construction et scan des images (${{ matrix.image }})
     runs-on: ubuntu-latest
     needs: test
     strategy:
