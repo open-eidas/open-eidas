@@ -132,3 +132,37 @@ async fn healthz_degrades_when_the_published_crl_is_stale() {
     );
     assert_eq!(body["statut"], "degrade");
 }
+
+/// Le dépôt public (`GET /`) doit lister le sujet réel de chaque
+/// certificat de la hiérarchie — c'est ce Subject, pas une mention codée
+/// en dur dans le service, qui distingue un environnement de test d'une
+/// production certifiée.
+#[tokio::test]
+async fn repository_page_lists_the_real_hierarchy() {
+    let server = build_server(time::Duration::hours(24)).await;
+    let app = http::router(server.clone(), 64 * 1024);
+    let request = axum::http::Request::builder()
+        .uri("/")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/html; charset=utf-8"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8(body.to_vec()).expect("la page doit être de l'UTF-8 valide");
+    assert!(
+        html.contains("Test Issuing CA"),
+        "sujet de la CA émettrice absent"
+    );
+    assert!(
+        html.contains("Test Root CA"),
+        "sujet de la CA racine absent"
+    );
+    assert!(
+        html.contains("/api/v1/ca.pem"),
+        "lien de téléchargement absent"
+    );
+}

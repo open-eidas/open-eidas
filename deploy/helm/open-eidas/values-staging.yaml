@@ -47,6 +47,9 @@ tsa:
   # Démo web officielle (open-eidas/demo, GitHub Pages) — seule origine
   # autorisée à appeler cette API de staging depuis un navigateur.
   corsAllowedOrigin: "https://demo.open-eidas.eu"
+  # Voir le commentaire de ca.rootCommonName plus bas.
+  subject:
+    commonName: "Open eIDAS STAGING Time-Stamping Unit 1"
 
 ca:
   # Gravée dans les points CRL et AIA des certificats émis : doit correspondre
@@ -56,6 +59,14 @@ ca:
   gateway:
     enabled: true
     host: pki.staging.open-eidas.eu
+  # Marquage explicite « STAGING » : sans ça, rien ne distingue au premier
+  # coup d'œil cette hiérarchie de démonstration d'une vraie CA de
+  # production (voir GET / sur ce service, qui affiche ces Subject tels
+  # quels). Gravé dans les certificats à la cérémonie de clé — un
+  # changement ici n'a AUCUN effet sur une hiérarchie déjà amorcée, seule
+  # une nouvelle cérémonie (tokens/état effacés) en tient compte.
+  rootCommonName: "Open eIDAS STAGING Root CA - NE PAS UTILISER EN PRODUCTION"
+  issuingCommonName: "Open eIDAS STAGING Issuing CA - NE PAS UTILISER EN PRODUCTION"
 
 ocsp:
   # Gravée dans l'extension AIA (champ "ocsp") du certificat TSU.
@@ -63,3 +74,6 @@ ocsp:
   gateway:
     enabled: true
     host: ocsp.staging.open-eidas.eu
+  # Voir le commentaire de ca.rootCommonName.
+  subject:
+    commonName: "Open eIDAS STAGING OCSP Responder 1"
