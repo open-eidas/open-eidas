@@ -212,4 +212,16 @@ async fn cors_header_present_only_when_configured() {
         resp.headers().get("access-control-allow-origin").unwrap(),
         "https://demo.open-eidas.eu"
     );
+
+    // Une origine différente, elle, ne doit PAS recevoir l'en-tête : sinon
+    // `AllowOrigin::exact` renverrait cette même valeur à n'importe qui
+    // (fuite d'information sur la configuration, pas une vraie restriction
+    // par origine — voir la revue du commit qui a introduit ce test).
+    let resp = reqwest::Client::new()
+        .get(format!("http://{addr}/api/v1/policy"))
+        .header("Origin", "https://evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.headers().get("access-control-allow-origin").is_none());
 }

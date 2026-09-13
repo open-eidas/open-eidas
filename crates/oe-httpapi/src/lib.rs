@@ -64,9 +64,13 @@ pub fn router(opts: Options) -> Router {
         .layer(tower_http::trace::TraceLayer::new_for_http());
     if let Some(origin) = opts.cors_allowed_origin.as_deref() {
         if let Ok(origin) = axum::http::HeaderValue::from_str(origin) {
+            // `allow_origin(HeaderValue)` (AllowOrigin::exact) renverrait cette
+            // valeur sur TOUTE requête, quelle que soit son origine réelle —
+            // AllowOrigin::list ne la reflète que si l'en-tête Origin de la
+            // requête correspond exactement, et l'omet sinon.
             router = router.layer(
                 tower_http::cors::CorsLayer::new()
-                    .allow_origin(origin)
+                    .allow_origin(tower_http::cors::AllowOrigin::list([origin]))
                     .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
                     .allow_headers([axum::http::header::CONTENT_TYPE]),
             );
