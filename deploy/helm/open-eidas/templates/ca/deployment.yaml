@@ -28,6 +28,13 @@ spec:
       labels:
         {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ca") | nindent 8 }}
     spec:
+      # Le conteneur tourne en utilisateur non-root (uid 10003, voir
+      # deploy/ca-server/Dockerfile) : sans fsGroup, un CSI qui provisionne
+      # des volumes appartenant à root (Longhorn, contrairement au
+      # local-path-provisioner de kind) laisse le token SoftHSM illisible en
+      # écriture et l'initialisation échoue (CKR_DEVICE_ERROR).
+      securityContext:
+        fsGroup: 10003
       containers:
         - name: ca
           image: "{{ .Values.ca.image.repository }}:{{ .Values.ca.image.tag }}"

@@ -19,6 +19,12 @@ spec:
       labels:
         {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ocsp") | nindent 8 }}
     spec:
+      # Voir le commentaire équivalent de ca/deployment.yaml : sans fsGroup,
+      # un CSI qui provisionne des volumes appartenant à root (Longhorn)
+      # laisse le token SoftHSM illisible en écriture pour l'utilisateur
+      # non-root du conteneur (uid 10002).
+      securityContext:
+        fsGroup: 10002
       containers:
         - name: ocsp
           image: "{{ .Values.ocsp.image.repository }}:{{ .Values.ocsp.image.tag }}"
