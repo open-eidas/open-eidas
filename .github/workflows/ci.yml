@@ -258,8 +258,9 @@ jobs:
       - name: Met à jour les tags d'image dans apps/open-eidas-staging.yaml
         if: steps.has-app.outputs.configured == 'true'
         run: |
-          pip install --quiet ruamel.yaml
-          python3 - "$GITHUB_SHA" <<'PYEOF'
+          python3 -m venv "$RUNNER_TEMP/pin-staging-venv"
+          "$RUNNER_TEMP/pin-staging-venv/bin/pip" install --quiet ruamel.yaml
+          "$RUNNER_TEMP/pin-staging-venv/bin/python" - "$GITHUB_SHA" <<'PYEOF'
           import io, sys
           from ruamel.yaml import YAML
           from ruamel.yaml.scalarstring import LiteralScalarString
