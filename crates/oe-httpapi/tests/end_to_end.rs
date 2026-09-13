@@ -65,6 +65,7 @@ async fn serves_a_verifiable_token_over_http() {
         time_source,
         max_request_bytes: 64 * 1024,
         version: "test".to_string(),
+        cors_allowed_origin: None,
     });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -152,4 +153,63 @@ async fn serves_a_verifiable_token_over_http() {
         String::from_utf8_lossy(&output.stderr)
     );
     let _ = std::fs::remove_file(&out_path);
+}
+
+#[tokio::test]
+async fn cors_header_present_only_when_configured() {
+    let time_source = || {
+        oe_timesource::Monitor::new(oe_timesource::Options {
+            policy: oe_timesource::Policy::Disabled,
+            ..Default::default()
+        })
+        .unwrap()
+    };
+
+    // Sans cors_allowed_origin : pas d'en-tête CORS, même pour une origine
+    // qui enverrait un Origin arbitraire — le navigateur bloquera la lecture
+    // de la réponse.
+    let app = oe_httpapi::router(oe_httpapi::Options {
+        authority: load_authority(),
+        time_source: time_source(),
+        max_request_bytes: 64 * 1024,
+        version: "test".to_string(),
+        cors_allowed_origin: None,
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let resp = reqwest::Client::new()
+        .get(format!("http://{addr}/api/v1/policy"))
+        .header("Origin", "https://demo.open-eidas.eu")
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.headers().get("access-control-allow-origin").is_none());
+
+    // Avec cors_allowed_origin configuré : l'en-tête reflète exactement
+    // l'origine autorisée, pas un wildcard ni l'origine de la requête.
+    let app = oe_httpapi::router(oe_httpapi::Options {
+        authority: load_authority(),
+        time_source: time_source(),
+        max_request_bytes: 64 * 1024,
+        version: "test".to_string(),
+        cors_allowed_origin: Some("https://demo.open-eidas.eu".to_string()),
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let resp = reqwest::Client::new()
+        .get(format!("http://{addr}/api/v1/policy"))
+        .header("Origin", "https://demo.open-eidas.eu")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "https://demo.open-eidas.eu"
+    );
 }

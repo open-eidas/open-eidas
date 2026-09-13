@@ -44,6 +44,9 @@ tsa:
   gateway:
     enabled: true
     host: api.staging.open-eidas.eu
+  # Démo web officielle (open-eidas/demo, GitHub Pages) — seule origine
+  # autorisée à appeler cette API de staging depuis un navigateur.
+  corsAllowedOrigin: "https://demo.open-eidas.eu"
 
 ca:
   # Gravée dans les points CRL et AIA des certificats émis : doit correspondre

@@ -34,6 +34,11 @@ pub struct Options {
     pub time_source: Arc<oe_timesource::Monitor>,
     pub max_request_bytes: usize,
     pub version: String,
+    /// Origine autorisée en cross-origin (Access-Control-Allow-Origin) pour
+    /// les routes de lecture/soumission destinées à un navigateur
+    /// (`/api/v1/timestamp`, `/api/v1/certificate`, `/api/v1/policy`).
+    /// `None` = pas de couche CORS, comportement par défaut.
+    pub cors_allowed_origin: Option<String>,
 }
 
 #[derive(Clone)]
@@ -49,15 +54,25 @@ pub fn router(opts: Options) -> Router {
         time_source: opts.time_source,
         version: Arc::from(opts.version.as_str()),
     };
-    Router::new()
+    let mut router = Router::new()
         .route("/tsa", post(handle_rfc3161))
         .route("/api/v1/timestamp", post(handle_json))
         .route("/api/v1/policy", get(handle_policy))
         .route("/api/v1/certificate", get(handle_certificate))
         .route("/healthz", get(handle_health))
         .layer(DefaultBodyLimit::max(opts.max_request_bytes))
-        .layer(tower_http::trace::TraceLayer::new_for_http())
-        .with_state(state)
+        .layer(tower_http::trace::TraceLayer::new_for_http());
+    if let Some(origin) = opts.cors_allowed_origin.as_deref() {
+        if let Ok(origin) = axum::http::HeaderValue::from_str(origin) {
+            router = router.layer(
+                tower_http::cors::CorsLayer::new()
+                    .allow_origin(origin)
+                    .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                    .allow_headers([axum::http::header::CONTENT_TYPE]),
+            );
+        }
+    }
+    router.with_state(state)
 }
 
 async fn handle_rfc3161(
