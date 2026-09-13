@@ -261,6 +261,12 @@ jobs:
           python3 - "$GITHUB_SHA" <<'PYEOF'
           import sys, yaml
 
+          def str_presenter(dumper, data):
+              style = "|" if "\n" in data else None
+              return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+
+          yaml.add_representer(str, str_presenter)
+
           sha = sys.argv[1]
           path = "apps/open-eidas-staging.yaml"
 
@@ -270,7 +276,7 @@ jobs:
           values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
           for component in ("ca", "tsa", "ocsp"):
               values.setdefault(component, {}).setdefault("image", {})["tag"] = sha
-          doc["spec"]["source"]["helm"]["values"] = yaml.dump(values, default_flow_style=False)
+          doc["spec"]["source"]["helm"]["values"] = yaml.dump(values, default_flow_style=False, sort_keys=False)
 
           with open(path, "w") as f:
               yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
