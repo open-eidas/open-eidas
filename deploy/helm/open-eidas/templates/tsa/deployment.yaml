@@ -20,6 +20,12 @@ spec:
       labels:
         {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "tsa") | nindent 8 }}
     spec:
+      # Voir le commentaire équivalent de ca/deployment.yaml : sans fsGroup,
+      # un CSI qui provisionne des volumes appartenant à root (Longhorn)
+      # laisse le token SoftHSM illisible en écriture pour l'utilisateur
+      # non-root du conteneur (uid 10001).
+      securityContext:
+        fsGroup: 10001
       containers:
         - name: tsa
           image: "{{ .Values.tsa.image.repository }}:{{ .Values.tsa.image.tag }}"
