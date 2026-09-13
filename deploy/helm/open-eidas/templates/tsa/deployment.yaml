@@ -85,6 +85,10 @@ spec:
             # sont imposés par le profil côté autorité.
             - name: OPENEIDAS_SUBJECT_CN
               value: {{ .Values.tsa.subject.commonName | quote }}
+            {{- if .Values.tsa.corsAllowedOrigin }}
+            - name: OPENEIDAS_CORS_ALLOWED_ORIGIN
+              value: {{ .Values.tsa.corsAllowedOrigin | quote }}
+            {{- end }}
           volumeMounts:
             - name: softhsm
               mountPath: /var/lib/softhsm/tokens
