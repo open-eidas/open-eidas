@@ -244,6 +244,81 @@ jobs:
             VERSION=${{ github.sha }}
             CACHEBUST=${{ steps.cachebust.outputs.value }}
 
+  # Épingle les images de staging sur ce commit dans open-eidas/deploy —
+  # jamais sur le cluster ni sur ArgoCD directement : cette CI n'a et
+  # n'aura aucun accès à l'un ou l'autre. C'est le self-heal d'ArgoCD,
+  # déjà configuré sur l'Application open-eidas-staging, qui applique le
+  # changement une fois poussé ici.
+  #
+  # Nécessite que le secret organisation OPENEIDAS_DEPLOY_APP_ID (identifiant
+  # de la GitHub App dédiée, écriture seule sur open-eidas/deploy) et le
+  # secret OPENEIDAS_DEPLOY_APP_PRIVATE_KEY existent — sans eux, ce job est
+  # ignoré (pas d'échec bloquant tant que la App n'est pas créée).
+  pin-staging:
+    name: Épingle les images de staging (open-eidas/deploy)
+    runs-on: ubuntu-latest
+    needs: publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    steps:
+      - name: Vérifie que la GitHub App est configurée
+        id: has-app
+        run: |
+          if [ -n "${{ secrets.OPENEIDAS_DEPLOY_APP_ID }}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::OPENEIDAS_DEPLOY_APP_ID absent — pin de staging ignoré. Voir README pour créer la GitHub App dédiée."
+          fi
+
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        if: steps.has-app.outputs.configured == 'true'
+        with:
+          app-id: ${{ secrets.OPENEIDAS_DEPLOY_APP_ID }}
+          private-key: ${{ secrets.OPENEIDAS_DEPLOY_APP_PRIVATE_KEY }}
+          owner: open-eidas
+          repositories: deploy
+
+      - uses: actions/checkout@v4
+        if: steps.has-app.outputs.configured == 'true'
+        with:
+          repository: open-eidas/deploy
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Met à jour les tags d'image dans apps/open-eidas-staging.yaml
+        if: steps.has-app.outputs.configured == 'true'
+        run: |
+          python3 - "$GITHUB_SHA" <<'PYEOF'
+          import sys, yaml
+
+          sha = sys.argv[1]
+          path = "apps/open-eidas-staging.yaml"
+
+          with open(path) as f:
+              doc = yaml.safe_load(f)
+
+          values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+          for component in ("ca", "tsa", "ocsp"):
+              values.setdefault(component, {}).setdefault("image", {})["tag"] = sha
+          doc["spec"]["source"]["helm"]["values"] = yaml.dump(values, default_flow_style=False)
+
+          with open(path, "w") as f:
+              yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
+          PYEOF
+
+      - name: Commit et push si changement
+        if: steps.has-app.outputs.configured == 'true'
+        run: |
+          git config user.name "open-eidas-deploy-bot[bot]"
+          git config user.email "open-eidas-deploy-bot[bot]@users.noreply.github.com"
+          git add apps/open-eidas-staging.yaml
+          if git diff --cached --quiet; then
+            echo "Aucun changement de tag, rien à pousser."
+            exit 0
+          fi
+          git commit -m "Épingle le staging sur open-eidas/open-eidas@${GITHUB_SHA}"
+          git push origin main
+
   helm-lint:
     name: Lint du chart Helm
     runs-on: ubuntu-latest
