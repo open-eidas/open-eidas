@@ -29,6 +29,11 @@ pub struct Server {
     crl_path: String,
     ca_path: String,
     cache: RwLock<CrlCache>,
+    /// Page HTML publique du dépôt (subjects, validités, empreintes des
+    /// certificats réellement chargés) : générée une fois au démarrage,
+    /// jamais reconstruite par requête — son contenu ne change qu'au
+    /// redémarrage du service.
+    repository_html: String,
 }
 
 impl Server {
@@ -45,18 +50,22 @@ impl Server {
                 ca_pem.push_str(&pem_block("CERTIFICATE", &der));
             }
         }
+        let ca_path = format!("/download/{name}.cer");
+        let crl_path = format!("/download/{name}.crl");
+        let repository_html = render_repository_html(&issuer, &ca_path, &crl_path);
         Server {
             issuer,
             flow,
             version,
             ca_der,
             ca_pem,
-            crl_path: format!("/download/{name}.crl"),
-            ca_path: format!("/download/{name}.cer"),
+            crl_path,
+            ca_path,
             cache: RwLock::new(CrlCache {
                 crl: None,
                 err: None,
             }),
+            repository_html,
         }
     }
 
@@ -141,6 +150,115 @@ impl Server {
     }
 }
 
+fn sha256_fingerprint(der: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(der)
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn x509_time_to_offset(t: &x509_cert::time::Time) -> time::OffsetDateTime {
+    let secs = t.to_date_time().unix_duration().as_secs();
+    time::OffsetDateTime::from_unix_timestamp(secs as i64)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
+}
+
+fn format_time(t: &x509_cert::time::Time) -> String {
+    x509_time_to_offset(t)
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Page HTML publique du dépôt de l'autorité : subject, validité et
+/// empreinte SHA-256 de chaque certificat de `full_chain()` (l'autorité
+/// émettrice, celle qui a réellement produit les certificats servis, puis
+/// sa racine), sans rien affirmer de plus que ce que ces certificats
+/// contiennent déjà — aucune mention de statut « staging » codée en dur
+/// ici : c'est le Subject réel des certificats chargés qui en fait foi.
+fn render_repository_html(issuer: &oe_ca_core::Issuer, ca_path: &str, crl_path: &str) -> String {
+    let mut certs_html = String::new();
+    for (i, cert) in issuer.full_chain().iter().enumerate() {
+        let role = if i == 0 {
+            "Autorité émettrice (signe les certificats publiés par ce service)"
+        } else {
+            "Autorité racine"
+        };
+        let der = cert.to_der().unwrap_or_default();
+        certs_html.push_str(&format!(
+            r#"<section class="cert">
+  <h2>{role}</h2>
+  <dl>
+    <dt>Sujet</dt><dd>{subject}</dd>
+    <dt>Émetteur</dt><dd>{issuer_dn}</dd>
+    <dt>Numéro de série</dt><dd><code>{serial}</code></dd>
+    <dt>Validité</dt><dd>{not_before} → {not_after}</dd>
+    <dt>Empreinte SHA-256</dt><dd><code>{fingerprint}</code></dd>
+  </dl>
+</section>
+"#,
+            role = role,
+            subject = html_escape(&cert.tbs_certificate().subject().to_string()),
+            issuer_dn = html_escape(&cert.tbs_certificate().issuer().to_string()),
+            serial = hex::encode_upper(cert.tbs_certificate().serial_number().as_bytes()),
+            not_before = format_time(&cert.tbs_certificate().validity().not_before),
+            not_after = format_time(&cert.tbs_certificate().validity().not_after),
+            fingerprint = sha256_fingerprint(&der),
+        ));
+    }
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dépôt de l'autorité de certification</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          max-width: 720px; margin: 2rem auto; padding: 0 1.25rem; line-height: 1.5; color: #0f172a; }}
+  h1 {{ font-size: 1.4rem; }}
+  section.cert {{ border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; }}
+  dl {{ display: grid; grid-template-columns: auto 1fr; gap: 0.35rem 1rem; margin: 0; }}
+  dt {{ color: #64748b; }}
+  dd {{ margin: 0; word-break: break-all; }}
+  code {{ background: #f8fafc; padding: 0.1rem 0.35rem; border-radius: 4px; }}
+  ul {{ padding-left: 1.25rem; }}
+  .warn {{ background: #fffbeb; border-left: 4px solid #b45309; padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.9rem; }}
+</style>
+</head>
+<body>
+  <h1>Dépôt public de l'autorité de certification</h1>
+  <p class="warn">
+    Vérifiez le <strong>Sujet</strong> de chaque certificat ci-dessous avant de lui
+    faire confiance : son nom identifie sans ambiguïté l'environnement qui l'a émis
+    (production certifiée, ou un environnement de test/démonstration).
+  </p>
+  {certs_html}
+  <h2>Téléchargements</h2>
+  <ul>
+    <li><a href="{ca_path}">Certificat de l'autorité émettrice (DER)</a></li>
+    <li><a href="{crl_path}">Liste de révocation (CRL)</a></li>
+    <li><a href="/api/v1/ca.pem">Chaîne complète (PEM)</a></li>
+    <li><a href="/api/v1/conformance">Matrice de conformité ETSI</a></li>
+  </ul>
+</body>
+</html>
+"#,
+        certs_html = certs_html,
+        ca_path = ca_path,
+        crl_path = crl_path,
+    )
+}
+
 fn common_name(cert: &x509_cert::Certificate) -> String {
     const OID_CN: &str = "2.5.4.3";
     let cn_oid = der::asn1::ObjectIdentifier::new(OID_CN).expect("OID constant invalide");
@@ -168,6 +286,7 @@ pub fn router(server: Arc<Server>, max_request_bytes: usize) -> Router {
     let ca_path = server.ca_path.clone();
     let crl_path = server.crl_path.clone();
     Router::new()
+        .route("/", get(handle_repository))
         .route("/api/v1/enroll", axum::routing::post(handle_enroll))
         .route("/api/v1/ca.pem", get(handle_ca_pem))
         .route("/api/v1/conformance", get(handle_conformance))
@@ -291,6 +410,16 @@ fn request_state_str(s: oe_castore::RequestState) -> &'static str {
         oe_castore::RequestState::Issued => "ISSUED",
         oe_castore::RequestState::Rejected => "REJECTED",
     }
+}
+
+/// Dépôt public, lisible par un humain : subject/validité/empreinte de
+/// chaque certificat de la hiérarchie, et les liens vers les mêmes
+/// ressources que les autres routes servent déjà en brut.
+async fn handle_repository(State(server): State<Arc<Server>>) -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        server.repository_html.clone(),
+    )
 }
 
 async fn handle_ca_pem(State(server): State<Arc<Server>>) -> impl IntoResponse {

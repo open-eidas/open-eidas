@@ -16,7 +16,7 @@ oe-rfc3161-asn1 = { path = "../oe-rfc3161-asn1" }
 oe-hsm = { path = "../oe-hsm" }
 oe-timesource = { path = "../oe-timesource" }
 axum = "0.8"
-tower-http = { version = "0.6", features = ["trace", "limit"] }
+tower-http = { version = "0.6", features = ["trace", "limit", "cors"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"

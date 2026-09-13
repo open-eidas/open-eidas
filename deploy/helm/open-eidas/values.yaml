@@ -60,6 +60,10 @@ tsa:
   # PIN du token PKCS#11, généré aléatoirement et conservé dans un Secret
   # si laissé vide (voir templates/secret-generated.yaml).
   pin: ""
+  # Origine autorisée à appeler l'API depuis un navigateur
+  # (Access-Control-Allow-Origin) — ex. une démo web tierce. Vide = pas de
+  # CORS, comportement par défaut.
+  corsAllowedOrigin: ""
   # Exposition externe via Gateway API (HTTPRoute), pas Ingress : la
   # terminaison TLS est de la responsabilité du Gateway référencé, pas de ce
   # chart.

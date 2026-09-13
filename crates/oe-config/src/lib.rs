@@ -91,6 +91,11 @@ pub struct Config {
     /// pays sont imposés par le profil côté autorité.
     pub subject_cn: String,
     pub renew_before: Duration,
+    /// Origine autorisée à appeler l'API HTTP depuis un navigateur
+    /// (Access-Control-Allow-Origin). Vide/absent = pas de CORS, aucune
+    /// requête cross-origin n'est autorisée — comportement par défaut,
+    /// préservé pour tout déploiement qui n'a pas de démo web tierce.
+    pub cors_allowed_origin: Option<String>,
 }
 
 impl Config {
@@ -169,6 +174,9 @@ impl Config {
                 "OPENEIDAS_RENEW_BEFORE",
                 Duration::from_secs(30 * 24 * 3600),
             )?,
+            cors_allowed_origin: env::var("OPENEIDAS_CORS_ALLOWED_ORIGIN")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 }
@@ -337,6 +345,24 @@ mod tests {
         assert_eq!(cfg.time_policy, Policy::Enforce);
         assert_eq!(cfg.accuracy, Duration::from_secs(1));
         assert_eq!(cfg.time_max_offset, Duration::from_millis(500));
+        assert_eq!(cfg.cors_allowed_origin, None);
+        clear_env();
+    }
+
+    #[test]
+    #[serial]
+    fn load_reads_cors_allowed_origin() {
+        clear_env();
+        env::set_var("OPENEIDAS_PIN", "1234");
+        env::set_var(
+            "OPENEIDAS_CORS_ALLOWED_ORIGIN",
+            "https://demo.open-eidas.eu",
+        );
+        let cfg = Config::load().unwrap();
+        assert_eq!(
+            cfg.cors_allowed_origin.as_deref(),
+            Some("https://demo.open-eidas.eu")
+        );
         clear_env();
     }
 

@@ -181,6 +181,7 @@ async fn run_serve() {
         time_source: monitor,
         max_request_bytes: cfg.max_request_bytes.max(0) as usize,
         version: env!("CARGO_PKG_VERSION").to_string(),
+        cors_allowed_origin: cfg.cors_allowed_origin.clone(),
     });
 
     let listener = tokio::net::TcpListener::bind(bind_addr(&cfg.listen))
