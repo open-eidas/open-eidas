@@ -258,28 +258,35 @@ jobs:
       - name: Met à jour les tags d'image dans apps/open-eidas-staging.yaml
         if: steps.has-app.outputs.configured == 'true'
         run: |
+          pip install --quiet ruamel.yaml
           python3 - "$GITHUB_SHA" <<'PYEOF'
-          import sys, yaml
+          import io, sys
+          from ruamel.yaml import YAML
+          from ruamel.yaml.scalarstring import LiteralScalarString
 
-          def str_presenter(dumper, data):
-              style = "|" if "\n" in data else None
-              return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
-
-          yaml.add_representer(str, str_presenter)
+          # ruamel.yaml (round-trip) plutôt que PyYAML : préserve les
+          # commentaires et le style bloc du fichier — un yaml.safe_load/dump
+          # classique les efface tous à chaque pin.
+          yaml = YAML()
+          yaml.preserve_quotes = True
+          yaml.indent(mapping=2, sequence=2, offset=0)
 
           sha = sys.argv[1]
           path = "apps/open-eidas-staging.yaml"
 
           with open(path) as f:
-              doc = yaml.safe_load(f)
+              doc = yaml.load(f)
 
-          values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+          values = yaml.load(doc["spec"]["source"]["helm"]["values"])
           for component in ("ca", "tsa", "ocsp"):
               values.setdefault(component, {}).setdefault("image", {})["tag"] = sha
-          doc["spec"]["source"]["helm"]["values"] = yaml.dump(values, default_flow_style=False, sort_keys=False)
+
+          buf = io.StringIO()
+          yaml.dump(values, buf)
+          doc["spec"]["source"]["helm"]["values"] = LiteralScalarString(buf.getvalue())
 
           with open(path, "w") as f:
-              yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
+              yaml.dump(doc, f)
           PYEOF
 
       - name: Commit et push si changement
