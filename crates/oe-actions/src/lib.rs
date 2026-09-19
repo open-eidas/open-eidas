@@ -23,6 +23,7 @@
 mod enrollment;
 mod onboarding;
 mod registry;
+mod registry_actions;
 
 pub use enrollment::{key_fingerprint, KeyStatus, Registered, RegistrationBegun, PENDING_TTL};
 pub use onboarding::{bootstrap_admin, Invite, MAX_INVITE_TTL, MIN_INVITE_TTL};
@@ -61,6 +62,33 @@ pub enum Action {
         transaction_id: String,
         comment: String,
     },
+    /// Invite un nouvel opérateur (§10). Le jeton d'invitation n'est renvoyé
+    /// que dans le résultat de l'exécution : la base n'en garde que le haché.
+    InviteOperator {
+        name: String,
+        role: Role,
+        #[serde(default = "default_invite_ttl_minutes")]
+        ttl_minutes: i64,
+    },
+    /// Active une clé en attente. L'empreinte fait partie du corps signé :
+    /// l'administrateur s'engage sur *cette* clé, pas sur « la clé en attente »
+    /// de quelqu'un, quelle qu'elle soit.
+    ConfirmKey {
+        credential_id: String,
+        key_fingerprint: String,
+    },
+    RevokeKey {
+        credential_id: String,
+        reason: String,
+    },
+    SetRole {
+        operator: String,
+        role: Role,
+    },
+}
+
+fn default_invite_ttl_minutes() -> i64 {
+    60
 }
 
 impl Action {
@@ -68,6 +96,10 @@ impl Action {
         match self {
             Action::ApproveRequest { .. } => "approve_request",
             Action::RejectRequest { .. } => "reject_request",
+            Action::InviteOperator { .. } => "invite_operator",
+            Action::ConfirmKey { .. } => "confirm_key",
+            Action::RevokeKey { .. } => "revoke_key",
+            Action::SetRole { .. } => "set_role",
         }
     }
 
@@ -78,13 +110,20 @@ impl Action {
             Action::ApproveRequest { .. } | Action::RejectRequest { .. } => {
                 &[Role::RaOperateur, Role::CaOperateur]
             }
+            // Seul l'administrateur modifie le registre, et il n'a aucun droit
+            // sur les certificats : les deux périmètres ne se mélangent pas.
+            Action::InviteOperator { .. }
+            | Action::ConfirmKey { .. }
+            | Action::RevokeKey { .. }
+            | Action::SetRole { .. } => &[Role::Admin],
         }
     }
 
-    fn transaction_id(&self) -> &str {
+    fn transaction_id(&self) -> Option<&str> {
         match self {
             Action::ApproveRequest { transaction_id, .. }
-            | Action::RejectRequest { transaction_id, .. } => transaction_id,
+            | Action::RejectRequest { transaction_id, .. } => Some(transaction_id),
+            _ => None,
         }
     }
 }
@@ -141,6 +180,9 @@ pub struct Executed {
     /// Identité lue dans le registre, jamais transmise par l'appelant.
     pub operator: String,
     pub role: Role,
+    /// Ce que l'action produit pour l'appelant (ex. le jeton d'une invitation).
+    /// Jamais journalisé ni conservé.
+    pub result: Option<serde_json::Value>,
 }
 
 struct Pending {
@@ -191,11 +233,10 @@ impl Service {
     /// de la demande visée : elle existe, est en attente, et l'empreinte de
     /// CSR annoncée est bien la sienne.
     async fn check_target(&self, action: &Action) -> Result<(), Error> {
-        let request = match self
-            .store
-            .request_by_transaction_id(action.transaction_id())
-            .await
-        {
+        let Some(transaction_id) = action.transaction_id() else {
+            return Ok(());
+        };
+        let request = match self.store.request_by_transaction_id(transaction_id).await {
             Ok(r) => r,
             Err(StoreError::NotFound) => return Err(Error::Denied("demande inconnue".to_string())),
             Err(e) => return Err(Error::Effect(e.to_string())),
@@ -227,6 +268,21 @@ impl Service {
         Ok(())
     }
 
+    /// Contrôles sur l'état *actuel* de la cible. Pour le registre, c'est
+    /// l'exécution elle-même, jouée à blanc puis annulée : un seul chemin de
+    /// code, donc ce qui est contrôlé à l'émission est ce qui sera fait.
+    async fn check_action(&self, action: &Action, actor: &Operator) -> Result<(), Error> {
+        match action {
+            Action::ApproveRequest { .. } | Action::RejectRequest { .. } => {
+                self.check_target(action).await
+            }
+            _ => self
+                .run_registry_action(action, actor, self.now(), false)
+                .await
+                .map(|_| ()),
+        }
+    }
+
     /// Fige l'action et émet un challenge pour les clés de `operator_hint`.
     ///
     /// `operator_hint` sert seulement à choisir les clés à proposer : ce n'est
@@ -249,7 +305,7 @@ impl Service {
                 action.kind()
             )));
         }
-        self.check_target(&action).await?;
+        self.check_action(&action, &operator).await?;
 
         let keys = self.registry.active_keys(operator_hint).await?;
         if keys.is_empty() {
@@ -412,7 +468,7 @@ impl Service {
 
         // Le corps figé peut avoir vieilli depuis l'émission (demande décidée
         // entre-temps) : on le recontrôle avant d'engager la signature.
-        self.check_target(&stored.action).await?;
+        self.check_action(&stored.action, &operator).await?;
 
         // Consommation : conditionnelle, donc sûre sous concurrence. Une
         // exécution simultanée du même challenge n'en laisse passer qu'une.
@@ -480,32 +536,38 @@ impl Service {
             )
             .map_err(Error::Journal)?;
 
-        match &stored.action {
+        let result = match &stored.action {
             Action::ApproveRequest {
                 transaction_id,
                 comment,
                 ..
-            } => {
-                self.decider
-                    .approve(transaction_id, &operator.name, comment)
-                    .await
-            }
+            } => self
+                .decider
+                .approve(transaction_id, &operator.name, comment)
+                .await
+                .map(|_| None)
+                .map_err(|e| Error::Effect(e.to_string()))?,
             Action::RejectRequest {
                 transaction_id,
                 comment,
-            } => {
-                self.decider
-                    .reject(transaction_id, &operator.name, comment)
-                    .await
-            }
-        }
-        .map_err(|e| Error::Effect(e.to_string()))?;
+            } => self
+                .decider
+                .reject(transaction_id, &operator.name, comment)
+                .await
+                .map(|_| None)
+                .map_err(|e| Error::Effect(e.to_string()))?,
+            registry_action => Some(
+                self.run_registry_action(registry_action, &operator, now, true)
+                    .await?,
+            ),
+        };
 
         Ok(Executed {
             action_id,
             challenge_id,
             operator: operator.name,
             role: operator.role,
+            result,
         })
     }
 }

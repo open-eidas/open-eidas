@@ -6,7 +6,8 @@ use oe_webauthn::{AttestedPasskey, Uuid};
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     Auditeur,
     RaOperateur,

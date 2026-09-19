@@ -138,6 +138,8 @@ async fn handle_actions(State(service): State<Arc<Service>>, body: Bytes) -> Res
             "challenge_id": done.challenge_id,
             "operator": done.operator,
             "role": done.role.as_str(),
+            // Propre à l'action (ex. le jeton d'une invitation) ; `null` sinon.
+            "result": done.result,
         }))
         .into_response(),
         Err(e) => failure(e),
