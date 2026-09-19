@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use ca_server::{config, http, internal, internal_cert, internal_tls, webauthn_models};
+use ca_server::{config, http, internal, internal_cert, internal_tls, revoker, webauthn_models};
 use clap::{Parser, Subcommand};
 use config::Config;
 use oe_hsm::SigningToken;
@@ -322,6 +322,7 @@ async fn build_actions_service(
     cfg: &Config,
     store: Arc<dyn oe_castore::Store>,
     recorder: Arc<dyn oe_raflow::Recorder>,
+    issuer: Arc<oe_ca_core::Issuer>,
 ) -> Arc<oe_actions::Service> {
     for (name, value) in [
         ("OPENEIDAS_WEBAUTHN_RP_ID", &cfg.webauthn_rp_id),
@@ -350,14 +351,17 @@ async fn build_actions_service(
         recorder: Some(recorder.clone()),
         clock: None,
     });
-    Arc::new(oe_actions::Service::new(
-        registry,
-        verifier,
-        store,
-        decider,
-        recorder,
-        Arc::new(time::OffsetDateTime::now_utc),
-    ))
+    Arc::new(
+        oe_actions::Service::new(
+            registry,
+            verifier,
+            store,
+            decider,
+            recorder,
+            Arc::new(time::OffsetDateTime::now_utc),
+        )
+        .with_revoker(Arc::new(revoker::IssuerRevoker(issuer))),
+    )
 }
 
 fn build_flow(
@@ -436,7 +440,9 @@ async fn run_serve() {
     let internal_service = if cfg.internal_listen.is_empty() {
         None
     } else {
-        Some(build_actions_service(&cfg, store.clone(), flow_recorder.clone()).await)
+        Some(
+            build_actions_service(&cfg, store.clone(), flow_recorder.clone(), issuer.clone()).await,
+        )
     };
     let internal_tls = internal_link_tls(&cfg, issuer.certificate());
     let internal_store = store.clone();
