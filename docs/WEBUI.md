@@ -162,31 +162,55 @@ CREATE TABLE pending_credentials (
     expires_at         TIMESTAMPTZ NOT NULL
 );
 
--- Usage unique d'une signature d'action. La clé primaire rend le rejeu
--- impossible, y compris pour deux requêtes concurrentes : c'est aussi ce
--- qui garantit qu'une action de quorum ne s'exécute qu'une fois (§8).
--- Jamais purgée, puisque decision_evidence la référence.
-CREATE TABLE consumed_action_challenges (
-    challenge_hash BYTEA       PRIMARY KEY,  -- SHA-256 du corps canonique (§4)
-    action         TEXT        NOT NULL,
-    consumed_at    TIMESTAMPTZ NOT NULL
+-- Une action, créée par ca-server lui-même quand il émet le premier
+-- challenge (§4). Le corps est figé ici, à l'émission : c'est ce corps-là,
+-- et aucun autre, qu'exécutera ca-server, quoi que ra-console relaie
+-- ensuite. Un quorum (§8) est une action à plusieurs challenges.
+CREATE TABLE actions (
+    id             UUID        PRIMARY KEY,
+    body           JSONB       NOT NULL,     -- corps canonique, fixé à la création
+    body_hash      BYTEA       NOT NULL,     -- SHA-256(body), aussi écrit au journal (§4)
+    created_at     TIMESTAMPTZ NOT NULL,
+    expires_at     TIMESTAMPTZ NOT NULL,     -- created_at + 5 min
+    executed_at    TIMESTAMPTZ               -- posé une seule fois, dans la transaction d'exécution
 );
 
--- Preuve cryptographique de chaque décision, une ligne par assertion (N
--- lignes pour un quorum). Un auditeur peut revérifier chaque décision
--- avec la seule clé publique du registre, sans faire confiance ni à
--- ra-console ni au journal applicatif de ca-server.
+-- Un challenge WebAuthn émis pour un opérateur, sur une action. Le challenge
+-- est tiré par la bibliothèque WebAuthn (§21 « Instruction de T1 ») : il ne
+-- dérive pas du corps, le lien challenge → corps est ce que cette table,
+-- et l'entrée de journal écrite à l'émission, établissent. L'état de la
+-- cérémonie reste en mémoire de ca-server (un seul réplica, comme son
+-- token PKCS#11), pas ici : une cérémonie perdue à un redémarrage est
+-- simplement refaite. Jamais purgée, decision_evidence la référence.
+CREATE TABLE action_challenges (
+    challenge_id   UUID        PRIMARY KEY,
+    action_id      UUID        NOT NULL REFERENCES actions(id),
+    challenge      BYTEA       NOT NULL UNIQUE,
+    operator_hint  UUID        REFERENCES operators(id),  -- indication, jamais une décision de confiance
+    issued_at      TIMESTAMPTZ NOT NULL,
+    expires_at     TIMESTAMPTZ NOT NULL,
+    consumed_at    TIMESTAMPTZ           -- usage unique : la clé primaire rejoue impossible
+);
+
+-- Preuve de chaque décision, une ligne par assertion (N lignes pour un
+-- quorum). **Limite assumée** : la signature porte sur le challenge tiré
+-- au hasard, pas sur le corps. Cette ligne prouve « cette clé a signé ce
+-- challenge », et le lien avec le corps repose sur actions.body_hash tel
+-- qu'écrit dans le journal chaîné de ca-server, horodaté et contresigné
+-- par une TSA tierce à l'émission (§4). Un auditeur vérifie donc la
+-- signature avec la clé publique du registre, *et* l'intégrité du journal ;
+-- il ne peut pas se contenter de la signature seule.
 CREATE TABLE decision_evidence (
     id                 UUID        PRIMARY KEY,
-    challenge_hash     BYTEA       NOT NULL REFERENCES consumed_action_challenges(challenge_hash),
-    request_body       JSONB       NOT NULL,
+    challenge_id       UUID        NOT NULL UNIQUE REFERENCES action_challenges(challenge_id),
+    action_id          UUID        NOT NULL REFERENCES actions(id),
     operator_id        UUID        NOT NULL REFERENCES operators(id),
     credential_id      TEXT        NOT NULL REFERENCES webauthn_credentials(credential_id),
     authenticator_data BYTEA       NOT NULL,
     client_data_json   BYTEA       NOT NULL,
     signature          BYTEA       NOT NULL,
     verified_at        TIMESTAMPTZ NOT NULL,
-    UNIQUE (challenge_hash, operator_id)  -- un opérateur ne compte qu'une fois par action
+    UNIQUE (action_id, operator_id)  -- un opérateur ne compte qu'une fois par action
 );
 ```
 
@@ -197,7 +221,7 @@ rôle (§16) :
 -- Challenges de connexion et d'enregistrement, et corps d'action en attente
 -- de signature. Pour 'action', la table sert seulement à relayer à
 -- ca-server le corps exact qui a été montré puis signé : la protection
--- contre le rejeu qui compte est consumed_action_challenges, côté ca-server.
+-- contre le rejeu qui compte est action_challenges, côté ca-server.
 CREATE TABLE webauthn_challenges (
     id            UUID        PRIMARY KEY,
     kind          TEXT        NOT NULL
@@ -454,50 +478,77 @@ l'écran (la plupart des clés FIDO2 n'ont pas d'écran de confirmation
 « what-you-see-is-what-you-sign »). Le schéma retenu pour qu'une signature
 engage réellement l'opérateur sur *cette* action précise :
 
+**Décision O7 : challenge émis par `ca-server` avec la bibliothèque
+WebAuthn, lien avec le corps établi côté serveur.** La bibliothèque retenue
+impose de tirer elle-même le challenge (§21 « Instruction de T1 »). Le
+challenge ne peut donc pas être le hachage du corps, et la signature
+n'engage pas cryptographiquement sur le corps. Le schéma compense côté
+`ca-server`, et cette limite est assumée plus bas.
+
 1. Le navigateur demande à `ra-console` de préparer l'action. `ra-console`
-   construit le corps canonique, avec deux champs que le client ne choisit
-   pas : un `nonce` aléatoire et une échéance `expires_at` (5 minutes), par
-   exemple `{"action":"revoke","serial":"...","reason":4,"comment":"...",
-   "nonce":"...","expires_at":"..."}`.
-2. `ra-console` calcule `challenge = SHA-256(corps canonique)` et le renvoie
-   comme challenge WebAuthn (`PublicKeyCredentialRequestOptions.challenge`),
-   avec le corps en clair pour l'affichage (WYSIWYS, [UI-UX.md](UI-UX.md)
-   §3.1).
-3. L'opérateur touche sa clé ; le navigateur obtient l'assertion sur ce
-   challenge exact.
-4. `ra-console` relaie **le corps et l'assertion brute**, sans rien en
-   retirer, à `ca-server` (`POST /internal/v1/actions`, §16).
-5. **`ca-server` vérifie tout lui-même**, sans rien croire de
-   `ra-console` :
-   - l'échéance n'est pas passée ;
-   - `SHA-256(corps)` n'a jamais été consommé (`consumed_action_challenges`) ;
-   - le credential est actif dans *son* registre ;
-   - la signature est valide pour cette clé publique ;
-   - dans `clientDataJSON` : le type `webauthn.get`, un challenge égal au
-     hachage du corps, l'origine de la console configurée ;
-   - le `rpIdHash` attendu ;
+   transmet le corps demandé à `ca-server` (`POST /internal/v1/challenge`),
+   par exemple `{"action":"revoke","serial":"...","reason":4,
+   "comment":"..."}`.
+2. **`ca-server` fige l'action.** Il ajoute lui-même l'échéance (5 minutes),
+   crée la ligne `actions` avec le corps et `body_hash = SHA-256(corps)`,
+   demande à la bibliothèque un challenge d'authentification pour les clés
+   de l'opérateur visé, et l'enregistre dans `action_challenges`. **Avant de
+   répondre**, il écrit dans son journal chaîné : `action_id`,
+   `body_hash`, l'identifiant du challenge et l'opérateur visé. Ce journal
+   est contresigné par la TSA tierce déjà prévue (§7), donc le lien
+   « ce challenge ↔ ce corps » est horodaté *avant* toute signature.
+3. `ca-server` renvoie le challenge et le corps figé. `ra-console` les
+   présente à l'opérateur (WYSIWYS, [UI-UX.md](UI-UX.md) §3.1), et le
+   navigateur les passe à la clé.
+4. L'opérateur touche sa clé ; le navigateur obtient l'assertion.
+5. `ra-console` relaie **l'identifiant du challenge et l'assertion brute**
+   (`POST /internal/v1/actions`, §16). **Il ne relaie plus de corps :**
+   `ca-server` exécute le corps qu'il a figé à l'étape 2, quoi que
+   `ra-console` lui présente ensuite. Une console compromise ne peut donc
+   pas faire signer un corps puis en faire exécuter un autre.
+6. **`ca-server` vérifie tout lui-même**, sans rien croire de
+   `ra-console`, à travers la bibliothèque (`finish_attested_passkey_authentication`)
+   et ses propres contrôles :
+   - l'action n'est ni expirée ni déjà exécutée, et le challenge n'est pas
+     consommé (`action_challenges`) ;
+   - le challenge de l'assertion est celui qu'il a émis ;
+   - le credential est actif dans *son* registre, et c'est celui d'un
+     opérateur qu'il a désigné à l'étape 2 (l'indication ne vaut pas
+     décision : c'est la clé qui a signé qui fait foi) ;
+   - la signature est valide pour cette clé publique, l'origine et le
+     `rpIdHash` sont ceux attendus ;
    - les drapeaux présence et vérification de l'utilisateur, et `BE = 0` ;
    - aucune régression du compteur ;
-   - un rôle de l'opérateur (lu dans son registre) suffisant pour cette
-     action.
-6. Seulement alors l'action est exécutée. Dans la même transaction,
-   `ca-server` consomme le challenge, enregistre la preuve
-   (`decision_evidence`) et écrit l'événement dans son journal chaîné
-   (`oe-audit`), avec l'identité de l'opérateur *telle que lue dans son
-   registre*.
+   - le rôle de l'opérateur (lu dans son registre) suffit pour cette action.
+7. Seulement alors l'action est exécutée. Dans la même transaction,
+   `ca-server` pose `consumed_at` et `executed_at`, enregistre la preuve
+   (`decision_evidence`) et écrit l'événement dans son journal chaîné, avec
+   l'identité de l'opérateur *telle que lue dans son registre*.
 
-Le rejeu est donc impossible par construction, et de façon générique : il
-ne repose pas sur le fait qu'une action particulière soit idempotente. Sans
+Le rejeu est impossible par construction, et de façon générique : il ne
+repose pas sur le fait qu'une action particulière soit idempotente. Sans
 cette règle, par exemple, une ancienne signature « passer X au rôle admin »,
 rejouée après une rétrogradation, rétablirait silencieusement le rôle.
 
+**Ce que cette variante garantit, et ce qu'elle ne garantit plus.**
+- *Toujours vrai* : personne, y compris une console compromise, ne peut
+  faire exécuter un corps que l'opérateur n'a pas vu signer, puisque
+  `ca-server` exécute son propre corps figé.
+- *Plus vrai* : la signature seule ne prouve plus quel corps a été
+  approuvé. Elle prouve « cette clé a signé ce challenge ». Le lien avec le
+  corps repose sur le journal de `ca-server`, écrit avant la signature et
+  contresigné par un tiers. Un auditeur doit donc vérifier la signature
+  *et* l'intégrité de ce journal. Contre un attaquant qui contrôlerait
+  `ca-server` lui-même, la preuve est plus faible qu'avec un challenge égal
+  au hachage du corps. C'est le prix du choix de bibliothèque ; la
+  contrepartie est de ne pas écrire de code cryptographique maison.
+
 Limite à documenter dans le CPS (dans le même esprit que les écarts déjà
-listés) : ce schéma prouve qu'un opérateur muni de cette clé a validé un
-corps de requête donné tel que construit par le client web ; il ne prouve
-pas que l'opérateur a personnellement relu ce corps si le poste client est
-compromis. C'est la limite structurelle de WebAuthn sans affichage de
-transaction sur l'authentificateur — à énoncer plutôt qu'à passer sous
-silence.
+listés) : ce schéma prouve qu'un opérateur muni de cette clé a validé une
+cérémonie que `ca-server` avait liée à un corps donné ; il ne prouve pas que
+l'opérateur a personnellement relu ce corps si le poste client est compromis.
+C'est la limite structurelle de WebAuthn sans affichage de transaction sur
+l'authentificateur — à énoncer plutôt qu'à passer sous silence.
 
 ## 5. Nouvelle surface API HTTP
 
@@ -671,24 +722,29 @@ Le cookie de session est posé par le serveur (`Set-Cookie`, `HttpOnly`,
 les clients non-navigateur (scripts d'exploitation), un navigateur n'a pas
 besoin de le lire.
 
-**`POST /api/v1/webauthn/challenge`** (étape 2 du schéma de signature, §4)
+**`POST /api/v1/webauthn/challenge`** (étapes 1 à 3 du schéma de signature, §4)
 
 ```json
-// Requête : le corps canonique exact de l'action prévue
+// Requête : l'action prévue. Le corps final est fixé par ca-server, pas par le client.
 {"action": "revoke", "serial": "5a3f...", "reason": 4, "comment": "Signalement CERT-FR #2026-991"}
 ```
 ```json
-// Réponse
+// Réponse : le corps figé par ca-server, à afficher tel quel, et les options WebAuthn
 {
   "challenge_id": "uuid",
-  "webauthn": {"challenge": "base64url(SHA-256(corps canonique))", "allowCredentials": [...], "userVerification": "required", "timeout": 60000}
+  "body": {"action": "revoke", "serial": "5a3f...", "reason": 4, "comment": "...", "expires_at": "..."},
+  "body_hash": "e3b0c442 98fc1c14 …",
+  "webauthn": {"challenge": "base64url(challenge tiré par la bibliothèque)", "allowCredentials": [...], "userVerification": "required", "timeout": 60000}
 }
 ```
+`body` est celui que `ca-server` exécutera. `body_hash` s'affiche dans la
+fenêtre de signature de [UI-UX.md](UI-UX.md) §3.1, et se retrouve dans le
+journal de `ca-server`.
 
 **`POST /api/v1/requests/{id}/approve`**
 
 ```json
-// Requête : le même corps canonique que celui challengé, plus l'assertion obtenue
+// Requête : l'identifiant du challenge et l'assertion obtenue. Pas de corps.
 {
   "challenge_id": "uuid",
   "assertion": {"id": "...", "rawId": "...", "type": "public-key", "response": {"clientDataJSON": "...", "authenticatorData": "...", "signature": "...", "userHandle": "..."}}
@@ -698,16 +754,16 @@ besoin de le lire.
 // Réponse
 {"transaction_id": "...", "state": "APPROVED", "decided_by": "alice"}
 ```
-`ra-console` retrouve le corps associé à `challenge_id` et le relaie, avec
-l'assertion brute, à `ca-server` (`POST /internal/v1/actions`). C'est
-`ca-server` qui vérifie tout (§4, étape 5). Il contrôle notamment que le
-corps désigne bien *cette* `transaction_id`, pour qu'une signature ne puisse
-pas servir à une autre demande. Il n'appelle `oe_raflow::Decider::approve`
-qu'ensuite, avec l'identité lue dans son registre. `decided_by` est cette
-identité-là, renvoyée par `ca-server`, pas celle de la session
-`ra-console`. L'état renvoyé est `APPROVED`, pas `ISSUED` : comme
-aujourd'hui, le certificat n'est signé qu'au prochain appel du demandeur à
-l'enrôlement (`resume()`, §16).
+`ra-console` relaie `challenge_id` et l'assertion brute à `ca-server`
+(`POST /internal/v1/actions`). C'est `ca-server` qui vérifie tout (§4,
+étape 6). Le corps qu'il exécute est celui qu'il a figé à l'émission du
+challenge. Il contrôle que ce corps désigne bien *cette* `transaction_id`,
+pour qu'une signature ne puisse pas servir à une autre demande. Il
+n'appelle `oe_raflow::Decider::approve` qu'ensuite, avec l'identité lue dans
+son registre. `decided_by` est cette identité-là, renvoyée par `ca-server`,
+pas celle de la session `ra-console`. L'état renvoyé est `APPROVED`, pas
+`ISSUED` : comme aujourd'hui, le certificat n'est signé qu'au prochain appel
+du demandeur à l'enrôlement (`resume()`, §16).
 
 **`POST /api/v1/quorum/{id}/sign`**
 
@@ -730,7 +786,7 @@ authentifié a déjà signé cette même `quorum_request_id`. La contrainte
 confort : la garantie que les N signatures viennent de N opérateurs
 distincts est vérifiée par `ca-server` au moment de l'exécution, sur son
 propre registre et par sa contrainte
-`UNIQUE(challenge_hash, operator_id)` de `decision_evidence`.
+`UNIQUE(action_id, operator_id)` de `decision_evidence`.
 
 **`GET /api/v1/audit/search`**
 
@@ -794,8 +850,8 @@ dans le journal chaîné **de `ra-console`** (une instance `oe-audit` propre,
 dans un fichier distinct), avec l'`incident_id` en référence croisée. En
 revanche, l'action qu'elle désigne (une révocation par exemple) figure dans
 le journal **de `ca-server`**, qui l'a vérifiée et exécutée (§4). Les deux
-journaux se recoupent par le hachage du corps signé : le dossier affirme
-« révocation liée à l'incident I », et le journal de `ca-server` le
+journaux se recoupent par le `body_hash` de l'action (§4) : le dossier
+affirme « révocation liée à l'incident I », et le journal de `ca-server` le
 confirme avec la preuve (`decision_evidence`).
 
 ## 7. Deux journaux chaînés, interrogés en lecture seule
@@ -827,8 +883,8 @@ voir §2. Pour les actions déjà identifiées comme sensibles dans
 la révocation d'une autorité elle-même (pas un certificat terminal), le
 schéma de signature du §4 se généralise en M-sur-N : la requête n'est
 exécutée que lorsque *N* assertions provenant de *N* credentials distincts
-ont validé le même hash de corps de requête, dans une fenêtre de temps
-bornée. Un seul opérateur, même avec deux clés à lui, ne peut pas satisfaire
+ont signé des challenges liés à la même action (le même corps figé par
+`ca-server`, §4), dans une fenêtre de temps bornée. Un seul opérateur, même avec deux clés à lui, ne peut pas satisfaire
 cette condition — les credentials engagés doivent appartenir à des
 opérateurs différents.
 
@@ -869,7 +925,7 @@ CREATE TABLE quorum_requests (
 -- Refuse tout de suite une seconde signature de la même personne, pour que
 -- l'interface puisse le dire (409 duplicate_signer, §5). Ce n'est qu'un
 -- confort : la garantie opposable est portée par ca-server, à l'exécution
--- (UNIQUE(challenge_hash, operator_id) de decision_evidence, §2).
+-- (UNIQUE(action_id, operator_id) de decision_evidence, §2).
 CREATE TABLE quorum_signatures (
     id                 UUID        PRIMARY KEY,
     quorum_request_id  UUID        NOT NULL REFERENCES quorum_requests(id),
@@ -885,10 +941,10 @@ CREATE TABLE quorum_signatures (
 
 **L'exécution a lieu une seule fois, même sous concurrence.** Si deux
 signatures atteignent le seuil au même instant, `ra-console` peut relayer
-deux fois le même lot à `ca-server`. Le premier relais consomme le
-challenge (clé primaire de `consumed_action_challenges`, §2) dans la
-transaction qui exécute l'action. Le second échoue sur cette contrainte,
-sans rien exécuter. La garantie est portée par la base de `ca-server` : elle
+deux fois le même lot à `ca-server`. Le premier relais pose
+`actions.executed_at` et consomme les challenges (`action_challenges`, §2)
+dans la transaction qui exécute l'action. Le second trouve l'action déjà
+exécutée et échoue, sans rien exécuter. La garantie est portée par la base de `ca-server` : elle
 tient même si `ra-console` se trompe ou est compromis.
 
 ## 9. Impact sur la matrice de conformité ETSI
@@ -897,9 +953,12 @@ tient même si `ra-console` se trompe ou est compromis.
 
 - renforcer §6.2.1 EN 319 411-1 (déjà couvert par l'imputabilité en base) en
   la rendant *vérifiable cryptographiquement* plutôt que déclarative. Chaque
-  décision conserve sa preuve (`decision_evidence`, §2) : un auditeur peut
-  la revérifier avec la seule clé publique du registre, sans croire sur
-  parole ni `ra-console` ni le journal de `ca-server` ;
+  décision conserve sa preuve (`decision_evidence`, §2). Un auditeur vérifie
+  la signature avec la clé publique du registre *et* l'intégrité du journal
+  chaîné de `ca-server`, qui lie le challenge au corps (§4) : la signature
+  seule ne suffit pas, c'est une limite assumée de la bibliothèque retenue.
+  La preuve ne repose en revanche ni sur `ra-console` ni sur un journal
+  applicatif modifiable après coup ;
 - réduire, sans le clore entièrement, l'écart §6.5.1 EN 319 411-1 (double
   contrôle) pour les actions qui passent par le schéma M-sur-N du §8 — la
   cérémonie de clé physique sur HSM certifié reste hors périmètre logiciel ;
@@ -1385,25 +1444,34 @@ Deux principes non négociables :
 | Création d'un jeton d'enrôlement d'identité | Non | `ca-server`, après vérification de la signature (§11) |
 | Sessions, challenges de connexion, dossiers d'incident, collecte des signatures de quorum | Non | `ra-console`, sur ses propres tables, sans aucun pouvoir sur la PKI (§2) |
 
-Toutes les écritures passent par **une seule route interne** de
-`ca-server`, générique plutôt qu'une route par action. Elle vérifie tout
-de la même façon, et chaque action ajoutée hérite de cette vérification
-sans rien avoir à réimplémenter :
+Toutes les écritures passent par **deux routes internes** de `ca-server`,
+génériques plutôt qu'une route par action (le challenge, puis
+l'exécution). Elles vérifient tout de la même façon, et chaque action
+ajoutée hérite de cette vérification sans rien avoir à réimplémenter :
 
 ```
-POST /internal/v1/actions   (ca-server, internalPort, jamais exposé hors du cluster)
-{
-  "body":       { "action": "revoke", "serial": "...", "reason": 4, "comment": "...",
-                  "nonce": "...", "expires_at": "..." },
-  "assertions": [ { "credential_id": "...", "authenticatorData": "...",
-                    "clientDataJSON": "...", "signature": "..." } ]
-}
+POST /internal/v1/challenge   (ca-server, internalPort, jamais exposé hors du cluster)
+{ "body": { "action": "revoke", "serial": "...", "reason": 4, "comment": "..." },
+  "operator_hint": "uuid" }
+→ { "challenge_id": "...", "body": { ... , "expires_at": "..." }, "body_hash": "...",
+    "webauthn": { ... } }
+
+POST /internal/v1/actions
+{ "challenge_id": "...",
+  "assertion": { "credential_id": "...", "authenticatorData": "...",
+                 "clientDataJSON": "...", "signature": "..." } }
 ```
+
+La seconde route ne reçoit **pas de corps** : `ca-server` exécute celui qu'il
+a figé à l'émission du challenge (§4). Pour un quorum, `assertions` devient
+une liste, chaque assertion référençant son propre `challenge_id` et toutes
+portant sur la même action.
 
 La réponse porte le résultat de l'action, et `ca-server` y indique
 l'identité lue dans *son* registre. Il ne reçoit jamais d'identité
-d'opérateur déclarée par `ra-console` : il n'y a pas de champ `operator`
-dans le corps. Deux autres routes internes, non signées par un opérateur,
+d'opérateur déclarée par `ra-console` : `operator_hint` n'est qu'une
+indication pour choisir les clés à proposer, jamais une décision de
+confiance. Deux autres routes internes, non signées par un opérateur,
 servent à l'enregistrement des clés :
 - le dépôt d'une clé en attente, authentifié par le jeton d'invitation ;
 - l'enregistrement du premier administrateur, authentifié par le jeton
@@ -1423,7 +1491,18 @@ la sécurité ne dépend que des clés publiques de son propre registre. Le
 coût réel est plus élevé que je ne l'avais écrit en première version
 (« modeste ») : le choix de bibliothèque est instruit en T1 (§21) et pose
 deux questions, l'arrivée d'OpenSSL dans le processus de la CA et
-l'impossibilité d'imposer son propre challenge.
+l'impossibilité d'imposer son propre challenge. Décision O7 : `webauthn-rs`
+seul, OpenSSL accepté. Conséquences concrètes à traiter à l'implémentation :
+- l'étage de build de `deploy/ca-server/Dockerfile` (`rust:1-bookworm`) a
+  besoin des en-têtes OpenSSL (`libssl-dev`, `pkg-config`) ;
+- l'image d'exécution (`debian:bookworm-slim` avec `softhsm2`) embarque sans
+  doute déjà `libssl3`, dont dépend SoftHSM : à confirmer, ce n'est pas
+  vérifié ici ;
+- `cargo audit` (job « Clippy, tests ») suivra désormais les avis
+  `openssl`/`openssl-sys`, qui s'ajoutent à ceux de `rustls` et `cryptoki`
+  vus lors de la PR #3 ;
+- `ra-console` ne lie pas la bibliothèque : il ne fait que relayer, ce qui
+  garde son profil de dépendances inchangé (§16).
 
 ### Isolation réseau
 
@@ -1484,7 +1563,7 @@ sur ce port doit l'exposer, jamais un chemin public.
   | Ses tables : `webauthn_challenges`, `sessions`, `login_counters`, `incidents`, `incident_actions`, `quorum_requests`, `quorum_signatures` | Lecture et écriture |
   | `enrollment_requests`, `certificates`, `operators`, `webauthn_credentials`, `pending_credentials`, `decision_evidence` | `SELECT` seul (files d'attente, recherche, vérification des connexions) |
   | `operators`, `webauthn_credentials` | En plus, `REFERENCES`, pour les clés étrangères de ses propres tables |
-  | `identity_enrollment_tokens`, `operator_invites`, `consumed_action_challenges`, `authorities`, `crls` | Aucun droit : même la lecture est inutile, et les hachés de secrets n'ont pas à circuler |
+  | `identity_enrollment_tokens`, `operator_invites`, `actions`, `action_challenges`, `authorities`, `crls` | Aucun droit : même la lecture est inutile, et les hachés de secrets n'ont pas à circuler |
 
   **Aucun droit `INSERT`, `UPDATE` ou `DELETE` sur une table de
   `ca-server`.** C'est ce qui ferme la faille du §16 : un test vérifie ces
@@ -1631,7 +1710,7 @@ traduit par trois règles, reprises dans tout le document :
    l'opérateur (ou les N assertions d'un quorum, §8), et `ca-server` la
    vérifie entièrement (§4).
 2. **Anti-rejeu générique.** Une signature ne sert qu'une fois
-   (`consumed_action_challenges`, §2) et expire au bout de 5 minutes. Cette
+   (`action_challenges` et `actions.executed_at`, §2) et expire au bout de 5 minutes. Cette
    règle ne dépend pas du fait qu'une action particulière soit idempotente.
 3. **Un registre ancré dans `ca-server`.** Sans cette règle, les deux
    premières ne vaudraient rien : une console compromise y ajouterait sa
@@ -1875,7 +1954,7 @@ Trois entrées nouvelles, au format exact des entrées existantes :
 Entry {
     requirement: Requirement { standard: "ETSI EN 319 411-1", clause: "§6.2.1", title: "Enregistrement et responsabilité de la décision d'émission — authentification de l'opérateur" },
     status: Status::Covered,
-    mechanism: "L'identité de l'opérateur RA/CA n'est plus une chaîne libre déclarée au CLI : chaque décision (approbation, rejet, révocation) exige une assertion WebAuthn (FIDO2, userVerification requise, clé attestée non copiable) que ca-server vérifie lui-même contre son propre registre d'opérateurs — jamais sur la foi de la console — avant tout appel à oe_raflow::Decider ou oe_ca_core::Issuer::revoke. La preuve de chaque décision est conservée (decision_evidence) et revérifiable indépendamment ; une signature ne sert qu'une fois.",
+    mechanism: "L'identité de l'opérateur RA/CA n'est plus une chaîne libre déclarée au CLI : chaque décision (approbation, rejet, révocation) exige une assertion WebAuthn (FIDO2, userVerification requise, clé attestée non copiable) que ca-server vérifie lui-même contre son propre registre d'opérateurs — jamais sur la foi de la console — avant tout appel à oe_raflow::Decider ou oe_ca_core::Issuer::revoke. La preuve de chaque décision est conservée (decision_evidence), vérifiable avec la clé publique du registre et le journal chaîné qui lie le challenge au corps ; une signature ne sert qu'une fois.",
     test: "<chemin des tests d'intégration ra-console à écrire, ex. bin/ra-console/tests/webauthn_signing.rs>",
     target: "",
 },
@@ -1998,15 +2077,26 @@ serveur HTTP, exactement comme les tests actuels de `oe_raflow`.
     `webauthn_challenges`, puis retenter la même assertion. Doit échouer,
     `consumed_at` étant déjà posé. Une ligne expirée doit échouer, même
     jamais consommée.
-  - *Action*, côté `ca-server` : relayer deux fois le même couple corps et
-    assertion. La seconde fois doit échouer sur la clé primaire de
-    `consumed_action_challenges`, y compris pour une action non idempotente
+  - *Action*, côté `ca-server` : relayer deux fois le même
+    `challenge_id` et la même assertion. La seconde fois doit échouer
+    (`consumed_at` déjà posé, action déjà exécutée), y compris pour une action non idempotente
     comme un changement de rôle.
-- **Une signature d'action est liée à un corps précis, et c'est `ca-server`
-  qui le vérifie.** Obtenir l'assertion pour le corps A, puis relayer cette
-  même assertion accompagnée du corps B à `/internal/v1/actions` : doit
-  échouer. C'est le test qui ne doit jamais régresser en silence — c'est la
-  propriété qui donne son sens à « signature d'une requête sensible ».
+- **Une signature d'action n'exécute que le corps figé à l'émission (§4).**
+  C'est le test qui ne doit jamais régresser en silence : il donne son sens
+  à « signature d'une requête sensible ». Trois cas :
+  1. obtenir un challenge pour le corps A (révoquer le certificat X), signer,
+     puis relayer l'assertion : c'est A qui s'exécute, et rien d'autre ;
+  2. la route `/internal/v1/actions` refuse tout champ `body` (elle n'en
+     accepte pas) : un `ra-console` qui tente d'en glisser un obtient une
+     erreur, jamais une exécution ;
+  3. une assertion produite pour le challenge de l'action A, relayée en
+     citant le `challenge_id` d'une action B : doit échouer, le challenge
+     n'étant pas celui de B.
+
+  Et l'écriture au journal précède la signature : à l'émission du
+  challenge, l'entrée `action_id` + `body_hash` doit déjà exister dans le
+  journal chaîné de `ca-server` (vérifiée en relisant la chaîne avant de
+  relayer l'assertion).
 - **Régression du `sign_count`.** Une deuxième assertion avec un compteur
   inférieur ou égal au précédent (déjà positif) doit être rejetée et le
   credential suspendu. Un authentificateur qui renvoie systématiquement `0`
@@ -2087,7 +2177,7 @@ serveur HTTP, exactement comme les tests actuels de `oe_raflow`.
   mais produites par deux clés du *même* opérateur, pour une action qui en
   exige deux : doit être refusé. Réplique, dans l'esprit de
   `reserve_serial_twice_conflicts` (`crates/oe-castore/src/lib.rs`), de la
-  contrainte `UNIQUE(challenge_hash, operator_id)` de `decision_evidence` :
+  contrainte `UNIQUE(action_id, operator_id)` de `decision_evidence` :
   le refus doit venir de la base de `ca-server`, pas seulement de
   l'application. Même chose si `ra-console` transmet un
   `required_signatures` abaissé à 1 : `ca-server` applique sa propre
@@ -2095,7 +2185,7 @@ serveur HTTP, exactement comme les tests actuels de `oe_raflow`.
 - **Quorum : l'action s'exécute une seule fois.** Relayer le même lot
   complet deux fois en parallèle (test concurrent, dans l'esprit de ce que
   `reserve_serial` garantit déjà pour l'unicité des séries) : une seule
-  exécution, l'autre échouant sur `consumed_action_challenges`.
+  exécution, l'autre trouvant `actions.executed_at` déjà posé.
 - **Jeton d'enrôlement d'identité lié à une seule empreinte de CSR (§11).**
   Soumettre la CSR A avec le jeton T (ouverture), puis la CSR B avec le même
   jeton T : la seconde doit échouer. Resoumettre A avec T doit en revanche
@@ -2200,14 +2290,12 @@ d'implémentation faute d'avoir été rassemblé une seule fois.
 | O3 | Vérifications préalables au recrutement d'un opérateur RA/CA, formation, fréquence de revue des accès | §14, §18 (A.5) |
 | O4 | Fréquence de revue des décisions prises par la voie de secours CLI | §20 |
 | O5 | Qui, dans l'association, peut initier/confirmer un onboarding administrateur (au-delà du mécanisme technique du §10) | §10 |
-| O7 | Bibliothèque WebAuthn de `ca-server` : accepter OpenSSL dans le processus de la CA (avec `webauthn-rs`), ou un vérificateur maison restreint au format d'attestation `packed` ? Et challenge imposé (vérificateur d'assertion maison) ou challenge de la bibliothèque (preuve affaiblie) ? | §21 « Instruction de T1 » |
 | O6 | Seuil d'admission des clés d'opérateurs : protection matérielle ou élément sécurisé exigé ? Niveau de certification FIDO minimal (L2+ ?) ou validation FIPS 140 ? Liste initiale des modèles autorisés | §2 « Attestation » |
 
 ### Hypothèses techniques à vérifier au moment de l'implémentation
 
 | # | Sujet | Section | Ce qu'il faut vérifier |
 |---|---|---|---|
-| T1 | Choix de la bibliothèque WebAuthn de `ca-server` | §4, §16, §19 | **Instruit le 2026-09-19 (docs.rs et sources de `kanidm/webauthn-rs`), décision à prendre : voir « Instruction de T1 » ci-dessous.** |
 | T7 | Granularité et options de l'attestation | §2 « Attestation » | Deux choses à vérifier auprès des fabricants retenus : (1) l'AAGUID distingue-t-il les versions de firmware (ex. avant/après un correctif de type EUCLEAK) ? Si non, la liste blanche ne peut exclure qu'un modèle entier ; (2) l'attestation « entreprise » (lien au numéro de série physique) est-elle disponible pour ces modèles et ces navigateurs ? |
 | T6 | Algorithme des assertions vérifiées par `ca-server` | §4, §16 | Les clés FIDO2 signent le plus souvent en ES256 (ECDSA P-256). La ligne « ECDSA explicitement refusé » de CPS A.6 concerne les signatures *de certificats* de la PKI, pas l'authentification des opérateurs : le préciser dans le CPS pour qu'un auditeur ne lise pas une contradiction là où il y a deux usages distincts |
 
@@ -2266,7 +2354,9 @@ Sources : docs.rs (`webauthn-rs` 0.5.5, `fido_mds3_attestation_ca`,
    stable. À vérifier avant de la retenir : compilation contre la 0.5.x, ou
    attente de la 0.6.
 
-**Recommandation (à valider, décision O7) : répartir les rôles.**
+**Décision prise (O7) : option 3 ci-dessous, `webauthn-rs` seul.** Les options étudiées :
+
+**Recommandation initiale, non retenue : répartir les rôles.**
 - *Enregistrement et attestation* (la partie complexe : formats `packed`,
   chaînes x5c, liste de racines, politique BE) : `webauthn-rs`, dans
   `ca-server`. C'est là qu'une bibliothèque éprouvée vaut le plus.
@@ -2279,9 +2369,9 @@ Sources : docs.rs (`webauthn-rs` 0.5.5, `fido_mds3_attestation_ca`,
   est restreinte au seul format `packed` avec un vérificateur maison, plus
   lourd à écrire et à auditer, mais sans dépendance nouvelle.
 
-Ce choix modifie §4 (source du challenge), §16 (dépendances de
-`ca-server`) et §19 (tests du vérificateur maison) : à propager une fois
-décidé.
+La décision retenue est plus simple : pas de vérificateur maison, mais une
+preuve moins forte, assumée au §4. Elle a été propagée dans §2 (schéma),
+§4, §5, §8, §9, §16, §18 et §19.
 
 ### Points résolus en cours de rédaction
 
@@ -2290,6 +2380,8 @@ décidé.
 | T3 | Origine du certificat client mTLS de `ra-console` | Résolu : profils `internal_client`/`internal_server` émis par la CA émettrice via l'enrôlement existant, clés logicielles, 3 mois, approbation initiale au CLI (Jour 0), renouvellement périodique ; contrôle explicite de l'OID de politique et du sujet, pas seulement de la chaîne — voir §16 « Lien interne » |
 | T5 | Terminaison TLS du port interne | Résolu : dans `ca-server` lui-même, parce que le contrôle de révocation du certificat client lit sa propre table `certificates` — voir §16 « Lien interne » |
 | T2 | RP ID WebAuthn entre staging et production | Résolu : RP ID égal au nom d'hôte exact de chaque console, jamais le domaine racine (`demo.open-eidas.eu` existe sous le même domaine) ; un enregistrement par environnement, jamais recopié de staging vers prod ; `ra-console` refuse de démarrer si RP ID et origine ne concordent pas — voir §2 « Relying Party ID et environnements » |
+| O7 | Bibliothèque WebAuthn de `ca-server` | Décidé (2026-09-19) : `webauthn-rs` seul, avec le challenge tiré par la bibliothèque ; OpenSSL accepté dans le processus de la CA ; lien challenge → corps établi côté serveur et écrit au journal chaîné avant la signature — voir §4. Preuve moins forte qu'avec un challenge égal au hachage du corps, assumée |
+| T1 | Choix et vérification de la bibliothèque | Instruit sur docs.rs et le code source (voir « Instruction de T1 ») ; reste à vérifier à l'implémentation la compatibilité de `fido_mds3_attestation_ca` (version candidate visant la 0.6 non publiée) avec la 0.5.x, et le format d'attestation produit par `SoftToken` |
 | T4 | Mise à jour des compteurs/badges ([UI-UX.md](UI-UX.md) §2.2) | Résolu : polling court sur `GET /api/v1/counters` (§5), pas de canal persistant SSE/WebSocket — voir §5 « Mise à jour des compteurs » pour la justification |
 | R1 | Exposition publique de l'enrôlement pour le flux d'identité (§11) | Résolu : pas d'exposition de `/api/v1/enroll` (reste interne), route publique séparée et étroite `/api/v1/identity/enroll` qui ne peut porter que le profil `identity_person` avec jeton obligatoire — voir §16 « Isolation réseau » |
 | R2a | Un `ra-console` compromis pouvait faire émettre n'importe quel certificat, TSU comprise, sans aucun opérateur : il écrivait l'approbation en base, et `ca-server` signe au prochain appel sans revérifier qui a approuvé | Résolu : `ca-server` est seul à écrire ses tables, vérifie lui-même chaque signature d'opérateur (anti-rejeu générique) et porte le registre des clés, ancré dans son CLI au Jour 0 ; `ra-console` n'a plus aucun droit d'écriture chez lui — voir §16 « Qui touche le HSM, qui décide, qui écrit » et « Faille identifiée », tests au §19 |
