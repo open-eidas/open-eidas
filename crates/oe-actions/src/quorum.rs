@@ -44,4 +44,37 @@ impl Service {
             _ => 1,
         })
     }
+
+    /// Refuse de *créer* une action à plusieurs signatures que le rôle ne pourra
+    /// jamais réunir (§21) : la laisser en attente indéfiniment ferait croire à
+    /// l'opérateur qu'un second signataire va venir, alors qu'il n'existe pas.
+    /// Seuls comptent les titulaires actifs : non désactivés et munis d'au moins
+    /// une clé non révoquée.
+    pub(crate) async fn ensure_enough_holders(
+        &self,
+        action: &Action,
+        required: u32,
+    ) -> Result<(), Error> {
+        let roles: Vec<String> = action
+            .allowed_roles()
+            .iter()
+            .map(|r| r.as_str().to_string())
+            .collect();
+        let holders: i64 = sqlx::query_scalar(
+            "SELECT count(DISTINCT o.id) FROM operators o
+             JOIN webauthn_credentials c ON c.operator_id = o.id
+             WHERE o.role = ANY($1) AND o.disabled_at IS NULL AND c.revoked_at IS NULL",
+        )
+        .bind(&roles)
+        .fetch_one(self.registry.pool())
+        .await?;
+        if (holders as u32) < required {
+            return Err(Error::Denied(format!(
+                "cette action exige {required} signatures, mais il n'y a que {holders} titulaire(s) \
+                 actif(s) du rôle {}: elle ne pourrait jamais aboutir",
+                roles.join(" ou ")
+            )));
+        }
+        Ok(())
+    }
 }
