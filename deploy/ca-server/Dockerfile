@@ -6,11 +6,13 @@ COPY crates ./crates
 COPY bin ./bin
 
 ARG VERSION=dev
-# Pas de CGO à activer : le binding PKCS#11 (crate `cryptoki`) charge le
-# module du HSM via dlopen au même titre que le binaire Go, mais sans lien
-# statique contre une bibliothèque C particulière au moment de la
-# compilation. `ca-server` tire en plus `sqlx`/PostgreSQL (feature
-# `postgres` de `oe-castore`, déclarée dans bin/ca-server/Cargo.toml).
+# Le binding PKCS#11 (crate `cryptoki`) charge le module du HSM via dlopen,
+# sans lien statique. `ca-server` tire en plus `sqlx`/PostgreSQL (feature
+# `postgres` de `oe-castore`) et, pour vérifier les signatures WebAuthn des
+# opérateurs (crate `oe-webauthn`, docs/WEBUI.md §16), `webauthn-rs`, qui lie
+# OpenSSL dynamiquement : les en-têtes (`libssl-dev`, `pkg-config`) sont dans
+# `rust:1-bookworm`, et `libssl3` est déjà dans l'image d'exécution, dont
+# SoftHSM2 dépend.
 RUN cargo build --release --bin ca-server \
  && cp target/release/ca-server /out-ca-server \
  && rm -rf target

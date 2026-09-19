@@ -95,6 +95,16 @@ impl Registry {
         Registry { pool }
     }
 
+    /// Ouvre un pool sur `dsn`. Les migrations sont appliquées par
+    /// `oe_castore::Postgres::open`, à appeler avant.
+    pub async fn connect(dsn: &str) -> Result<Registry, sqlx::Error> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(dsn)
+            .await?;
+        Ok(Registry { pool })
+    }
+
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
