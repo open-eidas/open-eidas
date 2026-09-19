@@ -101,10 +101,10 @@ impl<'a> Cred<'a> {
             "INSERT INTO webauthn_credentials
                (credential_id, operator_id, public_key, aaguid, attestation_format,
                 attestation_object, backup_eligible, initiated_by, initiated_at,
-                confirmed_by, confirmed_at)
+                confirmed_by, confirmed_at, passkey)
              VALUES ($1, $2::uuid, '\\x00', gen_random_uuid(), $3, '\\x00', $4, $5, now(),
                      CASE WHEN $6 THEN 'admin-test' END,
-                     CASE WHEN $6 THEN now() END)",
+                     CASE WHEN $6 THEN now() END, '{}'::jsonb)",
         )
         .bind(&self.id)
         .bind(self.operator)

@@ -1,0 +1,28 @@
+[package]
+name = "oe-actions"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Actions d'opérateur signées et exécutées par ca-server : challenge, vérification, exécution unique (docs/WEBUI.md §4, §16)."
+
+[lints]
+workspace = true
+
+[dependencies]
+oe-webauthn = { path = "../oe-webauthn" }
+oe-raflow = { path = "../oe-raflow" }
+oe-castore = { path = "../oe-castore" }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "time", "json", "uuid"] }
+sha2 = "0.10"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["std", "serde", "formatting"] }
+thiserror = "2"
+
+[dev-dependencies]
+oe-castore = { path = "../oe-castore", features = ["postgres"] }
+webauthn-authenticator-rs = { version = "0.5", features = ["softtoken"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
