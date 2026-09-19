@@ -176,7 +176,7 @@ CREATE TABLE actions (
 );
 
 -- Un challenge WebAuthn émis pour un opérateur, sur une action. Le challenge
--- est tiré par la bibliothèque WebAuthn (§21 « Instruction de T1 ») : il ne
+-- est tiré par la bibliothèque WebAuthn (§22 « Instruction de T1 ») : il ne
 -- dérive pas du corps, le lien challenge → corps est ce que cette table,
 -- et l'entrée de journal écrite à l'émission, établissent. L'état de la
 -- cérémonie reste en mémoire de ca-server (un seul réplica, comme son
@@ -259,7 +259,7 @@ CREATE TABLE login_counters (
 
 Les clés étrangères de `ra-console` vers `operators` et
 `webauthn_credentials` supposent une instance PostgreSQL unique (risque R4,
-§21) : elles exigent le droit `REFERENCES` sur ces tables, jamais `INSERT`
+§22) : elles exigent le droit `REFERENCES` sur ces tables, jamais `INSERT`
 ni `UPDATE`.
 
 Points d'implémentation qui ne se voient pas dans le schéma seul :
@@ -384,7 +384,7 @@ qualifié » du §11.
    par PR, et n'est pas interrogée en direct chez un tiers au moment de
    l'enregistrement, conformément à l'esprit d'INDEPENDANCE.md : aucune
    dépendance réseau de `ra-console` envers `fidoalliance.org` à
-   l'exécution. Seuil à décider par l'association (O6, §21) : protection
+   l'exécution. Seuil à décider par l'association (O6, §22) : protection
    matérielle ou élément sécurisé, et niveau de certification minimal
    (L2+, ou validation FIPS 140).
 3. **Drapeau « éligible à la sauvegarde » (BE) de WebAuthn.** Chaque réponse
@@ -415,7 +415,7 @@ qualifié » du §11.
   signalé RUSTSEC-2026-0285/0286, compare la liste blanche au MDS. Il échoue
   si un modèle autorisé reçoit une alerte de compromission. Conséquence
   opérationnelle : revue et révocation des clés d'opérateurs de ce modèle
-  (§14). Point à vérifier (T7, §21) : l'AAGUID distingue-t-il les versions
+  (§14). Point à vérifier (T7, §22) : l'AAGUID distingue-t-il les versions
   de firmware concernées ? Si ce n'est pas le cas, la granularité de la
   liste blanche est le modèle entier.
 - **La preuve reste disponible pour l'audit.** L'objet d'attestation brut
@@ -428,7 +428,7 @@ qualifié » du §11.
   d'une clé physique précise. Elle permettrait de tenir un inventaire
   « l'opérateur X détient la clé physique n° Y ». Sa disponibilité dépend du
   fabricant et de la configuration du navigateur : c'est à vérifier, pas à
-  supposer (T7, §21).
+  supposer (T7, §22).
 
 Dans le schéma ci-dessus, `attestation_format`, `attestation_object` et
 `backup_eligible` portent ces règles sur `webauthn_credentials`, et les
@@ -480,7 +480,7 @@ engage réellement l'opérateur sur *cette* action précise :
 
 **Décision O7 : challenge émis par `ca-server` avec la bibliothèque
 WebAuthn, lien avec le corps établi côté serveur.** La bibliothèque retenue
-impose de tirer elle-même le challenge (§21 « Instruction de T1 »). Le
+impose de tirer elle-même le challenge (§22 « Instruction de T1 »). Le
 challenge ne peut donc pas être le hachage du corps, et la signature
 n'engage pas cryptographiquement sur le corps. Le schéma compense côté
 `ca-server`, et cette limite est assumée plus bas.
@@ -708,7 +708,7 @@ Portée exacte de cette comparaison :
 Contre ce dernier cas, la garantie est une *détection* rapide, pas une
 prévention : la vraie clé de l'invité échouera à la première action
 qu'elle tentera, puisque `ca-server` vérifie contre le registre, où c'est
-une autre clé qui figure. C'est le risque résiduel R2 (§21), appliqué à
+une autre clé qui figure. C'est le risque résiduel R2 (§22), appliqué à
 l'enregistrement.
 
 **`POST /api/v1/webauthn/login/finish`**
@@ -1004,7 +1004,10 @@ Trois cas :
      contrainte du §2).
   4. La commande refuse de s'exécuter si un administrateur actif existe
      déjà. Le bootstrap sert à amorcer le système, pas à reprendre la main
-     sur un système qui a déjà des administrateurs.
+     sur un système qui a déjà des administrateurs. Conséquence : si tous
+     les administrateurs perdent leurs clés, il n'y a plus d'issue par cette
+     commande. La voie de récupération, volontairement plus lourde, est
+     décrite au §21 (`recover-admin`).
 - **Onboarding de tout opérateur suivant**, en deux actions signées par un
   admin, séparées par l'enregistrement de l'invité :
   1. *Invitation* : l'admin signe « inviter `<nom>` au rôle `<rôle>` ».
@@ -1046,7 +1049,7 @@ Trois cas :
 - révocation de la clé d'un tiers par un admin (perte signalée, départ) ;
 - changement de rôle.
 
-Proposition de politique, à valider avec O5 (§21) : élever un opérateur au
+Proposition de politique, à valider avec O5 (§22) : élever un opérateur au
 rôle `admin` exige la signature de deux admins (quorum, §8). C'est le seul
 rôle qui peut modifier le registre lui-même, et une élévation par un seul
 admin compromis suffirait sinon à en créer d'autres.
@@ -1145,7 +1148,7 @@ métier (`oe_raflow::Flow::submit`) mais impose côté routeur, avant même
 d'atteindre cette logique : `profile` figé à `"identity_person"` (toute
 autre valeur soumise sur ce chemin est rejetée sans même consulter la base)
 et `enrollment_token` obligatoire, jamais optionnel sur ce chemin. Résout le
-risque R1 du §21 en évitant d'élargir la surface publique de la route
+risque R1 du §22 en évitant d'élargir la surface publique de la route
 d'enrôlement générique : ce qui devient public, c'est un chemin qui ne peut
 techniquement rien faire d'autre qu'ouvrir ou faire progresser une demande
 de certificat d'identité munie d'un jeton valide — jamais spammer les
@@ -1489,7 +1492,7 @@ d'opérateur valide, fraîche et jamais utilisée.
 WebAuthn : de la vérification de signatures, sans aucun secret en jeu, dont
 la sécurité ne dépend que des clés publiques de son propre registre. Le
 coût réel est plus élevé que je ne l'avais écrit en première version
-(« modeste ») : le choix de bibliothèque est instruit en T1 (§21) et pose
+(« modeste ») : le choix de bibliothèque est instruit en T1 (§22) et pose
 deux questions, l'arrivée d'OpenSSL dans le processus de la CA et
 l'impossibilité d'imposer son propre challenge. Décision O7 : `webauthn-rs`
 seul, OpenSSL accepté. Conséquences concrètes à traiter à l'implémentation :
@@ -1639,7 +1642,7 @@ côté serveur. Après chaque révocation, il relit en plus le statut dans
 l'opérateur. Sans cette relecture, un faux `ca-server` qui répondrait 200
 sans rien faire ferait échouer une révocation d'urgence en silence.
 
-**Terminaison TLS : dans `ca-server` lui-même** (ce qui tranche T5, §21).
+**Terminaison TLS : dans `ca-server` lui-même** (ce qui tranche T5, §22).
 Le contrôle 5 exige un accès à la table `certificates` au moment de la
 poignée de main, ce qu'un maillage de service externe ne sait pas faire. Et
 `rustls` est déjà une dépendance.
@@ -1729,7 +1732,7 @@ afficher « révoquer X » et faire signer « révoquer Y » : c'est la limite d
 compromission passe de « émission arbitraire, sans personne » à « il faut
 qu'un opérateur réel touche sa clé, et l'action est tracée à son nom, avec
 la preuve ». Le gain est net, la garantie n'est pas absolue. Ce qui réduit
-réellement ce risque résiduel (R2, §21), c'est ce qui passe par une vue
+réellement ce risque résiduel (R2, §22), c'est ce qui passe par une vue
 *indépendante* de la console :
 - la vérification d'empreinte avec le demandeur, pour les certificats
   d'identité (§11), dont la valeur vient de son propre outil ;
@@ -2273,7 +2276,149 @@ journal d'audit. `[À COMPLÉTER — fréquence de revue des décisions prises
 par la voie de secours, décidée par l'association]`.
 ```
 
-## 21. Journal des risques et hypothèses non validées
+## 21. Modes de défaillance de `ca-server`
+
+Avec le §16, `ca-server` est le seul point de décision : il porte le
+registre des opérateurs, vérifie les signatures et exécute. C'est voulu,
+mais il devient aussi le composant dont la panne ou la corruption coûte le
+plus cher. Cette section dit ce qui se passe, ce qui est déjà couvert, et
+ce qui reste à décider. Rien ici n'est nouveau côté PKI : ce sont les
+conséquences, pour la console, d'une architecture à écrivain unique.
+
+Faits vérifiés dans le dépôt : `ca-server` tourne en **un seul réplica**
+(`replicaCount: 1`, comme `tsa`, parce que chacun détient un token PKCS#11
+sur un volume) ; le répondeur OCSP lit la CRL *chez* `ca-server`
+(`OPENEIDAS_PKI_INTERNAL_URL`) ; la CRL est valable 24 h et republiée
+toutes les heures, et `/healthz` passe en 503 dès qu'elle est périmée.
+
+### Panne de `ca-server` (processus ou hôte indisponible)
+
+| Ce qui continue | Ce qui s'arrête |
+|---|---|
+| Horodatage (`tsa-server`, clé et token propres) | Toute décision : approbation, révocation, invitation, changement de rôle |
+| Réponses OCSP et CRL servies *tant que la CRL en cache reste valide* | Émission de certificats (dont le renouvellement de la TSU et de l'OCSP, §16) |
+| Écrans de lecture de la console (accès direct en lecture seule à la base) | Republication de la CRL |
+
+Deux points à ne pas minimiser :
+- **La révocation d'urgence est impossible pendant la panne.** Le CLI de
+  secours (§20) vit sur le même hôte que `ca-server` et signe avec le même
+  HSM : il ne contourne pas une panne de `ca-server`, seulement une panne de
+  `ra-console`. Ce qui limite le dommage, c'est le délai de reprise (RTO),
+  qu'il faut donc fixer (O8).
+- **Passé 24 h, l'OCSP dégrade** : la CRL périmée fait refuser au répondeur
+  de garantir un statut (comportement déjà voulu, `oe_ocsp_core`). Une
+  panne de plus de 24 h de `ca-server` devient donc visible des tiers. Le
+  compte à rebours de CRL de [UI-UX.md](UI-UX.md) §2.1 (alerte orange sous 2 h)
+  est la bonne alerte ; elle doit aussi partir *hors* de la console, qui ne
+  saurait pas prévenir de sa propre cause.
+
+Pas de haute disponibilité prévue : la contrainte est le token PKCS#11 (un
+volume, un écrivain), pas un oubli. La documenter comme limite du MVP plutôt
+que la découvrir en incident.
+
+### Corruption ou perte du registre des opérateurs
+
+Le registre est dans PostgreSQL (§2). Trois cas :
+
+1. **Perte totale du registre, sans sauvegarde** : plus aucune clé connue,
+   donc plus personne ne peut signer. C'est un verrouillage, pas une perte de
+   données PKI. Voir « Récupération du dernier administrateur ».
+2. **Restauration d'une sauvegarde plus ancienne que le journal** : cas
+   piégeux. Une clé révoquée à T réapparaîtrait *active* dans une base
+   restaurée à T-1, alors que le journal chaîné (fichier, réplicable, non
+   restauré avec la base) atteste la révocation. Défense : au démarrage,
+   `ca-server` **rejoue les événements du journal qui touchent le registre**
+   (activation, retrait de clé, changement de rôle) et les compare à la
+   base. Toute divergence bloque l'exécution d'actions (échec fermé,
+   `/healthz` en 503 avec le détail) jusqu'à résolution explicite par
+   l'opérateur de l'hôte (`ca-server operators reconcile`, qui ré-applique
+   le journal et consigne la résolution). Le journal fait foi pour le
+   registre, pas l'inverse.
+3. **Altération directe de la base** (une clé insérée en SQL par un
+   attaquant qui aurait obtenu l'écriture, par une faille de
+   `ra-console` ou par un compte de base compromis). Le §16 l'empêche pour
+   `ra-console`, mais le cas doit être détectable. Puisque toute entrée dans
+   le registre est une action signée (§10), `ca-server operators audit`
+   **parcourt la chaîne** : pour chaque clé active, il retrouve
+   l'activation signée dans `decision_evidence`, vérifie la signature avec
+   une clé elle-même déjà validée, et remonte jusqu'au bootstrap. Une clé
+   sans chaîne valide est signalée. L'attaquant peut forger une ligne, pas
+   la signature d'une clé existante. La commande tourne au démarrage et
+   périodiquement (job, alerte hors console).
+
+### Récupération du dernier administrateur
+
+`ca-server operators bootstrap-admin` refuse de s'exécuter si un administrateur
+actif existe (§10) : c'est voulu, mais cela signifie qu'un système où tous les
+administrateurs ont perdu leurs clés est **verrouillé** sans issue prévue.
+Il faut une issue, aussi lourde que la cérémonie :
+
+- `ca-server operators recover-admin`, exécuté sur l'hôte de `ca-server`,
+  exige de présenter le PIN du token PKCS#11 (preuve de garde de l'hôte, pas
+  seulement d'un accès shell), un motif écrit, et un drapeau explicite ;
+- il crée une invitation d'administrateur comme au Jour 0, sans rien
+  désactiver du registre existant ;
+- il écrit dans le journal, contresigné par la TSA tierce, un événement
+  distinct et bruyant (`operators.admin_recovery`), visible dans l'explorateur
+  d'audit et le tableau de bord ;
+- politique organisationnelle à décider (O8) : témoin requis, deux
+  détenteurs du PIN, revue a posteriori.
+
+Prévention plutôt que remède : la console signale (tableau de bord, hors
+échelle de sécurité) tout état où il reste **moins de trois administrateurs
+actifs**, ou un administrateur avec **une seule clé** (§10). Trois, parce que
+l'élévation au rôle admin exige déjà deux signatures (§10) et qu'il faut en
+garder un de réserve. Et un quorum ne doit jamais être exigé sur un rôle
+qui compte moins de N titulaires actifs : `ca-server` refuse de *créer*
+l'action plutôt que de la laisser en attente indéfiniment.
+
+### Journal indisponible ou saturé
+
+Le §4 fait écrire le lien challenge → corps au journal *avant* de répondre.
+Si l'écriture échoue (disque plein, verrou, fichier corrompu), **`ca-server`
+n'émet pas de challenge** : échec fermé, `/healthz` en 503. Un système qui
+signerait sans pouvoir consigner perdrait la propriété qui donne son sens à
+tout ce document. Le coût, une indisponibilité des décisions, est accepté.
+La réplication WebDAV et le contreseing existants (EN 319 401 §7.11 dans la
+matrice) sont la sauvegarde du journal.
+
+### Ce que cette architecture ne protège pas
+
+Un attaquant qui contrôle l'hôte de `ca-server` avec les droits du processus
+détient le HSM (déverrouillé), le registre et le journal. Aucun mécanisme
+de ce document ne l'arrête : il peut signer des CRL, émettre, et fabriquer un
+registre cohérent. Ce qui subsiste, c'est la **détection** : le journal
+contresigné par une TSA tierce et répliqué hors de l'hôte permet à un
+auditeur de constater une divergence après coup (ce que l'attaquant n'a
+pas pu réécrire, il ne l'a pas contresigné). C'est la même limite que pour
+toute CA en ligne ; elle relève du HSM certifié et du contrôle d'accès à
+l'hôte (CPS A.5, A.6), pas de la console.
+
+### Horloge
+
+Les échéances de 5 minutes (§4) et la fraîcheur de la CRL reposent sur
+l'horloge de `ca-server`. Aujourd'hui seule la TSA surveille sa source de
+temps (`oe_timesource`). Une horloge qui avance ferait expirer des actions
+légitimes, une horloge en retard élargirait la fenêtre de rejeu. À décider
+(T8, §22) : appliquer à `ca-server` la même surveillance NTP, avec refus de
+créer une action si la dérive dépasse un seuil.
+
+### Tests à ajouter au §19
+
+- *Registre restauré en arrière* : révoquer une clé, restaurer une base
+  antérieure, redémarrer : `ca-server` doit refuser les actions et
+  `/healthz` doit être en 503 avec la divergence, jusqu'à `reconcile`.
+- *Clé insérée en SQL* : l'insérer directement dans `webauthn_credentials`,
+  puis `operators audit` doit la signaler, et une action signée par cette clé
+  doit être refusée à l'exécution.
+- *Journal en échec* : rendre le fichier non inscriptible : aucun challenge
+  ne doit être émis.
+- *Récupération* : `recover-admin` sans le bon PIN échoue ; avec, il écrit
+  l'événement distinct au journal.
+- *Quorum impossible* : demander une action à deux signatures avec un seul
+  titulaire actif du rôle : refus immédiat de créer l'action.
+
+## 22. Journal des risques et hypothèses non validées
 
 Point de clôture du brouillon : tout ce qui, dans les 20 sections
 précédentes, reste une décision à prendre, une hypothèse technique à
@@ -2291,12 +2436,14 @@ d'implémentation faute d'avoir été rassemblé une seule fois.
 | O4 | Fréquence de revue des décisions prises par la voie de secours CLI | §20 |
 | O5 | Qui, dans l'association, peut initier/confirmer un onboarding administrateur (au-delà du mécanisme technique du §10) | §10 |
 | O6 | Seuil d'admission des clés d'opérateurs : protection matérielle ou élément sécurisé exigé ? Niveau de certification FIDO minimal (L2+ ?) ou validation FIPS 140 ? Liste initiale des modèles autorisés | §2 « Attestation » |
+| O8 | Objectif de temps de reprise (RTO) de `ca-server` (pas de haute disponibilité : un token PKCS#11, un écrivain), et politique de `recover-admin` : témoin requis, deux détenteurs du PIN, revue a posteriori | §21 |
 
 ### Hypothèses techniques à vérifier au moment de l'implémentation
 
 | # | Sujet | Section | Ce qu'il faut vérifier |
 |---|---|---|---|
 | T7 | Granularité et options de l'attestation | §2 « Attestation » | Deux choses à vérifier auprès des fabricants retenus : (1) l'AAGUID distingue-t-il les versions de firmware (ex. avant/après un correctif de type EUCLEAK) ? Si non, la liste blanche ne peut exclure qu'un modèle entier ; (2) l'attestation « entreprise » (lien au numéro de série physique) est-elle disponible pour ces modèles et ces navigateurs ? |
+| T8 | Surveillance de l'horloge de `ca-server` | §21 | Seule la TSA surveille aujourd'hui sa source de temps. Les échéances de 5 minutes (§4) et la fraîcheur de la CRL dépendent de l'horloge de `ca-server` : décider s'il reprend `oe_timesource` avec refus de créer une action au-delà d'un seuil de dérive |
 | T6 | Algorithme des assertions vérifiées par `ca-server` | §4, §16 | Les clés FIDO2 signent le plus souvent en ES256 (ECDSA P-256). La ligne « ECDSA explicitement refusé » de CPS A.6 concerne les signatures *de certificats* de la PKI, pas l'authentification des opérateurs : le préciser dans le CPS pour qu'un auditeur ne lise pas une contradiction là où il y a deux usages distincts |
 
 ### Instruction de T1 : `webauthn-rs`, ce qui est confirmé et ce qui ne l'est pas
