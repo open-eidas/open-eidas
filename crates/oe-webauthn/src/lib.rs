@@ -1,0 +1,189 @@
+//! Vérification WebAuthn des opérateurs, pour `ca-server` (docs/WEBUI.md §2, §4).
+//!
+//! Enveloppe étroite autour de `webauthn-rs` : elle n'ajoute que les règles du
+//! projet, pour qu'elles soient lisibles et testées à un seul endroit.
+//!
+//!   * une clé n'est admise qu'avec une attestation du fabricant, vérifiée
+//!     contre une liste blanche de couples (racine, AAGUID) ;
+//!   * une clé synchronisable (drapeau BE) est refusée, à l'enregistrement
+//!     comme à l'usage ;
+//!   * la vérification de l'utilisateur (PIN ou biométrie) est obligatoire ;
+//!   * une régression du compteur de signatures est un clonage présumé ;
+//!   * le RP ID doit être exactement le nom d'hôte de l'origine.
+//!
+//! Le challenge est tiré par la bibliothèque, pas dérivé du corps de la
+//! requête : le lien challenge → corps est établi par `ca-server` (§4).
+
+pub use webauthn_rs::prelude::{
+    AttestationCaList, AttestedPasskey, AttestedPasskeyAuthentication, AttestedPasskeyRegistration,
+    CreationChallengeResponse, PublicKeyCredential, RegisterPublicKeyCredential,
+    RequestChallengeResponse, Url, Uuid,
+};
+use webauthn_rs::prelude::{AttestationCaListBuilder, CredentialID};
+use webauthn_rs::{Webauthn, WebauthnBuilder};
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("configuration WebAuthn : {0}")]
+    Config(String),
+    #[error("liste blanche de modèles vide : aucune clé ne pourrait être admise")]
+    NoTrustedModel,
+    #[error("racine d'attestation illisible ({model}) : {detail}")]
+    BadRoot { model: String, detail: String },
+    #[error("vérification WebAuthn refusée : {0}")]
+    Rejected(#[from] webauthn_rs::prelude::WebauthnError),
+    #[error("clé synchronisable (BE) refusée : elle peut exister en plusieurs exemplaires")]
+    CopyableKey,
+    #[error("vérification de l'utilisateur absente : PIN ou biométrie obligatoire")]
+    UserNotVerified,
+    #[error("compteur de signatures en régression ({seen} <= {last}) : clonage présumé")]
+    CounterRegression { seen: u32, last: u32 },
+}
+
+/// Un modèle de clé de sécurité admis : la racine de sa chaîne d'attestation
+/// et l'AAGUID qui l'identifie. La racine seule ne suffit pas : un même
+/// fabricant signe des modèles que l'association n'a pas retenus.
+pub struct TrustedModel<'a> {
+    pub root_pem: &'a [u8],
+    pub aaguid: Uuid,
+    pub description: &'a str,
+}
+
+/// Construit la liste blanche. Les modèles viennent d'un fichier versionné
+/// dans le dépôt, revu par PR : aucun appel réseau à l'exécution.
+pub fn trusted_models(models: &[TrustedModel<'_>]) -> Result<AttestationCaList, Error> {
+    if models.is_empty() {
+        return Err(Error::NoTrustedModel);
+    }
+    let mut b = AttestationCaListBuilder::new();
+    for m in models {
+        b.insert_device_pem(
+            m.root_pem,
+            m.aaguid,
+            m.description.to_string(),
+            Default::default(),
+        )
+        .map_err(|e| Error::BadRoot {
+            model: m.description.to_string(),
+            detail: e.to_string(),
+        })?;
+    }
+    Ok(b.build())
+}
+
+pub struct Verifier {
+    webauthn: Webauthn,
+    models: AttestationCaList,
+}
+
+/// Résultat d'une assertion vérifiée.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Assertion {
+    pub credential_id: Vec<u8>,
+    pub counter: u32,
+}
+
+impl Verifier {
+    /// `rp_id` doit être exactement le nom d'hôte de `origin` (§2) : un RP ID
+    /// plus large (le domaine racine) ouvrirait la porte aux autres
+    /// sous-domaines, et un RP ID différent produirait un service qui
+    /// « fonctionne » avec des garanties plus faibles. Mieux vaut refuser de
+    /// démarrer.
+    pub fn new(
+        rp_id: &str,
+        origin: &Url,
+        rp_name: &str,
+        models: AttestationCaList,
+    ) -> Result<Self, Error> {
+        if models.is_empty() {
+            return Err(Error::NoTrustedModel);
+        }
+        if origin.host_str() != Some(rp_id) {
+            return Err(Error::Config(format!(
+                "le RP ID {rp_id:?} doit être exactement le nom d'hôte de l'origine {origin}"
+            )));
+        }
+        if origin.scheme() != "https" && rp_id != "localhost" {
+            return Err(Error::Config(format!(
+                "origine {origin} : https obligatoire"
+            )));
+        }
+        let webauthn = WebauthnBuilder::new(rp_id, origin)
+            .map_err(|e| Error::Config(e.to_string()))?
+            .rp_name(rp_name)
+            .build()
+            .map_err(|e| Error::Config(e.to_string()))?;
+        Ok(Verifier { webauthn, models })
+    }
+
+    pub fn start_registration(
+        &self,
+        user_id: Uuid,
+        name: &str,
+        already_registered: Option<Vec<CredentialID>>,
+    ) -> Result<(CreationChallengeResponse, AttestedPasskeyRegistration), Error> {
+        Ok(self.webauthn.start_attested_passkey_registration(
+            user_id,
+            name,
+            name,
+            already_registered,
+            self.models.clone(),
+            None,
+        )?)
+    }
+
+    /// La bibliothèque vérifie l'attestation contre la liste blanche et
+    /// l'AAGUID, et refuse une clé synchronisable (`start_attested_passkey_registration`
+    /// passe `reject_synchronised_authenticators(true)`, vérifié dans son code).
+    /// Le drapeau BE n'est pas lisible sur la clé enregistrée sans la feature
+    /// `danger-credential-internals` : il est donc recontrôlé à chaque
+    /// assertion (`finish_authentication`), où il est exposé.
+    pub fn finish_registration(
+        &self,
+        reg: &RegisterPublicKeyCredential,
+        state: &AttestedPasskeyRegistration,
+    ) -> Result<AttestedPasskey, Error> {
+        Ok(self
+            .webauthn
+            .finish_attested_passkey_registration(reg, state)?)
+    }
+
+    pub fn start_authentication(
+        &self,
+        keys: &[AttestedPasskey],
+    ) -> Result<(RequestChallengeResponse, AttestedPasskeyAuthentication), Error> {
+        Ok(self.webauthn.start_attested_passkey_authentication(keys)?)
+    }
+
+    /// `last_counter` est le dernier compteur vu par l'appelant pour cette clé.
+    /// Un authentificateur sans compteur renvoie toujours 0 : c'est admis tant
+    /// que le compteur n'a jamais été positif. Une fois positif, il ne doit
+    /// plus reculer, ni même stagner.
+    pub fn finish_authentication(
+        &self,
+        response: &PublicKeyCredential,
+        state: &AttestedPasskeyAuthentication,
+        last_counter: u32,
+    ) -> Result<Assertion, Error> {
+        let res = self
+            .webauthn
+            .finish_attested_passkey_authentication(response, state)?;
+        if !res.user_verified() {
+            return Err(Error::UserNotVerified);
+        }
+        if res.backup_eligible() || res.backup_state() {
+            return Err(Error::CopyableKey);
+        }
+        let seen = res.counter();
+        if last_counter > 0 && seen <= last_counter {
+            return Err(Error::CounterRegression {
+                seen,
+                last: last_counter,
+            });
+        }
+        Ok(Assertion {
+            credential_id: res.cred_id().as_ref().to_vec(),
+            counter: seen,
+        })
+    }
+}
