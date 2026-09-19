@@ -7,7 +7,7 @@
 //! du « big bang ».
 //!
 //! Sous-commandes : `ceremony`, `serve`, `ra list|approve|reject`, `revoke`,
-//! `conformance`, `healthcheck`, `verify-audit`.
+//! `operators bootstrap-admin`, `conformance`, `healthcheck`, `verify-audit`.
 
 use std::sync::Arc;
 
@@ -48,6 +48,11 @@ enum Command {
         #[arg(trailing_var_arg = true)]
         comment: Vec<String>,
     },
+    /// Registre des opérateurs de la console d'exploitation (docs/WEBUI.md §10).
+    Operators {
+        #[command(subcommand)]
+        action: OperatorsAction,
+    },
     /// Matrice de conformité ETSI.
     Conformance {
         #[arg(long)]
@@ -60,6 +65,20 @@ enum Command {
     /// Affiche la version (identique à `--version`, sous forme de
     /// sous-commande — reproduit `cmd/ca-server` (Go), qui n'a que celle-ci).
     Version,
+}
+
+#[derive(Subcommand)]
+enum OperatorsAction {
+    /// Jour 0 : crée le premier administrateur et son invitation à usage
+    /// unique. Refuse s'il existe déjà un administrateur actif. Le jeton est
+    /// affiché une seule fois, sur la sortie standard.
+    BootstrapAdmin {
+        /// Nom de l'administrateur (1 à 100 caractères).
+        name: String,
+        /// Durée de validité de l'invitation, en minutes (1 à 1440).
+        #[arg(long, default_value_t = 15)]
+        ttl_minutes: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -457,6 +476,43 @@ async fn run_revoke(serial_hex: String, reason: i32, operator: String, comment: 
     tracing::info!(serie = %hex::encode(&serial), motif = reason, operateur = %operator, crl = crl.number, "certificat révoqué et CRL republiée");
 }
 
+async fn run_operators_bootstrap_admin(name: String, ttl_minutes: i64) {
+    // Journaux sur la sortie d'erreur : la sortie standard ne porte que le
+    // jeton, que l'opérateur capture (`TOKEN=$(ca-server operators ...)`). Une
+    // ligne de journal devant lui serait capturée avec.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
+    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    // Ouvre le magasin de la CA pour appliquer les migrations, comme `serve`.
+    let _ = open_store(&cfg).await;
+    let registry = oe_actions::Registry::connect(&cfg.dsn)
+        .await
+        .unwrap_or_else(|e| die("ouverture du registre des opérateurs", e));
+    let journal = Arc::new(open_journal(&cfg));
+    let recorder = AuditRecorder(journal);
+
+    let invite = oe_actions::bootstrap_admin(
+        &registry,
+        &recorder,
+        &name,
+        time::Duration::minutes(ttl_minutes),
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap_or_else(|e| die("amorçage du premier administrateur", e));
+
+    let expires = invite
+        .expires_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
+    eprintln!("Invitation créée pour l'administrateur {name:?}, valable jusqu'à {expires}.");
+    eprintln!(
+        "Le jeton ci-dessous n'est affiché qu'une seule fois : il n'est conservé nulle part."
+    );
+    println!("{}", invite.token);
+}
+
 async fn run_healthcheck() {
     let listen = std::env::var("OPENEIDAS_LISTEN")
         .ok()
@@ -528,6 +584,11 @@ async fn main() {
             operator,
             comment,
         } => run_revoke(serial_hex, reason, operator, comment).await,
+        Command::Operators { action } => match action {
+            OperatorsAction::BootstrapAdmin { name, ttl_minutes } => {
+                run_operators_bootstrap_admin(name, ttl_minutes).await
+            }
+        },
         Command::Conformance { markdown } => {
             let matrix = oe_conformance::system_matrix();
             if markdown {

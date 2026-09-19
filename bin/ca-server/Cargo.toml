@@ -20,6 +20,7 @@ oe-certs = { path = "../../crates/oe-certs" }
 oe-castore = { path = "../../crates/oe-castore", features = ["postgres"] }
 oe-ca-core = { path = "../../crates/oe-ca-core" }
 oe-raflow = { path = "../../crates/oe-raflow" }
+oe-actions = { path = "../../crates/oe-actions" }
 oe-audit = { path = "../../crates/oe-audit" }
 oe-conformance = { path = "../../crates/oe-conformance" }
 clap = { version = "4", features = ["derive"] }
@@ -38,5 +39,6 @@ sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [dev-dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
