@@ -94,7 +94,7 @@ doit être révisée avant toute émission hors des deux profils ci-dessus]`.
 | Ce document (CP/CPS) | `[À COMPLÉTER — URL de publication définitive]` | — |
 | Certificat de la CA émettrice | `GET /download/<CN>.cer` (DER) | `bin/ca-server`, voir CA.md §6 |
 | CRL de la CA émettrice | `GET /download/<CN>.crl` | Republiée toutes les heures, fenêtre de validité 24 h |
-| Matrice de conformité ETSI | `GET /api/v1/conformance` et [CONFORMITE-ETSI.md](CONFORMITE-ETSI.md) | Générée depuis `oe_conformance`, ne peut pas diverger du code |
+| Matrice de conformité ETSI | `GET /api/v1/conformance` et [CONFORMITE-ETSI.md](CONFORMITE-ETSI.md) | Servie depuis `oe_conformance::system_matrix`, une liste maintenue à la main dans le code (pas dérivée automatiquement des contrôles d'exécution) : elle peut diverger du comportement réel si elle n'est pas tenue à jour à chaque changement |
 | Code source complet | `[À COMPLÉTER — URL du dépôt public]` | Dépôt public par principe (voir README.md, gouvernance de transparence) |
 
 Fréquence de publication de la CRL, délai de republication après révocation,
@@ -172,17 +172,21 @@ Voir A.1.4. La clé privée ne quitte jamais le module PKCS#11
 
 #### A.4.6 Renouvellement de certificat
 
-Voir A.3.3. Déclenché automatiquement dans les 30 jours précédant
-l'expiration (`OPENEIDAS_RENEW_BEFORE`).
+Voir A.3.3. Pour la TSU : déclenché automatiquement dans les 30 jours
+précédant l'expiration (`OPENEIDAS_RENEW_BEFORE`), vérifié à chaque
+démarrage de `tsa-server`. Pour le répondeur OCSP : `[À COMPLÉTER —
+`OPENEIDAS_RENEW_BEFORE` n'existe pas côté `ocsp-responder`, qui réutilise
+son certificat existant tant que sa clé correspond, sans contrôle
+d'expiration]`.
 
 #### A.4.7 Révocation et suspension du certificat
 
 | | |
 |---|---|
-| Motifs admis | Codes RFC 5280 §5.3.1 (voir [CA.md](CA.md) §5) |
-| Délai de publication après révocation | Immédiat : `ca-server revoke` republie la CRL dans le même appel |
+| Motifs admis | Codes RFC 5280 §5.3.1 (voir [CA.md](CA.md) §5) ; `[À COMPLÉTER — le code entier n'est pas validé à la révocation, un motif hors nomenclature est normalisé en `unspecified` sur la CRL plutôt que rejeté]` |
+| Délai de publication après révocation | Immédiat pour `ca-server revoke` (republie la CRL dans le même appel) ; pour la révocation automatique déclenchée par un renouvellement (`oe_raflow`), la CRL n'est republiée qu'au cycle périodique suivant, pas dans le même appel |
 | Fréquence de publication de la CRL | Toutes les heures, fenêtre de validité 24 h (`OPENEIDAS_CRL_REFRESH`, `OPENEIDAS_CRL_VALIDITY`) |
-| Suspension | Non implémentée : un certificat est actif ou révoqué, pas d'état intermédiaire |
+| Suspension | `certificateHold` (code RFC 5280 6) est accepté et encodé sur la CRL comme n'importe quel motif, mais aucun mécanisme de levée de suspension n'existe : une fois révoqué, un certificat ne redevient jamais actif |
 | Vérification du statut en ligne | OCSP (RFC 6960), `oe_ocsp_core::Responder`, refuse de répondre plutôt que de garantir un statut obsolète |
 
 #### A.4.8 Services d'état de certificat
@@ -218,7 +222,7 @@ code applique et vérifie automatiquement (`oe_conformance`) :
 | Contrôle | Valeur appliquée | Mécanisme |
 |---|---|---|
 | Génération de la paire de clés | Dans le module PKCS#11, jamais exportée | `oe_hsm`, `ca-server ceremony` |
-| Taille de clé — autorités | RSA ≥ 3072 bits (4096 par défaut) | `OPENEIDAS_CA_KEY_BITS`, validé à la configuration (`oe-config`, `bin/ca-server/src/config.rs`) |
+| Taille de clé — autorités | RSA ≥ 3072 bits (4096 par défaut) | `OPENEIDAS_CA_KEY_BITS`, validé à la configuration (`bin/ca-server/src/config.rs`) |
 | Taille de clé — TSU / OCSP | RSA ≥ 3072 bits | `oe_raflow::parse_and_verify_csr`, appliqué à la CSR soumise à l'enrôlement |
 | Algorithmes de signature admis | SHA-256/384/512 avec RSA ; SHA-1, MD5 et ECDSA explicitement refusés (implémentation actuelle : RSA uniquement, côté génération de clé comme côté vérification) | `oe_conformance::check_signature_algorithm` |
 | Protection de l'activation de la clé | PIN du token PKCS#11 | `oe_hsm` |

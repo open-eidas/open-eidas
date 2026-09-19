@@ -1,19 +1,25 @@
 # Dimensionnement de la pile
 
-Mesures directes du plancher réel de RAM de chaque service, et de CPU pour
-`ca-server` (le seul dont l'opération dominante — la cérémonie de clé — est
-sensiblement limitée par le CPU), pour que les demandes/limites déclarées
-dans `docker-compose.yml` et `deploy/helm/open-eidas/values.yaml` soient des
-faits vérifiés plutôt que des estimations. Un service produisant des
-signatures cryptographiques pour un tiers de confiance mérite mieux qu'un
-chiffre au doigt mouillé.
+Mesures directes du plancher réel de RAM pour `postgres`, `ca-server`, `tsa`
+et `ocsp-responder`, et de CPU pour `ca-server` (le seul dont l'opération
+dominante — la cérémonie de clé — est sensiblement limitée par le CPU), pour
+que les demandes/limites déclarées dans `docker-compose.yml` et
+`deploy/helm/open-eidas/values.yaml` soient des faits vérifiés plutôt que des
+estimations pour ces services. Un service produisant des signatures
+cryptographiques pour un tiers de confiance mérite mieux qu'un chiffre au
+doigt mouillé.
+
+Le réplica d'audit (WebDAV) et le conteneur Helm `ra-autoapprove` n'ont pas
+été mesurés : leurs valeurs (24/96 Mio, 16/64 Mio) sont des estimations par
+analogie avec les services mesurés, pas des résultats de test. `[À
+COMPLÉTER — mesurer effectivement ces deux services]`
 
 Les limites CPU de `postgres`, `tsa`, `ocsp-responder` et du réplica
 d'audit, elles, ne sont pas issues d'une mesure de plancher de rupture :
 faute d'opération CPU-bound comparable à la cérémonie de clé chez ces
 services, elles reprennent un ratio raisonnable par rapport à leur RAM
 retenue plutôt qu'un chiffre mesuré. `[À COMPLÉTER — mesurer effectivement
-ces plancher CPU si une contrainte de capacité concrète l'exige]`
+ces planchers CPU si une contrainte de capacité concrète l'exige]`
 
 Cohérent avec la mission de l'association (voir README.md) : une
 infrastructure aussi frugale que possible réduit le coût d'exploitation, donc
@@ -66,9 +72,10 @@ Aucun plancher mémoire n'a pu être atteint dans la plage que Docker autorise.
 | 0,05 | ~41 s |
 | 0,02 | **Échec** après ~8 min (délai dépassé ailleurs dans la chaîne) |
 
-Le CPU n'est donc pas un facteur de risque de panne pour la cérémonie, mais
-un facteur de **durée** — opération ponctuelle au premier démarrage, pas un
-coût récurrent.
+Aux valeurs retenues (100m demandé, 1,0 en limite), le CPU est un facteur de
+**durée**, pas de panne, pour cette opération ponctuelle au premier
+démarrage. Il ne redevient un facteur de panne qu'en dessous de ~0,05 CPU,
+un plancher bien inférieur à la configuration retenue.
 
 ### `ca-server` — régime `serve` sous charge réelle d'enrôlement
 
@@ -103,6 +110,11 @@ l'usage observé.
 
 ## Configuration retenue
 
+Ce tableau donne la configuration Helm (requêtes et limites CPU/RAM). Le
+`docker-compose.yml` ne reprend que les colonnes « Limite CPU » (`cpus`) et
+« Requête/Limite RAM » (`mem_reservation`/`mem_limit`) : Compose n'a pas de
+notion de requête CPU.
+
 | Service | Requête CPU | Limite CPU | Requête RAM | Limite RAM |
 |---|---|---|---|---|
 | `ca` (cérémonie + service) | 100m | 1 | 32Mi | 128Mi |
@@ -114,12 +126,15 @@ l'usage observé.
 
 **Total `docker-compose.yml`** (`ca`, `tsa`, `ocsp-responder`, `postgres`,
 réplica d'audit — l'approbation RA y est une boucle dans
-`scripts/bootstrap.sh`, pas un conteneur séparé) : ~200m CPU demandés (2,0
-CPU en limite), ~176 Mio de RAM demandée (~704 Mio en limite).
+`scripts/bootstrap.sh`, pas un conteneur séparé) : Compose ne déclare qu'une
+limite CPU par service (`cpus`, pas de réservation) et une réservation/limite
+mémoire (`mem_reservation`/`mem_limit`) ; il n'y a donc pas de total de CPU
+« demandé » pour cette pile, seulement ~2,0 CPU cumulés en limite et ~176 Mio
+de RAM réservée (~704 Mio en limite).
 
-**Total chart Helm** (les mêmes, plus le conteneur `ra-autoapprove`) : ~205m
-CPU demandés (2,05 CPU en limite), ~192 Mio de RAM demandée (~768 Mio en
-limite).
+**Total chart Helm** (les mêmes, plus le conteneur `ra-autoapprove`) : Helm
+déclare requêtes *et* limites CPU/RAM par service : ~205m CPU demandés
+(2,05 CPU en limite), ~192 Mio de RAM demandée (~768 Mio en limite).
 
 Sur un unique nœud modeste dans les deux cas, là où la pile OpenXPKI
 précédente exigeait 4 conteneurs supplémentaires (MariaDB compris) pour un
