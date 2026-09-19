@@ -59,11 +59,13 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
-      # Suite PostgreSQL d'oe-castore, gardée par la feature `postgres` et
-      # OE_CASTORE_TEST_DSN : schéma du registre, contraintes, droits du rôle
-      # de ra-console (docs/WEBUI.md §16).
-      - name: cargo test (oe-castore, PostgreSQL réel)
-        run: cargo test -p oe-castore --features postgres
+      # Suites PostgreSQL, gardées par OE_CASTORE_TEST_DSN (sans elle, elles
+      # s'ignorent en restant vertes) : schéma du registre, contraintes et
+      # droits du rôle de ra-console (oe-castore), et actions d'opérateur
+      # signées, dont la preuve que la faille R2a est fermée (oe-actions,
+      # docs/WEBUI.md §16).
+      - name: cargo test (oe-castore, oe-actions, PostgreSQL réel)
+        run: cargo test -p oe-castore -p oe-actions --features oe-castore/postgres
         env:
           OE_CASTORE_TEST_DSN: postgres://postgres:test@localhost:5432/postgres
 
