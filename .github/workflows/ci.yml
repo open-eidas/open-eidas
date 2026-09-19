@@ -12,6 +12,22 @@ jobs:
   test:
     name: Clippy, tests
     runs-on: ubuntu-latest
+    # PostgreSQL réel pour les tests d'invariants du registre des opérateurs
+    # (crates/oe-castore/tests/operators_schema.rs) : ces contraintes et ces
+    # droits sont portés par la base, un test qui ne l'exécute pas ne prouve
+    # rien.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     permissions:
       contents: read
       # rustsec/audit-check publie son résultat comme un check run —
@@ -42,6 +58,14 @@ jobs:
       # plus bas, qui tournent en conditions réelles.
       - name: cargo test
         run: cargo test --workspace
+
+      # Suite PostgreSQL d'oe-castore, gardée par la feature `postgres` et
+      # OE_CASTORE_TEST_DSN : schéma du registre, contraintes, droits du rôle
+      # de ra-console (docs/WEBUI.md §16).
+      - name: cargo test (oe-castore, PostgreSQL réel)
+        run: cargo test -p oe-castore --features postgres
+        env:
+          OE_CASTORE_TEST_DSN: postgres://postgres:test@localhost:5432/postgres
 
       # RUSTSEC-2023-0071 (« Marvin Attack », rsa < aucune version corrigée
       # à ce jour) est un canal auxiliaire temporel sur les opérations de
