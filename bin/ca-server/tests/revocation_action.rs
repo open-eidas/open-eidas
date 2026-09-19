@@ -188,6 +188,30 @@ impl Env {
     }
 }
 
+impl Env {
+    /// Deux `ca_operateur` distincts signent la même action figée.
+    async fn revoke_with_two(&mut self, first: Uuid, second: Uuid, action: Action) {
+        let issued = self.with.issue_challenge(action, first).await.unwrap();
+        let a = self
+            .authn
+            .do_authentication(origin(), issued.options.clone())
+            .unwrap();
+        let done = self.with.execute(issued.challenge_id, &a).await.unwrap();
+        assert!(!done.executed, "une seule signature ne révoque pas");
+        let issued = self
+            .with
+            .issue_challenge_for(issued.action_id, second)
+            .await
+            .unwrap();
+        let a = self
+            .authn
+            .do_authentication(origin(), issued.options.clone())
+            .unwrap();
+        let done = self.with.execute(issued.challenge_id, &a).await.unwrap();
+        assert!(done.executed);
+    }
+}
+
 fn revoke(serial: &str, reason: i32, comment: &str) -> Action {
     Action::RevokeCertificate {
         serial: serial.to_string(),
@@ -203,6 +227,7 @@ async fn a_ca_operator_revokes_a_certificate_and_the_crl_carries_it() {
         return;
     };
     let carla = env.operator("carla", Role::CaOperateur).await;
+    let dave = env.operator("dave", Role::CaOperateur).await;
     let rita = env.operator("rita", Role::RaOperateur).await;
     let serial = env.certificate("t1").await;
     let action = revoke(&serial, 1, "Signalement CERT-FR 2026-991");
@@ -216,9 +241,30 @@ async fn a_ca_operator_revokes_a_certificate_and_the_crl_carries_it() {
     assert!(matches!(err, Error::Denied(_)), "{err}");
     assert_eq!(status(&env, &serial).await, CertificateStatus::Issued);
 
+    // Un seul ca_operateur ne suffit pas : la première signature est recueillie,
+    // le certificat reste valide.
     let issued = env
         .with
         .issue_challenge(action.clone(), carla)
+        .await
+        .unwrap();
+    assert_eq!(issued.required_signatures, 2);
+    let assertion = env
+        .authn
+        .do_authentication(origin(), issued.options.clone())
+        .unwrap();
+    let first = env
+        .with
+        .execute(issued.challenge_id, &assertion)
+        .await
+        .unwrap();
+    assert!(!first.executed);
+    assert_eq!(status(&env, &serial).await, CertificateStatus::Issued);
+
+    // Un second, distinct, signe le même corps figé : la révocation a lieu.
+    let issued = env
+        .with
+        .issue_challenge_for(issued.action_id, dave)
         .await
         .unwrap();
     let assertion = env
@@ -230,8 +276,9 @@ async fn a_ca_operator_revokes_a_certificate_and_the_crl_carries_it() {
         .execute(issued.challenge_id, &assertion)
         .await
         .unwrap();
+    assert!(done.executed);
 
-    assert_eq!(done.operator, "carla");
+    assert_eq!(done.operator, "dave");
     let result = done.result.unwrap();
     assert_eq!(result["crl_published"], true);
     assert_eq!(status(&env, &serial).await, CertificateStatus::Revoked);
@@ -272,6 +319,7 @@ async fn refused_revocations_leave_the_certificate_untouched() {
         return;
     };
     let carla = env.operator("carla", Role::CaOperateur).await;
+    let dave = env.operator("dave", Role::CaOperateur).await;
     let serial = env.certificate("t1").await;
 
     let cases: Vec<(&str, Action, bool)> = vec![
@@ -310,19 +358,8 @@ async fn refused_revocations_leave_the_certificate_untouched() {
     assert!(matches!(err, Error::Denied(_)), "{err}");
 
     // Déjà révoqué : refusé, sans nouvelle signature demandée.
-    let issued = env
-        .with
-        .issue_challenge(revoke(&serial, 1, "x"), carla)
-        .await
-        .unwrap();
-    let assertion = env
-        .authn
-        .do_authentication(origin(), issued.options.clone())
-        .unwrap();
-    env.with
-        .execute(issued.challenge_id, &assertion)
-        .await
-        .unwrap();
+    env.revoke_with_two(carla, dave, revoke(&serial, 1, "x"))
+        .await;
     let err = env
         .with
         .issue_challenge(revoke(&serial, 1, "encore"), carla)

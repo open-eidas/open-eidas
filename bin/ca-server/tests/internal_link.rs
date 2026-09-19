@@ -203,6 +203,11 @@ async fn an_action_goes_through_the_two_routes() {
     assert_eq!(status, StatusCode::OK, "{done}");
     assert_eq!(done["operator"], name);
     assert_eq!(done["role"], "ra_operateur");
+    assert_eq!(done["status"], "executed");
+    assert_eq!(
+        (done["signatures"].as_u64(), done["required"].as_u64()),
+        (Some(1), Some(1))
+    );
     assert_eq!(
         store.request_by_transaction_id(&tx).await.unwrap().state,
         RequestState::Approved
@@ -229,6 +234,27 @@ async fn an_action_goes_through_the_two_routes() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{err}");
+
+    // `body` et `action_id` s'excluent : on ne choisit pas un corps par-dessus
+    // une action déjà figée, et il faut l'un des deux.
+    for bad in [
+        serde_json::json!({
+            "body": {"action": "reject_request", "transaction_id": tx, "comment": "non"},
+            "action_id": Uuid::new_v4(), "operator_hint": op,
+        }),
+        serde_json::json!({"operator_hint": op}),
+    ] {
+        let (status, err) = call(&app, "/internal/v1/challenge", bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+    }
+    // Une action figée inconnue ne reçoit aucun signataire.
+    let (status, _) = call(
+        &app,
+        "/internal/v1/challenge",
+        serde_json::json!({"action_id": Uuid::new_v4(), "operator_hint": op}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     // Une action hors de l'énumération fermée ne peut pas être demandée.
     let (status, _) = call(
