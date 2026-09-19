@@ -1417,11 +1417,13 @@ seul aucun pouvoir. Un attaquant qui volerait le certificat client de
 `ra-console` ne pourrait faire exécuter aucune action sans une signature
 d'opérateur valide, fraîche et jamais utilisée.
 
-`ca-server` lie donc désormais une bibliothèque de vérification WebAuthn
-(celle retenue en T1, §21) pour vérifier des assertions et des
-attestations : de la vérification de signatures, sans aucun secret en
-jeu. C'est le coût de ce principe, et il est modeste. Sa sécurité ne dépend
-que des clés publiques de son propre registre.
+`ca-server` doit donc vérifier lui-même des assertions et des attestations
+WebAuthn : de la vérification de signatures, sans aucun secret en jeu, dont
+la sécurité ne dépend que des clés publiques de son propre registre. Le
+coût réel est plus élevé que je ne l'avais écrit en première version
+(« modeste ») : le choix de bibliothèque est instruit en T1 (§21) et pose
+deux questions, l'arrivée d'OpenSSL dans le processus de la CA et
+l'impossibilité d'imposer son propre challenge.
 
 ### Isolation réseau
 
@@ -2198,15 +2200,88 @@ d'implémentation faute d'avoir été rassemblé une seule fois.
 | O3 | Vérifications préalables au recrutement d'un opérateur RA/CA, formation, fréquence de revue des accès | §14, §18 (A.5) |
 | O4 | Fréquence de revue des décisions prises par la voie de secours CLI | §20 |
 | O5 | Qui, dans l'association, peut initier/confirmer un onboarding administrateur (au-delà du mécanisme technique du §10) | §10 |
+| O7 | Bibliothèque WebAuthn de `ca-server` : accepter OpenSSL dans le processus de la CA (avec `webauthn-rs`), ou un vérificateur maison restreint au format d'attestation `packed` ? Et challenge imposé (vérificateur d'assertion maison) ou challenge de la bibliothèque (preuve affaiblie) ? | §21 « Instruction de T1 » |
 | O6 | Seuil d'admission des clés d'opérateurs : protection matérielle ou élément sécurisé exigé ? Niveau de certification FIDO minimal (L2+ ?) ou validation FIPS 140 ? Liste initiale des modèles autorisés | §2 « Attestation » |
 
 ### Hypothèses techniques à vérifier au moment de l'implémentation
 
 | # | Sujet | Section | Ce qu'il faut vérifier |
 |---|---|---|---|
-| T1 | `webauthn-rs` (vérification serveur) et son projet compagnon pour un authentificateur logiciel de test | §5, §19 | Noms de crate, API et niveau WebAuthn (L2/L3) exacts au moment d'ajouter la dépendance — non vérifiés contre une documentation à jour dans ce brouillon |
+| T1 | Choix de la bibliothèque WebAuthn de `ca-server` | §4, §16, §19 | **Instruit le 2026-09-19 (docs.rs et sources de `kanidm/webauthn-rs`), décision à prendre : voir « Instruction de T1 » ci-dessous.** |
 | T7 | Granularité et options de l'attestation | §2 « Attestation » | Deux choses à vérifier auprès des fabricants retenus : (1) l'AAGUID distingue-t-il les versions de firmware (ex. avant/après un correctif de type EUCLEAK) ? Si non, la liste blanche ne peut exclure qu'un modèle entier ; (2) l'attestation « entreprise » (lien au numéro de série physique) est-elle disponible pour ces modèles et ces navigateurs ? |
 | T6 | Algorithme des assertions vérifiées par `ca-server` | §4, §16 | Les clés FIDO2 signent le plus souvent en ES256 (ECDSA P-256). La ligne « ECDSA explicitement refusé » de CPS A.6 concerne les signatures *de certificats* de la PKI, pas l'authentification des opérateurs : le préciser dans le CPS pour qu'un auditeur ne lise pas une contradiction là où il y a deux usages distincts |
+
+### Instruction de T1 : `webauthn-rs`, ce qui est confirmé et ce qui ne l'est pas
+
+Sources : docs.rs (`webauthn-rs` 0.5.5, `fido_mds3_attestation_ca`,
+`webauthn-authenticator-rs`) et code source de `kanidm/webauthn-rs`
+(dernière version publiée : 0.5.2 sur GitHub au 2026-09-19).
+
+**Confirmé — conforme à ce que le document exige :**
+- **Attestation obligatoire avec liste de racines** :
+  `start_attested_passkey_registration` exige un `AttestationCaList`
+  (paramètre non optionnel). Un authentificateur hybride ne peut pas être
+  attesté, ce qui exclut par construction les passkeys de téléphone.
+- **Refus des clés copiables** : à l'enregistrement, le code rejette un
+  credential `backup_eligible` tant que `allow_synchronised_authenticators`
+  n'est pas activé, et rejette un `backup_state` sans éligibilité déclarée.
+  À l'authentification, tout changement du drapeau d'éligibilité est refusé,
+  sauf si `allow_backup_eligible_upgrade` est activé (à ne jamais activer ici).
+  Ces comportements sont dans le code, pas dans la documentation publiée.
+- **Authentificateur logiciel de test** : `webauthn-authenticator-rs`
+  fournit `SoftToken` et `SoftPasskey` (features `softtoken`/`softpasskey`),
+  utilisables en dépendance de test. Non documenté : le format
+  d'attestation qu'ils produisent. À vérifier en essayant.
+- **Liste blanche hors ligne** : `fido_mds3_attestation_ca` construit
+  l'`AttestationCaList` depuis un blob MDS3, avec un filtre
+  (`AttestationFilter`, `build_ca_list()`), et sait le charger depuis un
+  fichier local (`loader`). Cela permet la liste versionnée dans le dépôt
+  que le §2 exige, sans appel réseau à l'exécution (le téléchargement est
+  facultatif).
+
+**Écarts avec le document, à trancher :**
+1. **Impossible d'imposer son propre challenge.** Le challenge est
+   toujours tiré au hasard par la bibliothèque : le constructeur
+   d'authentification n'a pas de champ challenge, et l'état
+   (`AuthenticationState`) a ses champs privés. Or le schéma du §4 exige
+   `challenge = SHA-256(corps canonique)`, pour que la signature elle-même
+   engage sur le corps. Avec la bibliothèque telle quelle, il faudrait
+   soit (a) faire émettre le challenge par `ca-server` et lier
+   challenge → hachage du corps *dans sa base*, ce qui affaiblit
+   `decision_evidence` (la signature seule ne prouve plus quel corps a été
+   approuvé, un auditeur doit faire confiance à la base de `ca-server`) ;
+   soit (b) contourner l'état via la feature
+   `danger-allow-state-serialisation`, fragile ; soit (c) écrire son propre
+   vérificateur d'assertion (voir la recommandation).
+2. **OpenSSL entre dans le processus de la CA.** `webauthn-rs-core`
+   dépend d'`openssl`/`openssl-sys`. Or `Cargo.lock` n'en contient
+   aujourd'hui aucun, ni `p256`/`ecdsa` (le dépôt s'appuie sur `rustls`,
+   `ring` et RustCrypto). Ajouter OpenSSL au binaire qui tient la clé de
+   l'autorité est une décision à part entière : dépendance FFI, avis
+   RUSTSEC supplémentaires à suivre par `cargo audit`, bibliothèque
+   système dans l'image, et un écart avec l'esprit d'INDEPENDANCE.md. Elle
+   ne se prend pas par défaut parce qu'une bibliothèque en a besoin.
+3. **Compatibilité de version.** `fido_mds3_attestation_ca` est en
+   `0.1.1-rc.2` et annonce viser `webauthn-rs` **0.6.0-dev**, pas la 0.5.5
+   stable. À vérifier avant de la retenir : compilation contre la 0.5.x, ou
+   attente de la 0.6.
+
+**Recommandation (à valider, décision O7) : répartir les rôles.**
+- *Enregistrement et attestation* (la partie complexe : formats `packed`,
+  chaînes x5c, liste de racines, politique BE) : `webauthn-rs`, dans
+  `ca-server`. C'est là qu'une bibliothèque éprouvée vaut le plus.
+- *Assertion d'action* (la partie simple et bien spécifiée : signature
+  ES256 sur `authenticatorData ‖ SHA-256(clientDataJSON)`) : un vérificateur
+  d'une centaine de lignes, dans une crate dédiée testée contre `SoftToken`
+  et des vecteurs publics, ce qui permet le challenge imposé du §4 et une
+  preuve autoportante.
+- OpenSSL est alors accepté *avec* ce coût énoncé (O7), ou l'attestation
+  est restreinte au seul format `packed` avec un vérificateur maison, plus
+  lourd à écrire et à auditer, mais sans dépendance nouvelle.
+
+Ce choix modifie §4 (source du challenge), §16 (dépendances de
+`ca-server`) et §19 (tests du vérificateur maison) : à propager une fois
+décidé.
 
 ### Points résolus en cours de rédaction
 
