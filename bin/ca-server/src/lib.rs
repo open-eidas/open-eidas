@@ -7,5 +7,6 @@ pub mod http;
 pub mod internal;
 pub mod internal_cert;
 pub mod internal_tls;
+pub mod registry_check;
 pub mod revoker;
 pub mod webauthn_models;
