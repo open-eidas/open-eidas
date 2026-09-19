@@ -1,0 +1,18 @@
+[package]
+name = "oe-webauthn"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Vérification WebAuthn des opérateurs pour ca-server : attestation, liste blanche de modèles, refus des clés copiables, anti-clonage (docs/WEBUI.md §2, §4)."
+
+[lints]
+workspace = true
+
+[dependencies]
+webauthn-rs = "0.5"
+thiserror = "2"
+
+[dev-dependencies]
+webauthn-authenticator-rs = { version = "0.5", features = ["softtoken"] }
