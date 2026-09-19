@@ -1848,9 +1848,11 @@ raConsole:
 
 ### `NetworkPolicy` — les deux premières du chart
 
-Aucune `NetworkPolicy` n'existe aujourd'hui dans
-`deploy/helm/open-eidas/templates/` : l'isolation actuelle repose entièrement
-sur le choix de ce qui a un `HTTPRoute` ou non. Ça suffisait tant qu'aucun
+Avant le lien interne, aucune `NetworkPolicy` n'existait dans
+`deploy/helm/open-eidas/templates/` : l'isolation reposait entièrement sur le
+choix de ce qui a un `HTTPRoute` ou non. La première, celle de la CA
+(`templates/ca/networkpolicy.yaml`, activée avec `ca.internal.enabled`), est
+livrée ; celle de `ra-console` reste à écrire avec le service. Ça suffisait tant qu'aucun
 port applicatif ne portait d'action privilégiée à distance ; `internalPort`
 en introduit un, ce qui rend une politique explicite nécessaire plutôt
 qu'optionnelle.

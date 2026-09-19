@@ -42,13 +42,25 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.ca.service.port }}
+            {{- if .Values.ca.internal.enabled }}
+            - name: internal
+              containerPort: {{ .Values.ca.service.internalPort }}
+            {{- end }}
           env:
             {{- include "open-eidas.caEnv" (dict "context" . "postgres" $postgresHost "port" $postgresPort "secret" $secretName) | nindent 12 }}
+            {{- if .Values.ca.internal.enabled }}
+            {{- include "open-eidas.caInternalEnv" . | nindent 12 }}
+            {{- end }}
           volumeMounts:
             - name: softhsm
               mountPath: /var/lib/softhsm/tokens
             - name: state
               mountPath: /var/lib/open-eidas/state
+            {{- if .Values.ca.internal.enabled }}
+            - name: webauthn-models
+              mountPath: /etc/open-eidas/webauthn
+              readOnly: true
+            {{- end }}
           # La cérémonie de clé (génération de deux bi-clés RSA-4096 dans
           # SoftHSM) précède le premier /healthz : quelques minutes de marge.
           startupProbe:
@@ -121,3 +133,8 @@ spec:
         - name: state
           persistentVolumeClaim:
             claimName: {{ $name }}-state
+        {{- if .Values.ca.internal.enabled }}
+        - name: webauthn-models
+          configMap:
+            name: {{ $name }}-webauthn-models
+        {{- end }}
