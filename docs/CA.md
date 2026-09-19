@@ -113,6 +113,44 @@ pas se réclamer d'une organisation qui n'est pas la sienne.
 vérifier la révocation de ce certificat précis — la contrepartie étant sa
 durée de vie courte, contrôlée à l'émission.
 
+### Profils du lien interne
+
+Deux profils supplémentaires servent au canal `ra-console` ↔ `ca-server`
+([docs/WEBUI.md](WEBUI.md) §16). Ils n'authentifient qu'un canal : leurs clés
+sont logicielles et ne signent ni certificat, ni jeton, ni réponse OCSP.
+
+| | `internal_client` | `internal_server` |
+|---|---|---|
+| Porteur | `ra-console` | `ca-server` (port interne) |
+| Validité | 3 mois | 3 mois |
+| `extendedKeyUsage` | `clientAuth`, critique, seul | `serverAuth`, critique, seul |
+| Politique (`certificatePolicies`) | OID dédié, qu'aucun autre profil ne porte | OID dédié |
+| Nom courant | imposé : `ra-console` | un nom DNS en minuscules, repris en `subjectAltName` |
+
+Les OID de politique sont **provisoires** (`oe_conformance::OID_POLICY_INTERNAL_*`,
+sous le numéro d'entreprise 0, réservé) : à remplacer par l'arc de l'association
+avant toute mise en production.
+
+`ca-server` termine lui-même le TLS du port interne (`OPENEIDAS_INTERNAL_LISTEN`,
+TLS 1.3 seul, certificat client obligatoire). En plus de la chaîne vers la CA
+émettrice, il exige à **chaque connexion**, avant de lire la moindre requête :
+l'EKU `clientAuth` seul, la politique dédiée, le nom courant `ra-console`, et un
+certificat inscrit dans sa table `certificates` sous le profil `internal_client`,
+identique octet pour octet et non révoqué. Révoquer le certificat de `ra-console`
+(`ca-server revoke`) coupe donc l'accès dès la connexion suivante. Sans
+`OPENEIDAS_INTERNAL_TLS_*`, le port interne refuse de s'ouvrir ailleurs que sur
+la boucle locale.
+
+```bash
+# Jour 0 : certificat du serveur interne (crée la clé, en 0600, si besoin)
+ca-server internal-cert server ca.open-eidas.svc   # code 3 : en attente
+ca-server ra approve <transaction_id> "prenom.nom" "amorçage du lien interne"
+ca-server internal-cert server ca.open-eidas.svc   # écrit le certificat
+```
+
+Le certificat n'est lu qu'au démarrage : le renouveler (tous les 3 mois) demande
+de relancer la commande puis de redémarrer `ca-server`.
+
 ## 4. Enrôlement et approbation
 
 ```
@@ -285,3 +323,7 @@ il est porté comme exigence hors périmètre dans la matrice.
 | `OPENEIDAS_AUDIT_FILE` | `/var/lib/open-eidas/state/ca-audit.log` | Journal d'audit |
 | `OPENEIDAS_AUDIT_RETENTION` | 8760h | Durée de conservation ; le service refuse de démarrer en deçà d'un an |
 | `OPENEIDAS_LISTEN` | `:8320` | Adresse d'écoute |
+| `OPENEIDAS_INTERNAL_LISTEN` | — (désactivé) | Adresse du lien interne `/internal/v1/*` |
+| `OPENEIDAS_INTERNAL_TLS_CERT_FILE` / `_KEY_FILE` | — | Certificat `internal_server` et sa clé (PEM). Les deux ou aucun ; sans eux, boucle locale seulement |
+| `OPENEIDAS_WEBAUTHN_RP_ID` / `_ORIGIN` / `_RP_NAME` | — (obligatoires avec le lien interne, sauf le nom) | Relying Party WebAuthn des opérateurs |
+| `OPENEIDAS_WEBAUTHN_MODELS_FILE` | — (obligatoire avec le lien interne) | Liste blanche de modèles de clés (JSON : `description`, `aaguid`, `root_pem`) |

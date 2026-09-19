@@ -49,6 +49,20 @@ pub struct Config {
     pub crl_grace: time::Duration,
 
     pub audit_file: String,
+
+    /// Adresse du lien interne (`/internal/v1/*`, docs/WEBUI.md §17). Vide :
+    /// pas de lien interne, `ca-server` ne sert que le port public.
+    pub internal_listen: String,
+    /// Paramètres WebAuthn, obligatoires dès que le lien interne est ouvert.
+    pub webauthn_rp_id: String,
+    pub webauthn_origin: String,
+    pub webauthn_rp_name: String,
+    /// Liste blanche de modèles de clés (voir `webauthn_models`).
+    pub webauthn_models_file: String,
+    /// Certificat (PEM) et clé (PEM PKCS#8) du serveur du lien interne. Les
+    /// deux ou aucun : sans eux, le lien n'écoute que sur la boucle locale.
+    pub internal_tls_cert_file: String,
+    pub internal_tls_key_file: String,
 }
 
 fn env_str(key: &str, fallback: &str) -> String {
@@ -210,6 +224,13 @@ impl Config {
                 "OPENEIDAS_AUDIT_FILE",
                 "/var/lib/open-eidas/state/ca-audit.log",
             ),
+            internal_listen: env_str("OPENEIDAS_INTERNAL_LISTEN", ""),
+            webauthn_rp_id: env_str("OPENEIDAS_WEBAUTHN_RP_ID", ""),
+            webauthn_origin: env_str("OPENEIDAS_WEBAUTHN_ORIGIN", ""),
+            webauthn_rp_name: env_str("OPENEIDAS_WEBAUTHN_RP_NAME", "Open eIDAS Console"),
+            webauthn_models_file: env_str("OPENEIDAS_WEBAUTHN_MODELS_FILE", ""),
+            internal_tls_cert_file: env_str("OPENEIDAS_INTERNAL_TLS_CERT_FILE", ""),
+            internal_tls_key_file: env_str("OPENEIDAS_INTERNAL_TLS_KEY_FILE", ""),
         })
     }
 }

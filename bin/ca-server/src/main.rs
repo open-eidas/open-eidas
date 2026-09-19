@@ -7,11 +7,12 @@
 //! du « big bang ».
 //!
 //! Sous-commandes : `ceremony`, `serve`, `ra list|approve|reject`, `revoke`,
-//! `operators bootstrap-admin`, `conformance`, `healthcheck`, `verify-audit`.
+//! `operators bootstrap-admin`, `internal-cert server`, `conformance`,
+//! `healthcheck`, `verify-audit`.
 
 use std::sync::Arc;
 
-use ca_server::{config, http};
+use ca_server::{config, http, internal, internal_cert, internal_tls, webauthn_models};
 use clap::{Parser, Subcommand};
 use config::Config;
 use oe_hsm::SigningToken;
@@ -53,6 +54,11 @@ enum Command {
         #[command(subcommand)]
         action: OperatorsAction,
     },
+    /// Certificat du serveur du lien interne (docs/WEBUI.md §14, §16).
+    InternalCert {
+        #[command(subcommand)]
+        action: InternalCertAction,
+    },
     /// Matrice de conformité ETSI.
     Conformance {
         #[arg(long)]
@@ -65,6 +71,19 @@ enum Command {
     /// Affiche la version (identique à `--version`, sous forme de
     /// sous-commande — reproduit `cmd/ca-server` (Go), qui n'a que celle-ci).
     Version,
+}
+
+#[derive(Subcommand)]
+enum InternalCertAction {
+    /// Demande (ou récupère) le certificat `internal_server` de ce service.
+    /// Crée la clé si elle n'existe pas, dépose la demande, et écrit le
+    /// certificat dès qu'elle est approuvée (`ra approve`). Relancer la
+    /// commande après approbation. Code de sortie 3 : demande en attente.
+    Server {
+        /// Nom DNS du service, celui que `ra-console` utilisera pour s'y
+        /// connecter (ex. `ca.open-eidas.svc`). Minuscules, sans joker.
+        dns: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -296,6 +315,113 @@ async fn build_issuer(
     .unwrap_or_else(|e| die("construction de l'autorité émettrice", e))
 }
 
+/// Le service d'actions d'opérateur, derrière le lien interne. Toute lacune de
+/// configuration est fatale : un lien interne à moitié configuré n'est pas
+/// ouvert (« échec fermé »).
+async fn build_actions_service(
+    cfg: &Config,
+    store: Arc<dyn oe_castore::Store>,
+    recorder: Arc<dyn oe_raflow::Recorder>,
+) -> Arc<oe_actions::Service> {
+    for (name, value) in [
+        ("OPENEIDAS_WEBAUTHN_RP_ID", &cfg.webauthn_rp_id),
+        ("OPENEIDAS_WEBAUTHN_ORIGIN", &cfg.webauthn_origin),
+        ("OPENEIDAS_WEBAUTHN_MODELS_FILE", &cfg.webauthn_models_file),
+    ] {
+        if value.is_empty() {
+            die(
+                "lien interne",
+                format!("{name} est obligatoire quand OPENEIDAS_INTERNAL_LISTEN est défini"),
+            );
+        }
+    }
+    let models = webauthn_models::load(&cfg.webauthn_models_file)
+        .unwrap_or_else(|e| die("liste blanche de modèles de clés", e));
+    let origin = oe_webauthn::Url::parse(&cfg.webauthn_origin)
+        .unwrap_or_else(|e| die("OPENEIDAS_WEBAUTHN_ORIGIN", e));
+    let verifier =
+        oe_webauthn::Verifier::new(&cfg.webauthn_rp_id, &origin, &cfg.webauthn_rp_name, models)
+            .unwrap_or_else(|e| die("configuration WebAuthn", e));
+    let registry = oe_actions::Registry::connect(&cfg.dsn)
+        .await
+        .unwrap_or_else(|e| die("ouverture du registre des opérateurs", e));
+    let decider = oe_raflow::Decider::new(oe_raflow::DeciderOptions {
+        store: store.clone(),
+        recorder: Some(recorder.clone()),
+        clock: None,
+    });
+    Arc::new(oe_actions::Service::new(
+        registry,
+        verifier,
+        store,
+        decider,
+        recorder,
+        Arc::new(time::OffsetDateTime::now_utc),
+    ))
+}
+
+fn build_flow(
+    cfg: &Config,
+    store: Arc<dyn oe_castore::Store>,
+    issuer: Arc<oe_ca_core::Issuer>,
+    recorder: Arc<dyn oe_raflow::Recorder>,
+) -> Arc<oe_raflow::Flow> {
+    Arc::new(
+        oe_raflow::Flow::new(oe_raflow::Options {
+            store,
+            issuer,
+            hmac_secret: cfg.enroll_hmac_key.clone(),
+            recorder: Some(recorder),
+            retry_after: time::Duration::seconds(5),
+            clock: None,
+        })
+        .unwrap_or_else(|e| die("construction de la machine à états RA", e.to_string())),
+    )
+}
+
+/// TLS du lien interne : les deux fichiers ou aucun. Sans TLS, le lien reste
+/// réservé à la boucle locale ; avec, il exige le certificat client de
+/// `ra-console` (docs/WEBUI.md §16).
+fn internal_link_tls(
+    cfg: &Config,
+    issuer: &x509_cert::Certificate,
+) -> Option<rustls::ServerConfig> {
+    if cfg.internal_listen.is_empty() {
+        if !cfg.internal_tls_cert_file.is_empty() || !cfg.internal_tls_key_file.is_empty() {
+            die(
+                "lien interne",
+                "OPENEIDAS_INTERNAL_TLS_* sans OPENEIDAS_INTERNAL_LISTEN : rien à protéger",
+            );
+        }
+        return None;
+    }
+    match (
+        cfg.internal_tls_cert_file.is_empty(),
+        cfg.internal_tls_key_file.is_empty(),
+    ) {
+        (true, true) => {
+            internal::check_loopback(&cfg.internal_listen)
+                .unwrap_or_else(|e| die("lien interne", e));
+            tracing::warn!("lien interne sans TLS : boucle locale seulement");
+            None
+        }
+        (false, false) => {
+            let cert = std::fs::read(&cfg.internal_tls_cert_file)
+                .unwrap_or_else(|e| die("certificat du lien interne", e));
+            let key = std::fs::read(&cfg.internal_tls_key_file)
+                .unwrap_or_else(|e| die("clé du lien interne", e));
+            Some(
+                internal_tls::server_config(issuer, &cert, &key, time::OffsetDateTime::now_utc())
+                    .unwrap_or_else(|e| die("TLS du lien interne", e)),
+            )
+        }
+        _ => die(
+            "lien interne",
+            "OPENEIDAS_INTERNAL_TLS_CERT_FILE et OPENEIDAS_INTERNAL_TLS_KEY_FILE vont ensemble",
+        ),
+    }
+}
+
 async fn run_serve() {
     tracing_subscriber::fmt::init();
     let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
@@ -307,17 +433,14 @@ async fn run_serve() {
     let issuer = Arc::new(build_issuer(&cfg, store.clone(), recorder).await);
 
     let flow_recorder: Arc<dyn oe_raflow::Recorder> = Arc::new(AuditRecorder(journal.clone()));
-    let flow = Arc::new(
-        oe_raflow::Flow::new(oe_raflow::Options {
-            store,
-            issuer: issuer.clone(),
-            hmac_secret: cfg.enroll_hmac_key.clone(),
-            recorder: Some(flow_recorder),
-            retry_after: time::Duration::seconds(5),
-            clock: None,
-        })
-        .unwrap_or_else(|e| die("construction de la machine à états RA", e.to_string())),
-    );
+    let internal_service = if cfg.internal_listen.is_empty() {
+        None
+    } else {
+        Some(build_actions_service(&cfg, store.clone(), flow_recorder.clone()).await)
+    };
+    let internal_tls = internal_link_tls(&cfg, issuer.certificate());
+    let internal_store = store.clone();
+    let flow = build_flow(&cfg, store.clone(), issuer.clone(), flow_recorder);
 
     let _ = journal.append(
         oe_audit::EVENT_OPENED,
@@ -360,6 +483,38 @@ async fn run_serve() {
         .await
         .unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.listen), e));
     tracing::info!(adresse = %cfg.listen, emettrice = %server.issuer().certificate().tbs_certificate().subject(), "autorité de certification en écoute");
+
+    if let Some(service) = internal_service {
+        let tcp = tokio::net::TcpListener::bind(bind_addr(&cfg.internal_listen))
+            .await
+            .unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.internal_listen), e));
+        tracing::info!(adresse = %cfg.internal_listen, mtls = internal_tls.is_some(), "lien interne en écoute");
+        let app = internal::router(service, cfg.max_request_bytes);
+        let mut stop = shutdown_rx.clone();
+        let done = async move {
+            let _ = stop.changed().await;
+        };
+        match internal_tls {
+            Some(tls) => {
+                let listener = internal_tls::TlsListener::new(tcp, tls, internal_store);
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(listener, app)
+                        .with_graceful_shutdown(done)
+                        .await
+                    {
+                        die("serveur HTTP interne", e);
+                    }
+                });
+            }
+            None => {
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(tcp, app).with_graceful_shutdown(done).await {
+                        die("serveur HTTP interne", e);
+                    }
+                });
+            }
+        }
+    }
 
     let shutdown_timeout = cfg.shutdown_timeout;
     let graceful = async move {
@@ -513,6 +668,73 @@ async fn run_operators_bootstrap_admin(name: String, ttl_minutes: i64) {
     println!("{}", invite.token);
 }
 
+async fn run_internal_cert_server(dns: String) {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
+    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    if cfg.internal_tls_cert_file.is_empty() || cfg.internal_tls_key_file.is_empty() {
+        die(
+            "configuration invalide",
+            "OPENEIDAS_INTERNAL_TLS_CERT_FILE et OPENEIDAS_INTERNAL_TLS_KEY_FILE sont obligatoires",
+        );
+    }
+    let profile = oe_ca_core::profile::internal_server();
+    if let Err(e) = profile.validate_cn(&dns) {
+        die("nom DNS", e);
+    }
+
+    let key = internal_cert::load_or_create_key(std::path::Path::new(&cfg.internal_tls_key_file))
+        .unwrap_or_else(|e| die("clé du serveur interne", e));
+    let (csr_der, _) = oe_enroll::build_csr(&key, &oe_enroll::Subject { common_name: dns })
+        .unwrap_or_else(|e| die("demande de certificat", e));
+
+    let store: Arc<dyn oe_castore::Store> = Arc::new(open_store(&cfg).await);
+    let journal = Arc::new(open_journal(&cfg));
+    let issuer = Arc::new(
+        build_issuer(
+            &cfg,
+            store.clone(),
+            Arc::new(AuditRecorder(journal.clone())),
+        )
+        .await,
+    );
+    let flow = build_flow(&cfg, store, issuer, Arc::new(AuditRecorder(journal)));
+    let result = flow
+        .submit(
+            &csr_der,
+            oe_ca_core::profile::PROFILE_INTERNAL_SERVER,
+            &oe_raflow::signature(&csr_der, &cfg.enroll_hmac_key),
+        )
+        .await
+        .unwrap_or_else(|e| die("dépôt de la demande", e));
+
+    match result.certificate {
+        Some(cert) => {
+            use der::EncodePem;
+            let pem = cert
+                .to_pem(der::pem::LineEnding::LF)
+                .unwrap_or_else(|e| die("encodage du certificat", e));
+            internal_cert::write_certificate(
+                std::path::Path::new(&cfg.internal_tls_cert_file),
+                &pem,
+            )
+            .unwrap_or_else(|e| die("écriture du certificat", e));
+            eprintln!(
+                "Certificat émis (demande {}), écrit dans {}.",
+                result.transaction_id, cfg.internal_tls_cert_file
+            );
+        }
+        None => {
+            eprintln!(
+                "Demande {} en attente d'approbation ({:?}). Un opérateur l'approuve avec `ca-server ra approve`, puis relancez cette commande.",
+                result.transaction_id, result.state
+            );
+            std::process::exit(3);
+        }
+    }
+}
+
 async fn run_healthcheck() {
     let listen = std::env::var("OPENEIDAS_LISTEN")
         .ok()
@@ -610,6 +832,9 @@ async fn main() {
         }
         Command::Healthcheck => run_healthcheck().await,
         Command::Version => println!("{}", env!("CARGO_PKG_VERSION")),
+        Command::InternalCert {
+            action: InternalCertAction::Server { dns },
+        } => run_internal_cert_server(dns).await,
         Command::VerifyAudit { path } => run_verify_audit(path).await,
     }
 }

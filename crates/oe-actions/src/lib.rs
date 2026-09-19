@@ -20,9 +20,11 @@
 //! corps (décision O7). Le lien challenge → corps est donc établi par le
 //! journal et par la table `actions`, pas par la signature seule.
 
+mod enrollment;
 mod onboarding;
 mod registry;
 
+pub use enrollment::{key_fingerprint, KeyStatus, Registered, RegistrationBegun, PENDING_TTL};
 pub use onboarding::{bootstrap_admin, Invite, MAX_INVITE_TTL, MIN_INVITE_TTL};
 
 pub use registry::{credential_id, Key, NewCredential, Operator, Registry, Role};
@@ -156,6 +158,8 @@ pub struct Service {
     // réplica (il détient un token PKCS#11). Une cérémonie perdue à un
     // redémarrage est simplement refaite.
     pending: Mutex<HashMap<Uuid, Pending>>,
+    // Idem pour les cérémonies d'enregistrement de clé.
+    registrations: Mutex<HashMap<Uuid, enrollment::PendingRegistration>>,
 }
 
 impl Service {
@@ -175,6 +179,7 @@ impl Service {
             journal,
             clock,
             pending: Mutex::new(HashMap::new()),
+            registrations: Mutex::new(HashMap::new()),
         }
     }
 

@@ -7,6 +7,16 @@ use x509_cert::ext::pkix::KeyUsages;
 
 pub const PROFILE_TSA_SIGNER: &str = "tsa_signer";
 pub const PROFILE_OCSP_RESPONDER: &str = "ocsp_responder";
+pub const PROFILE_INTERNAL_CLIENT: &str = "internal_client";
+pub const PROFILE_INTERNAL_SERVER: &str = "internal_server";
+
+/// Le seul nom courant que `internal_client` accepte (docs/WEBUI.md §16).
+pub const INTERNAL_CLIENT_CN: &str = "ra-console";
+
+pub use oe_conformance::{
+    OID_EKU_CLIENT_AUTH, OID_EKU_SERVER_AUTH, OID_POLICY_INTERNAL_CLIENT,
+    OID_POLICY_INTERNAL_SERVER,
+};
 
 fn oid(s: &str) -> ObjectIdentifier {
     ObjectIdentifier::new(s).expect("OID constant invalide")
@@ -38,6 +48,14 @@ pub struct Profile {
     pub include_crl_distribution_point: bool,
     pub include_ca_issuers: bool,
     pub include_ocsp_responder: bool,
+
+    /// Nom courant imposé : la CSR qui en demande un autre est refusée.
+    pub required_cn: Option<&'static str>,
+    /// Le CN doit être un nom DNS, repris en `subjectAltName` : le client
+    /// vérifie le serveur par ce nom (jamais par le CN).
+    pub san_dns_from_cn: bool,
+    /// Politique de certification gravée dans `certificatePolicies`.
+    pub policy_oid: Option<&'static str>,
 
     /// Applique les règles ETSI propres à ce profil au certificat
     /// réellement signé — reproduit le champ `Check` de `ca.Profile` (Go).
@@ -75,6 +93,9 @@ pub fn tsa_signer() -> Profile {
         include_crl_distribution_point: true,
         include_ca_issuers: true,
         include_ocsp_responder: true,
+        required_cn: None,
+        san_dns_from_cn: false,
+        policy_oid: None,
         check: oe_conformance::check_tsu_certificate,
     }
 }
@@ -97,8 +118,98 @@ pub fn ocsp_responder() -> Profile {
         include_crl_distribution_point: false,
         include_ca_issuers: false,
         include_ocsp_responder: false,
+        required_cn: None,
+        san_dns_from_cn: false,
+        policy_oid: None,
         check: oe_conformance::check_ocsp_responder_certificate,
     }
+}
+
+/// Certificat de `ra-console` sur le lien interne (docs/WEBUI.md §16) : EKU
+/// `clientAuth` seul, politique dédiée, sujet imposé, vie de 3 mois. La clé
+/// est logicielle : elle n'authentifie qu'un canal, aucun pouvoir de signature
+/// n'en découle (la signature d'un opérateur reste exigée, §4).
+pub fn internal_client() -> Profile {
+    Profile {
+        name: PROFILE_INTERNAL_CLIENT,
+        label: "Open eIDAS internal link client",
+        organizational_unit: "Internal Link",
+        organization: "Open eIDAS",
+        country: "FR",
+        validity: time::Duration::days(90),
+        key_usages: KeyUsages::DigitalSignature.into(),
+        eku: &[OID_EKU_CLIENT_AUTH],
+        eku_critical: true,
+        ocsp_no_check: false,
+        include_crl_distribution_point: true,
+        include_ca_issuers: true,
+        include_ocsp_responder: false,
+        required_cn: Some(INTERNAL_CLIENT_CN),
+        san_dns_from_cn: false,
+        policy_oid: Some(OID_POLICY_INTERNAL_CLIENT),
+        check: oe_conformance::check_internal_client_certificate,
+    }
+}
+
+/// Certificat de `ca-server` sur le lien interne : EKU `serverAuth` seul,
+/// politique dédiée, SAN = le CN, qui doit être un nom DNS.
+pub fn internal_server() -> Profile {
+    Profile {
+        name: PROFILE_INTERNAL_SERVER,
+        label: "Open eIDAS internal link server",
+        organizational_unit: "Internal Link",
+        organization: "Open eIDAS",
+        country: "FR",
+        validity: time::Duration::days(90),
+        key_usages: KeyUsages::DigitalSignature.into(),
+        eku: &[OID_EKU_SERVER_AUTH],
+        eku_critical: true,
+        ocsp_no_check: false,
+        include_crl_distribution_point: true,
+        include_ca_issuers: true,
+        include_ocsp_responder: false,
+        required_cn: None,
+        san_dns_from_cn: true,
+        policy_oid: Some(OID_POLICY_INTERNAL_SERVER),
+        check: oe_conformance::check_internal_server_certificate,
+    }
+}
+
+impl Profile {
+    /// Contrôle le nom courant demandé, avant toute réservation de série.
+    pub fn validate_cn(&self, cn: &str) -> Result<(), String> {
+        if let Some(required) = self.required_cn {
+            if cn != required {
+                return Err(format!(
+                    "le profil {} n'admet que le nom courant {required:?}, reçu {cn:?}",
+                    self.name
+                ));
+            }
+        }
+        if self.san_dns_from_cn && !is_dns_name(cn) {
+            return Err(format!(
+                "le profil {} exige un nom DNS comme nom courant, reçu {cn:?}",
+                self.name
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Nom d'hôte simple : étiquettes de lettres minuscules, chiffres et tirets,
+/// séparées par des points. Pas de joker, pas de majuscule, pas d'adresse IP.
+fn is_dns_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 253
+        && !s.chars().all(|c| c.is_ascii_digit() || c == '.')
+        && s.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        })
 }
 
 /// Nom inconnu : erreur explicite, aucun profil par défaut n'est appliqué
@@ -107,6 +218,8 @@ pub fn profile_by_name(name: &str) -> Result<Profile, String> {
     match name {
         PROFILE_TSA_SIGNER => Ok(tsa_signer()),
         PROFILE_OCSP_RESPONDER => Ok(ocsp_responder()),
+        PROFILE_INTERNAL_CLIENT => Ok(internal_client()),
+        PROFILE_INTERNAL_SERVER => Ok(internal_server()),
         other => Err(format!("ca: profil de certificat inconnu: {other:?}")),
     }
 }
