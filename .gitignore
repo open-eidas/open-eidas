@@ -8,3 +8,6 @@
 
 # Outils locaux
 /.claude/
+
+# Configuration locale d'Obsidian (ouverture des docs comme vault)
+/docs/.obsidian/
