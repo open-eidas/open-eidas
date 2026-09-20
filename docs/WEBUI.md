@@ -1,6 +1,11 @@
 # Interface web d'opération — proposition d'architecture
 
-**Statut : brouillon de conception, rien de ce document n'est implémenté.**
+**Statut : conception, en cours d'implémentation.** Le socle de confiance de
+`ca-server` (registre des opérateurs, actions signées, lien interne mTLS,
+quorum, audit, récupération) et la première brique de `ra-console` (lien mTLS,
+garde du rôle PostgreSQL) existent ; l'authentification des opérateurs, les
+écrans et le workflow d'incident non. Voir [RA-CONSOLE.md](RA-CONSOLE.md) et le
+`TODO.md` pour l'état exact.
 Objectif : remplacer le CLI (`ca-server revoke`, `ca-server ceremony`, lecture
 manuelle du journal d'audit) par une interface web pour les opérateurs RA/CA,
 authentifiée exclusivement par clé FIDO2, où les actions sensibles portent
@@ -1504,8 +1509,12 @@ seul, OpenSSL accepté. Conséquences concrètes à traiter à l'implémentation
 - `cargo audit` (job « Clippy, tests ») suivra désormais les avis
   `openssl`/`openssl-sys`, qui s'ajoutent à ceux de `rustls` et `cryptoki`
   vus lors de la PR #3 ;
-- `ra-console` ne lie pas la bibliothèque : il ne fait que relayer, ce qui
-  garde son profil de dépendances inchangé (§16).
+- `ra-console` ne lie la bibliothèque (`oe-webauthn`, donc OpenSSL) que pour
+  **vérifier les connexions** (§15, étape 1) : une session n'est pas une ancre de
+  confiance, et chaque *action* est re-vérifiée par `ca-server`, qui est seul à
+  décider. Pour les actions elle ne fait que relayer. (Une première version de ce
+  paragraphe disait qu'elle ne la liait pas du tout : c'était en contradiction avec
+  la vérification des connexions du §15.)
 
 ### Isolation réseau
 

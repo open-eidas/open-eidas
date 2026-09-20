@@ -8,6 +8,8 @@
 //! parle au `ca-server` Go existant (interopérabilité HTTP uniquement) tant
 //! que celui-ci n'est pas porté — voir l'ordre de portage du plan.
 
+pub mod software_key;
+
 use std::time::Duration;
 
 use der::asn1::{BitString, SetOfVec};

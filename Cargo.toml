@@ -22,6 +22,7 @@ members = [
     "bin/tsa-server",
     "bin/ocsp-responder",
     "bin/ca-server",
+    "bin/ra-console",
 ]
 
 [workspace.package]

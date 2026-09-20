@@ -146,6 +146,18 @@ async fn an_action_goes_through_the_two_routes() {
         .await
         .unwrap();
 
+    // Le lien répond (sondé par ra-console) sans rien exécuter.
+    let res = app
+        .clone()
+        .oneshot(
+            HttpRequest::get("/internal/v1/ping")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
     // 1. Challenge : le corps est figé par ca-server.
     let (status, issued) = call(
         &app,

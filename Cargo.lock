@@ -1612,6 +1612,7 @@ dependencies = [
  "oe-certs",
  "oe-hsm",
  "pem",
+ "rand 0.8.8",
  "reqwest",
  "rsa",
  "serde",
@@ -2039,6 +2040,37 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "ra-console"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "ca-server",
+ "clap",
+ "der 0.8.2",
+ "http-body-util",
+ "oe-ca-core",
+ "oe-castore",
+ "oe-certs",
+ "oe-conformance",
+ "oe-enroll",
+ "oe-hsm",
+ "rand 0.8.8",
+ "reqwest",
+ "rsa",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "x509-cert",
+]
 
 [[package]]
 name = "rand"
