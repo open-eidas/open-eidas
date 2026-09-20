@@ -7,12 +7,24 @@
 //! reste du workspace (`oe-tsa-core`, notamment) ne dépend que de ce trait,
 //! jamais directement de `cryptoki`, ce qui permet de le tester avec
 //! [`SoftwareToken`] sans matériel PKCS#11 réel (SoftHSM2 y compris).
+//!
+//! Feature `pkcs11` (activée par défaut) : le token PKCS#11 et `cryptoki`. Sans
+//! elle, il ne reste que le trait et les types qui l'accompagnent. Un service qui
+//! n'ouvre jamais de session PKCS#11 (`ra-console`, docs/WEBUI.md §16) désactive la
+//! feature : `cryptoki` n'est alors pas même compilé, et son profil de dépendances
+//! (donc de `cargo audit`) est celui promis.
 
+#[cfg(feature = "pkcs11")]
 use cryptoki::context::{CInitializeArgs, CInitializeFlags, Pkcs11};
+#[cfg(feature = "pkcs11")]
 use cryptoki::mechanism::Mechanism;
+#[cfg(feature = "pkcs11")]
 use cryptoki::object::{Attribute, ObjectClass};
+#[cfg(feature = "pkcs11")]
 use cryptoki::session::{Session, UserType};
+#[cfg(feature = "pkcs11")]
 use cryptoki::types::AuthPin;
+#[cfg(feature = "pkcs11")]
 use sha2::{Digest, Sha256};
 
 /// Paramètres d'ouverture du token (équivalent de `hsm.Options` en Go).
@@ -45,6 +57,7 @@ impl DigestAlg {
     }
 
     /// Préfixe ASN.1 `DigestInfo` (RFC 3447 annexe B.1) pour cet algorithme.
+    #[cfg(feature = "pkcs11")]
     fn digest_info_prefix(self) -> &'static [u8] {
         match self {
             DigestAlg::Sha256 => &[
@@ -62,6 +75,7 @@ impl DigestAlg {
         }
     }
 
+    #[cfg(feature = "pkcs11")]
     fn wrap(self, digest: &[u8]) -> Result<Vec<u8>, HsmError> {
         if digest.len() != self.expected_len() {
             return Err(HsmError::DigestLength {
@@ -79,6 +93,7 @@ impl DigestAlg {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HsmError {
+    #[cfg(feature = "pkcs11")]
     #[error("hsm: ouverture du token {token_label:?} via {module_path}: {source}")]
     Open {
         module_path: String,
@@ -88,6 +103,7 @@ pub enum HsmError {
     },
     #[error("hsm: jeton introuvable pour le label {0:?}")]
     TokenNotFound(String),
+    #[cfg(feature = "pkcs11")]
     #[error("hsm: recherche de la clé {key_label:?}: {source}")]
     FindKey {
         key_label: String,
@@ -96,6 +112,7 @@ pub enum HsmError {
     },
     #[error("hsm: bi-clé introuvable sur le token")]
     KeyNotFound,
+    #[cfg(feature = "pkcs11")]
     #[error("hsm: génération de la bi-clé RSA-{bits}: {source}")]
     GenerateKey {
         bits: u64,
@@ -108,6 +125,7 @@ pub enum HsmError {
         expected: usize,
         actual: usize,
     },
+    #[cfg(feature = "pkcs11")]
     #[error("hsm: opération PKCS#11: {0}")]
     Pkcs11(#[from] cryptoki::error::Error),
     #[error("hsm: signature logicielle de test: {0}")]
@@ -128,6 +146,7 @@ pub trait SigningToken {
     fn public_key_der(&self) -> Result<Vec<u8>, HsmError>;
 }
 
+#[cfg(feature = "pkcs11")]
 /// CKA_ID stable et non vide dérivé du label de clé — reproduit `hsm.Open`
 /// (Go), qui s'en sert pour apparier clé privée et clé publique.
 fn key_id(key_label: &str) -> Vec<u8> {
@@ -137,6 +156,7 @@ fn key_id(key_label: &str) -> Vec<u8> {
 }
 
 /// Implémentation réelle : token PKCS#11 (SoftHSM2 en dev/CI, HSM FIPS en prod).
+#[cfg(feature = "pkcs11")]
 pub struct Pkcs11Token {
     session: Session,
     key_id: Vec<u8>,
@@ -152,6 +172,7 @@ pub struct Pkcs11Token {
 /// contexte `Pkcs11` initialisé existe par bibliothèque chargée, partagé
 /// entre tous les tokens ouverts sur ce module — reproduit le comportement
 /// de `crypto11.Configure` (Go), qui réutilise de même un contexte partagé.
+#[cfg(feature = "pkcs11")]
 fn shared_context(module_path: &str) -> Result<Pkcs11, cryptoki::error::Error> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -167,6 +188,7 @@ fn shared_context(module_path: &str) -> Result<Pkcs11, cryptoki::error::Error> {
     Ok(pkcs11)
 }
 
+#[cfg(feature = "pkcs11")]
 impl Pkcs11Token {
     pub fn open(o: &Options) -> Result<Self, HsmError> {
         let pkcs11 = shared_context(&o.module_path).map_err(|source| HsmError::Open {
@@ -281,6 +303,7 @@ impl Pkcs11Token {
     }
 }
 
+#[cfg(feature = "pkcs11")]
 impl SigningToken for Pkcs11Token {
     fn sign_digest(&self, alg: DigestAlg, digest: &[u8]) -> Result<Vec<u8>, HsmError> {
         let key = self.find_private_key()?;
@@ -396,7 +419,7 @@ pub mod testing {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "pkcs11"))]
 mod tests {
     use super::*;
 

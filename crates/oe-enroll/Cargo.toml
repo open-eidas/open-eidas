@@ -11,7 +11,8 @@ description = "Client d'enrôlement HTTP (CSR + HMAC-SHA256) vers ca-server — 
 workspace = true
 
 [dependencies]
-oe-hsm = { path = "../oe-hsm" }
+# Le trait `SigningToken` seulement : l'enrôlement signe une CSR, il n'ouvre pas de token.
+oe-hsm = { path = "../oe-hsm", default-features = false }
 oe-certs = { path = "../oe-certs" }
 der = "0.8"
 x509-cert = "0.3"

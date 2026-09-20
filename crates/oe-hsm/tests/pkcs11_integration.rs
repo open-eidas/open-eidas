@@ -12,6 +12,8 @@
 //!     cargo test -p oe-hsm --test pkcs11_integration -- --ignored
 //! ```
 
+#![cfg(feature = "pkcs11")]
+
 use oe_hsm::{DigestAlg, Options, Pkcs11Token, SigningToken};
 use rsa::pkcs1v15::Pkcs1v15Sign;
 use rsa::pkcs8::DecodePublicKey;
