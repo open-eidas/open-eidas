@@ -112,13 +112,31 @@ impl Pki {
     }
 
     pub async fn serve_with(&self, config: rustls::ServerConfig) -> u16 {
-        let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = tcp.local_addr().unwrap().port();
-        let listener = TlsListener::new(tcp, config, self.store.clone());
         let app = Router::new().route(
             "/internal/v1/ping",
             get(|| async { Json(serde_json::json!({ "ok": true })) }),
         );
+        self.serve_app(config, app).await
+    }
+
+    /// Le vrai serveur mTLS de `ca-server`, avec les routes qu'on lui donne (par
+    /// exemple son vrai routeur interne).
+    pub async fn serve_router(&self, app: Router) -> u16 {
+        let (cert, key) = self.cert(&profile::internal_server(), HOST).await;
+        let config = server_config(
+            self.issuer.certificate(),
+            cert_pem(&cert).as_bytes(),
+            key.pem().as_bytes(),
+            time::OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        self.serve_app(config, app).await
+    }
+
+    async fn serve_app(&self, config: rustls::ServerConfig, app: Router) -> u16 {
+        let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = tcp.local_addr().unwrap().port();
+        let listener = TlsListener::new(tcp, config, self.store.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         port
     }

@@ -3,14 +3,19 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, State};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::Deserialize;
 use sqlx::PgPool;
 
-use crate::ca_link::CaLink;
+use crate::ca_link::{CaLink, Relayed};
+
+/// Assez pour un objet d'attestation, pas pour bourrer la mémoire.
+const MAX_BODY_BYTES: usize = 64 * 1024;
 
 pub struct AppState {
     pub pool: PgPool,
@@ -20,6 +25,15 @@ pub struct AppState {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(handle_health))
+        .route(
+            "/api/v1/webauthn/register/begin",
+            post(handle_register_begin),
+        )
+        .route(
+            "/api/v1/webauthn/register/finish",
+            post(handle_register_finish),
+        )
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
 
@@ -55,4 +69,146 @@ async fn handle_health(State(state): State<Arc<AppState>>) -> Response {
         StatusCode::SERVICE_UNAVAILABLE
     };
     (status, Json(body)).into_response()
+}
+
+/// `{"error": "<code>", "message": "..."}` (docs/WEBUI.md §5), sans trace interne.
+fn error(status: StatusCode, code: &str, message: &str) -> Response {
+    (
+        status,
+        Json(serde_json::json!({ "error": code, "message": message })),
+    )
+        .into_response()
+}
+
+/// Une route qui relaie des JSON n'accepte que du JSON déclaré : un navigateur ne
+/// peut pas envoyer `application/json` d'un autre site sans pré-requête CORS, ce qui
+/// ferme les envois « aveugles » d'un formulaire piégé.
+fn require_json(headers: &HeaderMap) -> Result<(), Response> {
+    let ok = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(';').next().unwrap_or("").trim() == "application/json");
+    if ok {
+        Ok(())
+    } else {
+        Err(error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_media_type",
+            "Content-Type: application/json attendu",
+        ))
+    }
+}
+
+/// Ce que `ca-server` a répondu, rendu tel quel pour un refus de sa part (le code
+/// et le message sont faits pour cela) ; une panne, elle, ne fuit aucun détail.
+fn relayed(result: Result<Relayed, crate::ca_link::LinkError>) -> Response {
+    match result {
+        Ok(r) if r.status < 500 => (
+            StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY),
+            Json(r.body),
+        )
+            .into_response(),
+        Ok(r) => {
+            tracing::error!(statut = r.status, "ca-server a refusé de servir");
+            error(
+                StatusCode::BAD_GATEWAY,
+                "ca_unavailable",
+                "ca-server est indisponible",
+            )
+        }
+        Err(e) => {
+            tracing::error!(erreur = %e, "lien vers ca-server en échec");
+            error(
+                StatusCode::BAD_GATEWAY,
+                "ca_unavailable",
+                "ca-server est injoignable",
+            )
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegisterBegin {
+    token: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegisterFinish {
+    ceremony_id: String,
+    /// La sortie brute de `navigator.credentials.create` : la console ne la lit
+    /// pas, elle ne la comprend pas, elle la relaie. C'est `ca-server` qui vérifie
+    /// l'attestation.
+    credential: serde_json::Value,
+}
+
+/// Une valeur d'identifiant de cérémonie : un UUID, rien d'autre.
+fn looks_like_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+/// `POST /api/v1/webauthn/register/begin` : l'invité présente son jeton
+/// d'invitation, `ca-server` rend les options WebAuthn (docs/WEBUI.md §5, §10). Le
+/// jeton est le seul secret de cette route : il n'est ni journalisé ni renvoyé.
+async fn handle_register_begin(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(r) = require_json(&headers) {
+        return r;
+    }
+    let req: RegisterBegin = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "bad_request", "corps invalide"),
+    };
+    if req.token.is_empty() || req.token.len() > 256 {
+        return error(StatusCode::BAD_REQUEST, "bad_request", "jeton invalide");
+    }
+    relayed(
+        state
+            .link
+            .post(
+                "/internal/v1/register/begin",
+                &serde_json::json!({ "token": req.token }),
+            )
+            .await,
+    )
+}
+
+/// `POST /api/v1/webauthn/register/finish` : l'attestation est relayée telle
+/// quelle. `ca-server` la vérifie contre la liste blanche de modèles et range la
+/// clé ; la console n'en garde rien.
+async fn handle_register_finish(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(r) = require_json(&headers) {
+        return r;
+    }
+    let req: RegisterFinish = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "bad_request", "corps invalide"),
+    };
+    if !looks_like_uuid(&req.ceremony_id) || !req.credential.is_object() {
+        return error(StatusCode::BAD_REQUEST, "bad_request", "corps invalide");
+    }
+    relayed(
+        state
+            .link
+            .post(
+                "/internal/v1/register/finish",
+                &serde_json::json!({
+                    "ceremony_id": req.ceremony_id,
+                    "credential": req.credential,
+                }),
+            )
+            .await,
+    )
 }
