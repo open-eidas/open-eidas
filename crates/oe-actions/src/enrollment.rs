@@ -23,6 +23,7 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 use time::OffsetDateTime;
 
+use crate::onboarding::RECOVERY;
 use crate::registry::{credential_id, insert_credential, NewCredential};
 use crate::{Error, Service, CHALLENGE_TTL};
 
@@ -241,20 +242,26 @@ impl Service {
         let fingerprint = key_fingerprint(&passkey)?;
         let attestation = credential.response.attestation_object.as_ref();
         let bootstrap = invite.created_by == BOOTSTRAP;
-        let status = if bootstrap {
+        let recovery = invite.created_by == RECOVERY;
+        let direct = bootstrap || recovery;
+        let status = if direct {
             KeyStatus::Active
         } else {
             KeyStatus::PendingConfirmation
         };
 
         let mut tx = self.registry.pool().begin().await?;
-        if bootstrap {
+        if direct {
             sqlx::query("SELECT pg_advisory_xact_lock($1)")
                 .bind(BOOTSTRAP_LOCK)
                 .execute(&mut *tx)
                 .await?;
+        }
+        if bootstrap {
             // Comme à l'amorçage : sur un système qui a déjà un administrateur
-            // actif, une invitation d'amorçage encore vivante ne donne rien.
+            // actif, une invitation d'amorçage encore vivante ne donne rien. La
+            // récupération, elle, sert précisément quand les administrateurs
+            // « actifs » ont perdu leurs clés : pas de contrôle ici.
             let active_admin: bool = sqlx::query_scalar(
                 "SELECT EXISTS (
                      SELECT 1 FROM operators o
@@ -283,7 +290,7 @@ impl Service {
             return Err(Error::Denied(INVALID_INVITE.to_string()));
         }
 
-        let stored = if bootstrap {
+        let stored = if direct {
             insert_credential(
                 &mut tx,
                 NewCredential {
@@ -292,9 +299,16 @@ impl Service {
                     aaguid: summary.aaguid,
                     attestation_format: summary.format,
                     attestation_object: attestation,
-                    label: "amorçage",
-                    initiated_by: BOOTSTRAP,
-                    confirmed_by: None,
+                    label: if bootstrap {
+                        "amorçage"
+                    } else {
+                        "récupération"
+                    },
+                    initiated_by: &invite.created_by,
+                    // La contrainte du registre veut une confirmation, sauf pour
+                    // le tout premier administrateur : la récupération se
+                    // confirme elle-même, sous son nom, distinct de tout opérateur.
+                    confirmed_by: recovery.then_some(RECOVERY),
                 },
                 now,
             )

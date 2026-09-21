@@ -323,6 +323,8 @@ async fn two_distinct_ca_operators_revoke_once_and_both_are_attributed() {
 async fn one_operator_counts_once_even_with_two_challenges() {
     let mut env = env!();
     let carla = env.operator("carla", Role::CaOperateur).await;
+    // Un second titulaire existe (sinon l'action ne serait pas créée) mais ne signe pas.
+    env.operator("dave", Role::CaOperateur).await;
     let serial = env.certificate().await;
 
     // Deux challenges obtenus avant toute signature : l'astuce évidente.
@@ -360,6 +362,8 @@ async fn one_operator_counts_once_even_with_two_challenges() {
 async fn a_second_signer_must_have_the_required_role() {
     let mut env = env!();
     let carla = env.operator("carla", Role::CaOperateur).await;
+    // Un second titulaire existe (sinon l'action ne serait pas créée) mais ne signe pas.
+    env.operator("dave", Role::CaOperateur).await;
     let rita = env.operator("rita", Role::RaOperateur).await;
     let alice = env.operator("alice", Role::Admin).await;
     let serial = env.certificate().await;
@@ -520,4 +524,64 @@ async fn ordinary_actions_still_need_one_signature() {
         .await;
     assert!(done.executed);
     assert_eq!((done.signatures, done.required), (1, 1));
+}
+
+#[tokio::test]
+async fn an_action_that_could_never_reach_its_threshold_is_not_created() {
+    let mut env = env!();
+    let carla = env.operator("carla", Role::CaOperateur).await;
+    let serial = env.certificate().await;
+
+    // Un seul titulaire du rôle : la laisser en attente ferait croire qu'un
+    // second signataire va venir.
+    let err = env
+        .svc
+        .issue_challenge(revoke(&serial), carla)
+        .await
+        .expect_err("un seul ca_operateur");
+    assert!(matches!(err, Error::Denied(_)), "{err}");
+    let actions: i64 = sqlx::query_scalar("SELECT count(*) FROM actions")
+        .fetch_one(env.registry.pool())
+        .await
+        .unwrap();
+    assert_eq!(actions, 0, "aucune action ne doit rester en attente");
+
+    // Un second titulaire dont la clé est révoquée ne compte pas.
+    let dave = env.operator("dave", Role::CaOperateur).await;
+    sqlx::query(
+        "UPDATE webauthn_credentials SET revoked_at = now(), revoked_by = 't', revoked_reason = 't' WHERE operator_id = $1",
+    )
+    .bind(dave)
+    .execute(env.registry.pool())
+    .await
+    .unwrap();
+    assert!(matches!(
+        env.svc.issue_challenge(revoke(&serial), carla).await,
+        Err(Error::Denied(_))
+    ));
+
+    // Avec un vrai second titulaire, l'action est créée.
+    env.operator("erin", Role::CaOperateur).await;
+    assert!(env
+        .svc
+        .issue_challenge(revoke(&serial), carla)
+        .await
+        .is_ok());
+
+    // Idem pour l'élévation au rôle admin : un seul admin ne peut pas la lancer.
+    let mut env = env!();
+    let alice = env.operator("alice", Role::Admin).await;
+    let err = env
+        .svc
+        .issue_challenge(
+            Action::InviteOperator {
+                name: "dave".into(),
+                role: Role::Admin,
+                ttl_minutes: 60,
+            },
+            alice,
+        )
+        .await
+        .expect_err("un seul admin");
+    assert!(matches!(err, Error::Denied(_)), "{err}");
 }

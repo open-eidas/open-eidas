@@ -28,7 +28,7 @@ mod registry_actions;
 mod revocation;
 
 pub use enrollment::{key_fingerprint, KeyStatus, Registered, RegistrationBegun, PENDING_TTL};
-pub use onboarding::{bootstrap_admin, Invite, MAX_INVITE_TTL, MIN_INVITE_TTL};
+pub use onboarding::{bootstrap_admin, recover_admin, Invite, MAX_INVITE_TTL, MIN_INVITE_TTL};
 
 pub use quorum::{QUORUM, QUORUM_WINDOW};
 pub use registry::{credential_id, Key, NewCredential, Operator, Registry, Role};
@@ -387,6 +387,9 @@ impl Service {
     ) -> Result<Issued, Error> {
         let operator = self.eligible_signer(operator_hint, &action).await?;
         let required = self.required_signatures(&action).await?;
+        if required > 1 {
+            self.ensure_enough_holders(&action, required).await?;
+        }
         self.check_action(&action, &operator, required).await?;
         let (options, state) = self.start_ceremony(operator_hint).await?;
 

@@ -175,8 +175,7 @@ async fn it_refuses_once_an_admin_has_an_active_key_and_says_so() {
 
     let err = bootstrap_admin(&r, &journal, "pirate", ttl(), OffsetDateTime::now_utc())
         .await
-        .err()
-        .expect("refusé");
+        .expect_err("refusé");
     assert!(matches!(err, Error::Denied(_)), "{err}");
 
     // Rien n'a été créé, et la tentative est au journal.

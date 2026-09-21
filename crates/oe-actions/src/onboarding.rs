@@ -19,6 +19,9 @@ use time::OffsetDateTime;
 pub const MIN_INVITE_TTL: time::Duration = time::Duration::minutes(1);
 pub const MAX_INVITE_TTL: time::Duration = time::Duration::hours(24);
 
+/// Marque des invitations créées par `recover-admin` (`operator_invites.created_by`).
+pub(crate) const RECOVERY: &str = "recover-admin";
+
 /// Sérialise les amorçages concurrents : sans cela, deux commandes lancées en
 /// même temps pourraient chacune laisser une invitation vivante.
 const BOOTSTRAP_LOCK: i64 = 0x0EB0_07AD;
@@ -30,6 +33,19 @@ pub struct Invite {
     pub invite_id: Uuid,
     pub token: String,
     pub expires_at: OffsetDateTime,
+}
+
+/// Le jeton est un secret : un `Debug` dérivé le laisserait passer dans un
+/// journal ou un message d'erreur par simple `{:?}`.
+impl std::fmt::Debug for Invite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Invite")
+            .field("operator_id", &self.operator_id)
+            .field("invite_id", &self.invite_id)
+            .field("token", &"<masqué>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 pub(crate) fn valid_name(name: &str) -> Result<(), Error> {
@@ -166,6 +182,142 @@ pub async fn bootstrap_admin(
                 "operateur": name,
                 "operator_id": operator_id.to_string(),
                 "invite_id": invite_id.to_string(),
+                "expire_a": expires_at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default(),
+            }),
+        )
+        .map_err(Error::Journal)?;
+
+    tx.commit().await?;
+    Ok(Invite {
+        operator_id,
+        invite_id,
+        token,
+        expires_at,
+    })
+}
+
+/// Récupération d'un système verrouillé (docs/WEBUI.md §21) : tous les
+/// administrateurs « actifs » ont perdu leurs clés, et personne n'a donc plus
+/// l'autorité de les révoquer. `bootstrap-admin` refuse, avec raison, tant qu'un
+/// administrateur actif existe.
+///
+/// Comme l'amorçage, c'est un acte local sur l'hôte de `ca-server` : l'appelant
+/// (la commande) a déjà prouvé la garde de l'hôte par le PIN du token. Ici :
+///
+/// - crée (ou ré-invite) un administrateur, **sans rien désactiver** du registre
+///   existant : les clés perdues sont ensuite révoquées par une action signée ;
+/// - exige un motif écrit ;
+/// - écrit **avant** de valider un événement distinct, `operators.admin_recovery`,
+///   qui porte le motif et le nombre d'administrateurs actifs. Journal en échec :
+///   rien n'est créé.
+///
+/// Un seul administrateur ainsi créé ne suffit pas à en élever un autre (deux
+/// signatures, §10) : la commande se lance une seconde fois pour un second.
+pub async fn recover_admin(
+    registry: &Registry,
+    journal: &dyn Recorder,
+    name: &str,
+    reason: &str,
+    ttl: time::Duration,
+    now: OffsetDateTime,
+) -> Result<Invite, Error> {
+    valid_name(name)?;
+    let reason = reason.trim();
+    if reason.is_empty() || reason.chars().count() > 1000 {
+        return Err(Error::BadRequest(
+            "un motif écrit (1 à 1000 caractères) est obligatoire pour une récupération"
+                .to_string(),
+        ));
+    }
+    if ttl < MIN_INVITE_TTL || ttl > MAX_INVITE_TTL {
+        return Err(Error::BadRequest(
+            "durée de l'invitation hors de 1 minute à 24 heures".to_string(),
+        ));
+    }
+
+    let mut tx = registry.pool().begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(BOOTSTRAP_LOCK)
+        .execute(&mut *tx)
+        .await?;
+
+    let active_admins: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT o.id) FROM operators o
+         JOIN webauthn_credentials c ON c.operator_id = o.id
+         WHERE o.role = 'admin' AND o.disabled_at IS NULL AND c.revoked_at IS NULL",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let existing = sqlx::query("SELECT id, role, disabled_at FROM operators WHERE name = $1")
+        .bind(name)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let operator_id = match existing {
+        Some(row) => {
+            let role: String = row.get("role");
+            let disabled: Option<OffsetDateTime> = row.get("disabled_at");
+            if role != Role::Admin.as_str() || disabled.is_some() {
+                return Err(Error::BadRequest(format!(
+                    "le nom {name:?} est déjà pris par un autre opérateur"
+                )));
+            }
+            row.get::<Uuid, _>("id")
+        }
+        None => {
+            let id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO operators (id, name, role, created_at, created_by)
+                 VALUES ($1, $2, 'admin', $3, $4)",
+            )
+            .bind(id)
+            .bind(name)
+            .bind(now)
+            .bind(RECOVERY)
+            .execute(&mut *tx)
+            .await?;
+            id
+        }
+    };
+
+    // Une seule invitation vivante par opérateur.
+    sqlx::query(
+        "UPDATE operator_invites SET expires_at = $2
+         WHERE operator_id = $1 AND consumed_at IS NULL AND expires_at > $2",
+    )
+    .bind(operator_id)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+
+    let token = new_token();
+    let invite_id = Uuid::new_v4();
+    let expires_at = now + ttl;
+    sqlx::query(
+        "INSERT INTO operator_invites (id, operator_id, token_hash, created_by, created_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(invite_id)
+    .bind(operator_id)
+    .bind(Sha256::digest(token.as_bytes()).to_vec())
+    .bind(RECOVERY)
+    .bind(now)
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await?;
+
+    // Distinct et bruyant : jamais confondu avec un amorçage. Le jeton n'y figure pas.
+    journal
+        .append(
+            "operators.admin_recovery",
+            serde_json::json!({
+                "operateur": name,
+                "operator_id": operator_id.to_string(),
+                "invite_id": invite_id.to_string(),
+                "motif": reason,
+                "administrateurs_actifs": active_admins,
                 "expire_a": expires_at
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_default(),

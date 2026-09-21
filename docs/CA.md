@@ -169,6 +169,41 @@ au journal chaîné.
 La commande de secours `ca-server revoke` reste un seul opérateur nominatif : c'est
 la voie de la révocation d'urgence, avec la revue prévue par la décision O4.
 
+### Amorçage et récupération des administrateurs
+
+Le registre des opérateurs de la console
+([docs/WEBUI.md](WEBUI.md) §10, §21) démarre vide. Deux commandes locales,
+exécutées sur l'hôte de `ca-server` comme la cérémonie de clé, créent une
+invitation d'administrateur à usage unique ; le jeton n'est affiché qu'une fois,
+sur la sortie standard, et n'est conservé (haché) nulle part ailleurs.
+
+```bash
+# Jour 0 : le premier administrateur. Refuse si un administrateur actif existe.
+TOKEN=$(ca-server operators bootstrap-admin alice --ttl-minutes 15)
+
+# Système verrouillé : les administrateurs « actifs » ont perdu leurs clés et
+# personne n'a plus l'autorité de les révoquer.
+read -rs PIN
+printf %s "$PIN" | ca-server operators recover-admin bob \
+    --reason "clé de alice perdue, ticket 1234" --confirm-recovery --pin-stdin
+```
+
+`recover-admin` est volontairement plus lourd : il exige le **PIN du token
+PKCS#11** (lu sur l'entrée standard, jamais en argument ni en variable
+d'environnement), un **motif écrit** et un drapeau explicite. Le PIN présenté doit
+ouvrir le token de la CA émettrice ; la valeur de `OPENEIDAS_ISSUING_PIN` du
+service, lisible de tout accès shell, n'est pas ce qui compte. Un PIN refusé est
+consigné (`operators.admin_recovery_refused`). Une récupération réussie écrit
+l'événement distinct `operators.admin_recovery` (motif, nombre d'administrateurs
+actifs) et **ne désactive rien** : la clé perdue est ensuite révoquée par une
+action signée du nouvel administrateur. Sa clé entre directement dans le
+registre, sans confirmation d'un tiers (il n'y en a plus). Un seul administrateur
+ainsi créé ne suffit pas à en élever un autre (deux signatures) : lancer la
+commande une seconde fois.
+
+La politique de récupération (témoin, deux détenteurs du PIN, revue a
+posteriori) reste une décision de l'association (O8).
+
 ## 4. Enrôlement et approbation
 
 ```

@@ -7,7 +7,7 @@
 //! du « big bang ».
 //!
 //! Sous-commandes : `ceremony`, `serve`, `ra list|approve|reject`, `revoke`,
-//! `operators bootstrap-admin`, `internal-cert server`, `conformance`,
+//! `operators bootstrap-admin|recover-admin`, `internal-cert server`, `conformance`,
 //! `healthcheck`, `verify-audit`.
 
 use std::sync::Arc;
@@ -94,6 +94,32 @@ enum OperatorsAction {
     BootstrapAdmin {
         /// Nom de l'administrateur (1 à 100 caractères).
         name: String,
+        /// Durée de validité de l'invitation, en minutes (1 à 1440).
+        #[arg(long, default_value_t = 15)]
+        ttl_minutes: i64,
+    },
+    /// Récupération d'un système verrouillé (docs/WEBUI.md §21) : crée une
+    /// invitation d'administrateur alors que les administrateurs « actifs » ont
+    /// perdu leurs clés, sans rien désactiver du registre existant. Exige le PIN
+    /// du token PKCS#11 (garde de l'hôte), un motif écrit et un drapeau explicite ;
+    /// écrit l'événement `operators.admin_recovery` au journal. Le jeton est
+    /// affiché une seule fois, sur la sortie standard.
+    RecoverAdmin {
+        /// Nom de l'administrateur : nouveau, ou un administrateur existant qui a
+        /// perdu sa clé.
+        name: String,
+        /// Motif écrit (consigné au journal).
+        #[arg(long)]
+        reason: String,
+        /// Confirmation explicite : cette commande contourne le refus de
+        /// `bootstrap-admin` face à des administrateurs actifs.
+        #[arg(long)]
+        confirm_recovery: bool,
+        /// Le PIN du token de la CA émettrice est lu sur l'entrée standard (une
+        /// ligne), jamais en argument ni en variable d'environnement :
+        /// `read -rs PIN; printf %s "$PIN" | ca-server operators recover-admin … --pin-stdin`.
+        #[arg(long, required = true)]
+        pin_stdin: bool,
         /// Durée de validité de l'invitation, en minutes (1 à 1440).
         #[arg(long, default_value_t = 15)]
         ttl_minutes: i64,
@@ -746,6 +772,98 @@ async fn run_internal_cert_server(dns: String) {
     }
 }
 
+/// Preuve de garde de l'hôte : le PIN présenté doit ouvrir le token de la CA
+/// émettrice. La valeur de `OPENEIDAS_ISSUING_PIN` du service n'est volontairement
+/// pas comparée : elle est lisible de tout accès shell, alors que le PIN est ce que
+/// détiennent les personnes habilitées.
+fn verify_token_pin(cfg: &Config, pin: &str) -> Result<(), String> {
+    oe_hsm::Pkcs11Token::open(&oe_hsm::Options {
+        module_path: cfg.pkcs11_module.clone(),
+        token_label: cfg.issuing_token_label.clone(),
+        key_label: cfg.issuing_key_label.clone(),
+        pin: pin.to_string(),
+    })
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+async fn run_operators_recover_admin(
+    name: String,
+    reason: String,
+    confirm_recovery: bool,
+    ttl_minutes: i64,
+) {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
+    if !confirm_recovery {
+        die(
+            "récupération",
+            "confirmation absente : ajoutez --confirm-recovery pour indiquer que vous savez \
+             que cette commande contourne le refus de `bootstrap-admin`",
+        );
+    }
+    if reason.trim().is_empty() {
+        die("récupération", "un motif écrit (--reason) est obligatoire");
+    }
+    // Le PIN vient de l'entrée standard, avant toute autre chose : une commande
+    // lancée sans lui n'ouvre ni la base ni le journal.
+    let mut pin = String::new();
+    std::io::stdin()
+        .read_line(&mut pin)
+        .unwrap_or_else(|e| die("lecture du PIN sur l'entrée standard", e));
+    let pin = pin.trim_end_matches(['\r', '\n']).to_string();
+    if pin.is_empty() {
+        die("récupération", "aucun PIN reçu sur l'entrée standard");
+    }
+
+    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let _ = open_store(&cfg).await;
+    let registry = oe_actions::Registry::connect(&cfg.dsn)
+        .await
+        .unwrap_or_else(|e| die("ouverture du registre des opérateurs", e));
+    let journal = Arc::new(open_journal(&cfg));
+    let recorder = AuditRecorder(journal);
+
+    if let Err(e) = verify_token_pin(&cfg, &pin) {
+        // Un refus est aussi un événement : quelqu'un a essayé.
+        let _ = oe_raflow::Recorder::append(
+            &recorder,
+            "operators.admin_recovery_refused",
+            serde_json::json!({ "nom": name, "motif_du_refus": "PIN du token refusé" }),
+        );
+        // Le détail de l'erreur PKCS#11 ne va pas à l'écran : il n'apprend rien
+        // à celui qui a la garde du PIN, et beaucoup à celui qui l'essaie.
+        tracing::debug!(erreur = %e, "PIN refusé");
+        die(
+            "récupération",
+            "le PIN présenté n'ouvre pas le token de la CA émettrice",
+        );
+    }
+
+    let invite = oe_actions::recover_admin(
+        &registry,
+        &recorder,
+        &name,
+        &reason,
+        time::Duration::minutes(ttl_minutes),
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap_or_else(|e| die("récupération de l'administrateur", e));
+
+    let expires = invite
+        .expires_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
+    eprintln!("Invitation de récupération créée pour l'administrateur {name:?}, valable jusqu'à {expires}.");
+    eprintln!(
+        "Le jeton ci-dessous n'est affiché qu'une seule fois : il n'est conservé nulle part."
+    );
+    eprintln!("Événement consigné au journal : operators.admin_recovery.");
+    println!("{}", invite.token);
+}
+
 async fn run_healthcheck() {
     let listen = std::env::var("OPENEIDAS_LISTEN")
         .ok()
@@ -821,6 +939,13 @@ async fn main() {
             OperatorsAction::BootstrapAdmin { name, ttl_minutes } => {
                 run_operators_bootstrap_admin(name, ttl_minutes).await
             }
+            OperatorsAction::RecoverAdmin {
+                name,
+                reason,
+                confirm_recovery,
+                pin_stdin: _,
+                ttl_minutes,
+            } => run_operators_recover_admin(name, reason, confirm_recovery, ttl_minutes).await,
         },
         Command::Conformance { markdown } => {
             let matrix = oe_conformance::system_matrix();
