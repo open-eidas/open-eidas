@@ -151,6 +151,24 @@ ca-server internal-cert server ca.open-eidas.svc   # écrit le certificat
 Le certificat n'est lu qu'au démarrage : le renouveler (tous les 3 mois) demande
 de relancer la commande puis de redémarrer `ca-server`.
 
+### Actions à double contrôle
+
+Certaines actions signées par les opérateurs (console d'exploitation,
+[docs/WEBUI.md](WEBUI.md) §8) n'agissent qu'avec **deux signatures d'opérateurs
+distincts** : la révocation d'un certificat (deux `ca_operateur`) et la création
+ou le retrait d'un rôle `admin` (deux administrateurs). Le seuil vient de la
+politique de `ca-server`, jamais de l'appelant.
+
+Le premier signataire fige l'action ; les suivants signent exactement le même
+corps. Chaque challenge WebAuthn reste limité à 5 minutes, mais l'action reste
+signable 24 heures. À l'exécution, chaque signataire doit encore être actif et
+détenir le rôle requis, et l'action ne s'exécute qu'une fois, même si deux
+signatures arrivent ensemble. Toute signature, exécutée ou non, laisse une trace
+au journal chaîné.
+
+La commande de secours `ca-server revoke` reste un seul opérateur nominatif : c'est
+la voie de la révocation d'urgence, avec la revue prévue par la décision O4.
+
 ## 4. Enrôlement et approbation
 
 ```

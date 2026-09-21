@@ -26,7 +26,14 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ChallengeRequest {
-    body: Action,
+    /// Une action nouvelle, que `ca-server` fige...
+    #[serde(default)]
+    body: Option<Action>,
+    /// ...ou une action déjà figée, pour un signataire de plus (double contrôle).
+    /// L'un ou l'autre, jamais les deux : on ne signe pas un corps qu'on choisit
+    /// par-dessus une action existante.
+    #[serde(default)]
+    action_id: Option<Uuid>,
     /// Sert seulement à choisir les clés à proposer, jamais une décision de
     /// confiance (§4).
     operator_hint: Uuid,
@@ -113,12 +120,25 @@ async fn handle_challenge(State(service): State<Arc<Service>>, body: Bytes) -> R
         Ok(r) => r,
         Err(e) => return bad_json(e),
     };
-    match service.issue_challenge(req.body, req.operator_hint).await {
+    let issued = match (req.body, req.action_id) {
+        (Some(action), None) => service.issue_challenge(action, req.operator_hint).await,
+        (None, Some(id)) => service.issue_challenge_for(id, req.operator_hint).await,
+        _ => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "exactement un des champs body ou action_id est attendu",
+            )
+        }
+    };
+    match issued {
         Ok(issued) => Json(serde_json::json!({
             "challenge_id": issued.challenge_id,
             "action_id": issued.action_id,
             "body": issued.body,
             "body_hash": issued.body_hash,
+            "required_signatures": issued.required_signatures,
+            "signatures": issued.signatures,
             "webauthn": issued.options.public_key,
         }))
         .into_response(),
@@ -136,6 +156,9 @@ async fn handle_actions(State(service): State<Arc<Service>>, body: Bytes) -> Res
         Ok(done) => Json(serde_json::json!({
             "action_id": done.action_id,
             "challenge_id": done.challenge_id,
+            "status": if done.executed { "executed" } else { "awaiting_quorum" },
+            "signatures": done.signatures,
+            "required": done.required,
             "operator": done.operator,
             "role": done.role.as_str(),
             // Propre à l'action (ex. le jeton d'une invitation) ; `null` sinon.

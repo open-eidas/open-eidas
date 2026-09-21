@@ -369,12 +369,27 @@ async fn nobody_confirms_their_own_key() {
 }
 
 #[tokio::test]
-async fn the_admin_role_cannot_be_granted_or_removed_by_a_single_admin() {
+async fn the_admin_role_needs_two_admins() {
     let mut env = env!();
     let alice = env.operator("alice", Role::Admin).await;
-    let _bob = env.operator("bob", Role::RaOperateur).await;
-    let _carol = env.operator("carol", Role::Admin).await;
+    let bob = env.operator("bob", Role::RaOperateur).await;
+    let carol = env.operator("carol", Role::Admin).await;
 
+    // Jamais son propre rôle, quel que soit le nombre de signatures.
+    let err = env
+        .svc
+        .issue_challenge(
+            Action::SetRole {
+                operator: "alice".into(),
+                role: Role::Auditeur,
+            },
+            alice.id,
+        )
+        .await
+        .expect_err("auto-modification");
+    assert!(matches!(err, Error::Denied(_)), "{err}");
+
+    // Une seule signature n'exécute rien : l'action attend un second admin.
     for action in [
         Action::InviteOperator {
             name: "dave".into(),
@@ -390,20 +405,27 @@ async fn the_admin_role_cannot_be_granted_or_removed_by_a_single_admin() {
             operator: "carol".into(),
             role: Role::Auditeur,
         },
-        // Et jamais son propre rôle.
-        Action::SetRole {
-            operator: "alice".into(),
-            role: Role::Auditeur,
-        },
     ] {
-        let err = env
-            .svc
-            .issue_challenge(action.clone(), alice.id)
-            .await
-            .err()
-            .unwrap_or_else(|| panic!("{action:?} aurait dû être refusée"));
-        assert!(matches!(err, Error::Denied(_)), "{action:?} : {err}");
+        let done = env.run(&alice, action.clone()).await.unwrap();
+        assert!(
+            !done.executed,
+            "{action:?} exécutée avec une seule signature"
+        );
+        assert_eq!((done.signatures, done.required), (1, 2), "{action:?}");
     }
+    assert_eq!(
+        env.count("SELECT count(*) FROM operators WHERE name = 'dave'")
+            .await,
+        0
+    );
+    assert_eq!(
+        env.registry.operator(bob.id).await.unwrap().unwrap().role,
+        Role::RaOperateur
+    );
+    assert_eq!(
+        env.registry.operator(carol.id).await.unwrap().unwrap().role,
+        Role::Admin
+    );
 }
 
 #[tokio::test]

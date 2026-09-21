@@ -7,9 +7,9 @@
 //! que l'administrateur voit refusé avant de signer est donc exactement ce qui
 //! serait refusé après.
 //!
-//! Deux règles du §10 ne sont pas encore applicables et sont refusées, jamais
-//! contournées : créer ou retirer un rôle `admin` exige le quorum de deux
-//! administrateurs (§8), qui n'existe pas encore.
+//! Créer ou retirer un rôle `admin` exige deux administrateurs (§10, §8) : le
+//! nombre de signatures de l'action (`quorum`) est recontrôlé ici, à chaque fois,
+//! contre l'état du registre à ce moment-là, pas seulement à l'émission.
 
 use oe_webauthn::{AttestedPasskey, Uuid};
 use sqlx::Row;
@@ -22,7 +22,7 @@ use crate::{Action, Error, Service};
 use sha2::{Digest, Sha256};
 
 const QUORUM_REQUIRED: &str =
-    "créer ou retirer un rôle admin exige la signature de deux administrateurs (docs/WEBUI.md §10, §8), pas encore disponible";
+    "créer ou retirer un rôle admin exige la signature de deux administrateurs (docs/WEBUI.md §10, §8)";
 
 fn rfc3339(t: OffsetDateTime) -> String {
     t.format(&time::format_description::well_known::Rfc3339)
@@ -36,6 +36,7 @@ impl Service {
         actor: &Operator,
         now: OffsetDateTime,
         apply: bool,
+        quorum: u32,
     ) -> Result<serde_json::Value, Error> {
         let mut tx = self.registry.pool().begin().await?;
         let result = match action {
@@ -45,7 +46,7 @@ impl Service {
                 ttl_minutes,
             } => {
                 valid_name(name)?;
-                if *role == Role::Admin {
+                if *role == Role::Admin && quorum < crate::quorum::QUORUM {
                     return Err(Error::Denied(QUORUM_REQUIRED.to_string()));
                 }
                 let ttl = time::Duration::minutes(*ttl_minutes);
@@ -269,7 +270,7 @@ impl Service {
             }
 
             Action::SetRole { operator, role } => {
-                if *role == Role::Admin {
+                if *role == Role::Admin && quorum < crate::quorum::QUORUM {
                     return Err(Error::Denied(QUORUM_REQUIRED.to_string()));
                 }
                 let row = sqlx::query(
@@ -290,7 +291,7 @@ impl Service {
                         "un opérateur ne change pas son propre rôle".to_string(),
                     ));
                 }
-                if current == Role::Admin.as_str() {
+                if current == Role::Admin.as_str() && quorum < crate::quorum::QUORUM {
                     return Err(Error::Denied(QUORUM_REQUIRED.to_string()));
                 }
                 if current == role.as_str() {
