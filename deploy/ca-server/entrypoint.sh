@@ -49,4 +49,38 @@ if [ "${1:-serve}" = "serve" ]; then
     done
 fi
 
+# Lien interne ra-console <-> ca-server (docs/WEBUI.md §14, §16) : le certificat
+# `internal_server` doit exister avant `serve`, qui refuse d'ouvrir le port
+# interne sans lui. La demande passe par la file RA comme toute autre : en
+# démonstration le sidecar d'approbation la traite ; en production, un opérateur
+# nommé l'approuve (`ca-server ra approve`), et ce démarrage attend sa décision.
+# La clé et la demande survivent à un redémarrage (même clé, même demande).
+if [ "${1:-serve}" = "serve" ] && [ -n "${OPENEIDAS_INTERNAL_LISTEN:-}" ] \
+    && [ ! -s "${OPENEIDAS_INTERNAL_TLS_CERT_FILE:-}" ]; then
+    : "${OPENEIDAS_INTERNAL_DNS_NAME:?OPENEIDAS_INTERNAL_DNS_NAME est obligatoire avec OPENEIDAS_INTERNAL_LISTEN}"
+    : "${OPENEIDAS_INTERNAL_TLS_CERT_FILE:?OPENEIDAS_INTERNAL_TLS_CERT_FILE est obligatoire}"
+    : "${OPENEIDAS_INTERNAL_TLS_KEY_FILE:?OPENEIDAS_INTERNAL_TLS_KEY_FILE est obligatoire}"
+    # La clé privée n'est lisible que par ce service, dès la création du dossier.
+    (umask 077 && mkdir -p "$(dirname "${OPENEIDAS_INTERNAL_TLS_KEY_FILE}")")
+    attempt=1
+    while :; do
+        rc=0
+        ca-server internal-cert server "${OPENEIDAS_INTERNAL_DNS_NAME}" || rc=$?
+        [ "${rc}" -eq 0 ] && break
+        # Code 3 : demande déposée, en attente d'approbation. Tout autre code est
+        # une erreur, à ne pas réessayer en boucle.
+        if [ "${rc}" -ne 3 ]; then
+            echo "abandon : le certificat du lien interne n'a pas pu être demandé (code ${rc})" >&2
+            exit 1
+        fi
+        if [ "${attempt}" -ge "${OPENEIDAS_INTERNAL_CERT_ATTEMPTS:-120}" ]; then
+            echo "abandon : demande de certificat du lien interne toujours non approuvée après ${attempt} tentatives" >&2
+            exit 1
+        fi
+        echo "certificat du lien interne en attente d'approbation (tentative ${attempt}), nouvel essai dans 5 s"
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+fi
+
 exec ca-server "$@"

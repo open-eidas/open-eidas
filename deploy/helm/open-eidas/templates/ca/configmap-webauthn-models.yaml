@@ -1,0 +1,20 @@
+{{- if .Values.ca.internal.enabled -}}
+{{- /* Le rendu échoue plutôt que de déployer un lien interne qui n'admettrait
+       aucune clé : ca-server refuserait de toute façon de démarrer. */ -}}
+{{- if not .Values.ca.internal.models -}}
+{{- fail "ca.internal.models est obligatoire quand ca.internal.enabled : la liste blanche de modèles de clés ne peut pas être vide" -}}
+{{- end -}}
+{{- $models := list -}}
+{{- range .Values.ca.internal.models -}}
+{{- $models = append $models (dict "description" (required "chaque modèle exige une description" .description) "aaguid" (required "chaque modèle exige un aaguid" .aaguid) "root_pem" (required "chaque modèle exige rootPem" .rootPem)) -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "open-eidas.fullname" . }}-ca-webauthn-models
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
+data:
+  models.json: |
+    {{- toPrettyJson $models | nindent 4 }}
+{{- end }}
