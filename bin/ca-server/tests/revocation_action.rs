@@ -249,9 +249,11 @@ async fn a_ca_operator_revokes_a_certificate_and_the_crl_carries_it() {
         .iter()
         .map(|r| hex::encode(r.serial_number.as_bytes()))
         .collect();
+    // Ni la liste ni le numéro ne sont affichés : ils dérivent du certificat émis.
     assert!(
         listed.iter().any(|s| s.trim_start_matches("00") == serial),
-        "{listed:?} ne contient pas {serial}"
+        "la CRL ne contient pas le numéro de série révoqué ({} entrées)",
+        listed.len()
     );
 }
 
