@@ -196,20 +196,15 @@ impl CaLink {
         self.client_not_after
     }
 
-    /// Sonde le lien : poignée de main mTLS, contrôle explicite du certificat de
-    /// `ca-server`, puis `GET /internal/v1/ping`.
-    pub async fn ping(&self) -> Result<(), LinkError> {
-        let url = self
-            .base
-            .join("/internal/v1/ping")
-            .map_err(|e| LinkError::Config(e.to_string()))?;
-        let response = self
-            .client
-            .get(url)
+    /// Envoie une requête et contrôle, **à chaque réponse**, le certificat que
+    /// `ca-server` a présenté (politique, SAN, validité) : le contrôle ne se limite
+    /// pas à la sonde. Rend le statut et le corps JSON, quel que soit le statut :
+    /// interpréter un refus de `ca-server` revient à l'appelant.
+    async fn send(&self, request: reqwest::RequestBuilder) -> Result<Relayed, LinkError> {
+        let response = request
             .send()
             .await
             .map_err(|e| LinkError::Unreachable(format!("{e:#}")))?;
-
         let der = response
             .extensions()
             .get::<reqwest::tls::TlsInfo>()
@@ -218,19 +213,45 @@ impl CaLink {
             .to_vec();
         check_server_certificate(&der, &self.host, time::OffsetDateTime::now_utc())?;
 
-        if !response.status().is_success() {
-            return Err(LinkError::Unexpected(format!(
-                "statut {}",
-                response.status()
-            )));
+        let status = response.status().as_u16();
+        let body: serde_json::Value = response.json().await.map_err(|e| {
+            LinkError::Unexpected(format!("corps non JSON (statut {status}) : {e}"))
+        })?;
+        Ok(Relayed { status, body })
+    }
+
+    /// Relaie un corps JSON à une route interne de `ca-server`. Le corps est celui
+    /// que la console a **reconstruit** à partir de champs qu'elle a validés : elle
+    /// ne fait jamais suivre tel quel ce qu'un navigateur lui a envoyé.
+    pub async fn post(&self, path: &str, body: &serde_json::Value) -> Result<Relayed, LinkError> {
+        let url = self
+            .base
+            .join(path)
+            .map_err(|e| LinkError::Config(e.to_string()))?;
+        self.send(self.client.post(url).json(body)).await
+    }
+
+    /// Sonde le lien : poignée de main mTLS, contrôle explicite du certificat de
+    /// `ca-server`, puis `GET /internal/v1/ping`.
+    pub async fn ping(&self) -> Result<(), LinkError> {
+        let url = self
+            .base
+            .join("/internal/v1/ping")
+            .map_err(|e| LinkError::Config(e.to_string()))?;
+        let relayed = self.send(self.client.get(url)).await?;
+        if !(200..300).contains(&relayed.status) {
+            return Err(LinkError::Unexpected(format!("statut {}", relayed.status)));
         }
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| LinkError::Unexpected(e.to_string()))?;
-        if body["ok"] != true {
-            return Err(LinkError::Unexpected(body.to_string()));
+        if relayed.body["ok"] != true {
+            return Err(LinkError::Unexpected(relayed.body.to_string()));
         }
         Ok(())
     }
+}
+
+/// La réponse de `ca-server` à une requête relayée.
+#[derive(Debug)]
+pub struct Relayed {
+    pub status: u16,
+    pub body: serde_json::Value,
 }

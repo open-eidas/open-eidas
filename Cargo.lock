@@ -2050,12 +2050,15 @@ dependencies = [
  "clap",
  "der 0.8.2",
  "http-body-util",
+ "oe-actions",
  "oe-ca-core",
  "oe-castore",
  "oe-certs",
  "oe-conformance",
  "oe-enroll",
  "oe-hsm",
+ "oe-raflow",
+ "oe-webauthn",
  "rand 0.8.8",
  "reqwest",
  "rsa",
@@ -2069,6 +2072,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "webauthn-authenticator-rs",
  "x509-cert",
 ]
 

@@ -10,7 +10,8 @@ aux navigateurs, donc le plus probablement compromis un jour. Deux principes en
 découlent ([WEBUI.md](WEBUI.md) §16) : elle **n'ouvre jamais de session PKCS#11**, et
 elle **n'écrit jamais dans les tables de `ca-server`** ni n'est une ancre de confiance.
 
-Cette première brique ne sert que `/healthz`. Elle pose ce que tout le reste suppose :
+Elle sert `/healthz` et le **relais de l'enregistrement de clé** (voir plus bas). Elle
+pose ce que tout le reste suppose :
 
 - **Le rôle PostgreSQL est en lecture seule sur les tables de `ca-server`.** La base
   l'impose (`crates/oe-castore/sql/ra_console_grants.sql`), mais un déploiement qui
@@ -29,6 +30,28 @@ Cette première brique ne sert que `/healthz`. Elle pose ce que tout le reste su
   qu'à la poignée de main, et une connexion gardée ouverte survivrait à la révocation.
 - **Ses propres tables** (migration 0006) : challenges de connexion, sessions,
   compteurs de signatures des connexions. Rien de ce qui touche la PKI.
+
+## Enregistrement de la clé d'un opérateur (relais)
+
+`POST /api/v1/webauthn/register/begin` (`{"token": "…"}`) puis `/finish`
+(`{"ceremony_id": "…", "credential": {…}}`) : l'invité présente son jeton
+d'invitation, et la console **relaie** à `ca-server` (`/internal/v1/register/*`,
+mTLS). Elle ne lit pas l'attestation et ne la comprend pas : c'est `ca-server` qui la
+vérifie contre la liste blanche de modèles et range la clé. Rien de la clé n'est
+gardé par la console.
+
+- La console **reconstruit** ce qu'elle relaie à partir de champs qu'elle a validés
+  (JSON déclaré, champs connus, jeton de 1 à 256 caractères, identifiant de cérémonie
+  au format UUID, corps de 64 Kio au plus) ; elle ne fait jamais suivre tel quel ce
+  qu'un navigateur lui envoie.
+- Un refus de `ca-server` (4xx) est rendu avec son code et son message, faits pour
+  cela ; une panne (5xx, injoignable) devient un `502 ca_unavailable` **générique** :
+  ni adresse, ni cause, ni divergence du registre. Le jeton n'est ni journalisé ni
+  renvoyé.
+- Le certificat que `ca-server` présente est contrôlé (politique, SAN, validité) à
+  **chaque** réponse, pas seulement à la sonde.
+- Pas encore de limitation de débit (l'endpoint est anonyme ; le jeton fait 256 bits et
+  vit 24 h au plus) : voir `TODO.md`.
 
 ## Variables d'environnement
 
@@ -64,7 +87,7 @@ Cette première brique ne sert que `/healthz`. Elle pose ce que tout le reste su
 
 ## Ce qui n'existe pas encore
 
-L'authentification des opérateurs (enregistrement relayé, connexion, sessions), la
+La connexion des opérateurs (login, sessions), la
 lecture, les actions signées relayées, la révocation, le workflow d'incident et le
 frontend : voir [WEBUI.md](WEBUI.md) §15 et `TODO.md`. L'image, le chart Helm et le
 `docker-compose.yml` de la console non plus. Le certificat client (3 mois) se
