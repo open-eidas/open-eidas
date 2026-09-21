@@ -32,7 +32,7 @@ pub struct Invite {
     pub expires_at: OffsetDateTime,
 }
 
-fn valid_name(name: &str) -> Result<(), Error> {
+pub(crate) fn valid_name(name: &str) -> Result<(), Error> {
     let n = name.trim();
     if n.is_empty() || n.chars().count() > 100 || n.chars().any(char::is_control) || n != name {
         return Err(Error::BadRequest(
@@ -44,7 +44,7 @@ fn valid_name(name: &str) -> Result<(), Error> {
 }
 
 /// Un jeton de 256 bits tiré du générateur du système, en base64url.
-fn new_token() -> String {
+pub(crate) fn new_token() -> String {
     let mut raw = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut raw);
     credential_id(&raw)
