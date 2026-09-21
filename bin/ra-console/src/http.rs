@@ -83,20 +83,19 @@ fn error(status: StatusCode, code: &str, message: &str) -> Response {
 /// Une route qui relaie des JSON n'accepte que du JSON déclaré : un navigateur ne
 /// peut pas envoyer `application/json` d'un autre site sans pré-requête CORS, ce qui
 /// ferme les envois « aveugles » d'un formulaire piégé.
-fn require_json(headers: &HeaderMap) -> Result<(), Response> {
-    let ok = headers
+fn is_json(headers: &HeaderMap) -> bool {
+    headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.split(';').next().unwrap_or("").trim() == "application/json");
-    if ok {
-        Ok(())
-    } else {
-        Err(error(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "unsupported_media_type",
-            "Content-Type: application/json attendu",
-        ))
-    }
+        .is_some_and(|v| v.split(';').next().unwrap_or("").trim() == "application/json")
+}
+
+fn unsupported_media_type() -> Response {
+    error(
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "unsupported_media_type",
+        "Content-Type: application/json attendu",
+    )
 }
 
 /// Ce que `ca-server` a répondu, rendu tel quel pour un refus de sa part (le code
@@ -160,8 +159,8 @@ async fn handle_register_begin(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(r) = require_json(&headers) {
-        return r;
+    if !is_json(&headers) {
+        return unsupported_media_type();
     }
     let req: RegisterBegin = match serde_json::from_slice(&body) {
         Ok(r) => r,
@@ -189,8 +188,8 @@ async fn handle_register_finish(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(r) = require_json(&headers) {
-        return r;
+    if !is_json(&headers) {
+        return unsupported_media_type();
     }
     let req: RegisterFinish = match serde_json::from_slice(&body) {
         Ok(r) => r,
