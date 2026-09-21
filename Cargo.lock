@@ -1474,10 +1474,12 @@ name = "oe-actions"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "hex",
  "oe-castore",
  "oe-raflow",
  "oe-webauthn",
+ "openssl",
  "rand 0.8.8",
  "serde",
  "serde_json",

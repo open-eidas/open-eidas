@@ -204,6 +204,37 @@ commande une seconde fois.
 La politique de récupération (témoin, deux détenteurs du PIN, revue a
 posteriori) reste une décision de l'association (O8).
 
+### Audit du registre des opérateurs
+
+```bash
+ca-server operators audit [--journal <copie répliquée>]
+```
+
+Refait, pour chaque **clé active**, le chemin par lequel elle est entrée dans le
+registre ([docs/WEBUI.md](WEBUI.md) §21), sans croire la base sur parole :
+
+- une clé **confirmée** doit avoir une action `confirm_key` exécutée : corps
+  inchangé (empreinte `body_hash`), engageant bien cette clé, signée par assez
+  d'opérateurs distincts, **chaque signature étant re-vérifiée** (ES256) contre la
+  clé du signataire, qui a lui-même une chaîne valide jusqu'à une ancre ;
+- une clé **d'ancre** (amorçage, récupération) ne se prouve pas dans la base : la
+  contrainte du registre l'admet sans confirmation. Elle doit figurer au journal
+  chaîné ;
+- le corps de chaque action doit être celui que le journal a consigné **avant** la
+  signature : la signature porte sur le challenge, pas sur le corps, donc un corps
+  réécrit avec son empreinte passerait la cryptographie seule.
+
+Code de sortie **0** : registre sain ; **1** : constats (une ligne `KO` par clé) ;
+**2** : journal illisible ou rompu, auquel cas le registre n'est pas jugé. Pointer
+`--journal` vers la copie répliquée hors de l'hôte est le meilleur usage : une
+copie que la base et l'hôte ne contrôlent pas.
+
+Limites : seul ES256 est vérifiable (une autre clé est signalée, pas tenue pour
+bonne) ; l'audit ne juge pas le rôle qu'avaient les signataires à l'époque. Il est
+lancé à la demande (ou par un job périodique, avec une alerte hors console) ; le
+lancement au démarrage et le blocage des actions sur constat relèvent de
+`operators reconcile`, à venir.
+
 ## 4. Enrôlement et approbation
 
 ```

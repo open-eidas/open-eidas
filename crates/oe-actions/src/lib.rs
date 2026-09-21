@@ -20,6 +20,8 @@
 //! corps (décision O7). Le lien challenge → corps est donc établi par le
 //! journal et par la table `actions`, pas par la signature seule.
 
+mod assertion;
+mod audit;
 mod enrollment;
 mod onboarding;
 mod quorum;
@@ -30,6 +32,7 @@ mod revocation;
 pub use enrollment::{key_fingerprint, KeyStatus, Registered, RegistrationBegun, PENDING_TTL};
 pub use onboarding::{bootstrap_admin, recover_admin, Invite, MAX_INVITE_TTL, MIN_INVITE_TTL};
 
+pub use audit::{audit_registry, AuditReport, JournalView, KeyReport, Verdict};
 pub use quorum::{QUORUM, QUORUM_WINDOW};
 pub use registry::{credential_id, Key, NewCredential, Operator, Registry, Role};
 pub use revocation::Revoker;

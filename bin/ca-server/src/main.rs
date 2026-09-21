@@ -7,7 +7,7 @@
 //! du « big bang ».
 //!
 //! Sous-commandes : `ceremony`, `serve`, `ra list|approve|reject`, `revoke`,
-//! `operators bootstrap-admin|recover-admin`, `internal-cert server`, `conformance`,
+//! `operators bootstrap-admin|recover-admin|audit`, `internal-cert server`, `conformance`,
 //! `healthcheck`, `verify-audit`.
 
 use std::sync::Arc;
@@ -97,6 +97,16 @@ enum OperatorsAction {
         /// Durée de validité de l'invitation, en minutes (1 à 1440).
         #[arg(long, default_value_t = 15)]
         ttl_minutes: i64,
+    },
+    /// Audite la chaîne du registre (docs/WEBUI.md §21) : chaque clé active se
+    /// remonte, signatures re-vérifiées, jusqu'à une ancre attestée par le journal
+    /// chaîné. Code de sortie 0 : registre sain ; 1 : constats ; 2 : journal
+    /// illisible ou rompu (on ne juge pas le registre contre un journal douteux).
+    Audit {
+        /// Journal à lire (défaut : `OPENEIDAS_AUDIT_FILE`), par exemple la copie
+        /// répliquée hors de l'hôte.
+        #[arg(long)]
+        journal: Option<String>,
     },
     /// Récupération d'un système verrouillé (docs/WEBUI.md §21) : crée une
     /// invitation d'administrateur alors que les administrateurs « actifs » ont
@@ -772,6 +782,60 @@ async fn run_internal_cert_server(dns: String) {
     }
 }
 
+async fn run_operators_audit(journal: Option<String>) {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
+    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let _ = open_store(&cfg).await;
+    let registry = oe_actions::Registry::connect(&cfg.dsn)
+        .await
+        .unwrap_or_else(|e| die("ouverture du registre des opérateurs", e));
+
+    let path = journal.unwrap_or_else(|| cfg.audit_file.clone());
+    let records = match oe_audit::read(&path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("journal illisible ou rompu ({path}) : {e}");
+            eprintln!(
+                "Le registre n'est pas jugé contre un journal dont l'intégrité n'est pas garantie."
+            );
+            std::process::exit(2);
+        }
+    };
+    let view = oe_actions::JournalView::from_events(records.into_iter().filter_map(|r| {
+        r.data
+            .map(|d| (r.event, serde_json::Value::Object(d.into_iter().collect())))
+    }));
+    let report = oe_actions::audit_registry(&registry, &view)
+        .await
+        .unwrap_or_else(|e| die("audit du registre", e));
+
+    for k in &report.keys {
+        let short: String = k.credential_id.chars().take(16).collect();
+        match &k.verdict {
+            Ok(oe_actions::Verdict::Anchor) => {
+                println!("OK\t{}\t{short}\tancre (journal)", k.operator)
+            }
+            Ok(oe_actions::Verdict::Chained { depth }) => {
+                println!(
+                    "OK\t{}\t{short}\tchaîne signée, profondeur {depth}",
+                    k.operator
+                )
+            }
+            Err(why) => println!("KO\t{}\t{short}\t{why}", k.operator),
+        }
+    }
+    let findings = report.findings().len();
+    eprintln!(
+        "{} clé(s) active(s) auditée(s), {findings} constat(s).",
+        report.keys.len()
+    );
+    if findings > 0 {
+        std::process::exit(1);
+    }
+}
+
 /// Preuve de garde de l'hôte : le PIN présenté doit ouvrir le token de la CA
 /// émettrice. La valeur de `OPENEIDAS_ISSUING_PIN` du service n'est volontairement
 /// pas comparée : elle est lisible de tout accès shell, alors que le PIN est ce que
@@ -939,6 +1003,7 @@ async fn main() {
             OperatorsAction::BootstrapAdmin { name, ttl_minutes } => {
                 run_operators_bootstrap_admin(name, ttl_minutes).await
             }
+            OperatorsAction::Audit { journal } => run_operators_audit(journal).await,
             OperatorsAction::RecoverAdmin {
                 name,
                 reason,

@@ -187,7 +187,11 @@ impl Default for Report {
 /// et met à jour `report`. Retourne le nombre d'octets consommés, ce qui
 /// permet à un journal ouvert en écriture de reprendre exactement là où il
 /// s'était arrêté.
-fn scan_chain<R: Read>(r: R, report: &mut Report) -> Result<u64, AuditError> {
+fn scan_chain<R: Read>(
+    r: R,
+    report: &mut Report,
+    mut sink: Option<&mut Vec<Record>>,
+) -> Result<u64, AuditError> {
     let mut reader = BufReader::with_capacity(64 * 1024, r);
     let mut line_no: u64 = 0;
     let mut read: u64 = 0;
@@ -252,7 +256,10 @@ fn scan_chain<R: Read>(r: R, report: &mut Report) -> Result<u64, AuditError> {
         }
         report.records += 1;
         report.last = record.seq;
-        report.head = record.hash;
+        report.head = record.hash.clone();
+        if let Some(out) = sink.as_deref_mut() {
+            out.push(record);
+        }
 
         if !has_newline {
             break;
@@ -271,8 +278,23 @@ pub fn verify(path: impl AsRef<Path>) -> Result<Report, AuditError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(report),
         Err(e) => return Err(e.into()),
     };
-    scan_chain(file, &mut report)?;
+    scan_chain(file, &mut report, None)?;
     Ok(report)
+}
+
+/// Relit le journal, en contrôle la chaîne, et en rend les enregistrements dans
+/// l'ordre. Une chaîne rompue est une erreur : on ne lit pas un journal dont on
+/// ne peut pas garantir l'intégrité. Un journal absent est vide.
+pub fn read(path: impl AsRef<Path>) -> Result<Vec<Record>, AuditError> {
+    let mut report = Report::default();
+    let mut records = Vec::new();
+    let file = match File::open(path.as_ref()) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(records),
+        Err(e) => return Err(e.into()),
+    };
+    scan_chain(file, &mut report, Some(&mut records))?;
+    Ok(records)
 }
 
 struct State {
@@ -310,7 +332,7 @@ impl Log {
             let mut report = Report::default();
             let mut f = file.try_clone()?;
             f.seek(SeekFrom::Start(0))?;
-            let read = scan_chain(&f, &mut report)?;
+            let read = scan_chain(&f, &mut report, None)?;
             Ok((report.last, report.head, read))
         })();
         let _ = FileExt::unlock(&file);
@@ -337,7 +359,7 @@ impl Log {
             ..Report::default()
         };
         let mut f = state.file.try_clone()?;
-        let read = scan_chain(&mut f, &mut report)?;
+        let read = scan_chain(&mut f, &mut report, None)?;
         state.offset += read;
         state.seq = report.last;
         state.head = report.head;
@@ -445,6 +467,32 @@ mod tests {
 
         let (_, head) = log.head().unwrap();
         assert_eq!(head, report.head);
+    }
+
+    #[test]
+    fn read_returns_the_records_in_order() {
+        let (log, path, _dir) = new_log();
+        append_some(&log, 3);
+
+        let records = read(&path).expect("un journal intact se relit");
+        assert_eq!(
+            records.iter().map(|r| r.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        let (_, head) = log.head().unwrap();
+        assert_eq!(records.last().unwrap().hash, head);
+    }
+
+    #[test]
+    fn read_refuses_a_broken_chain_and_treats_a_missing_log_as_empty() {
+        let (log, path, dir) = new_log();
+        append_some(&log, 3);
+        let mut lines = read_lines(&path);
+        lines[1] = lines[1].replace("\"serial_number\":1", "\"serial_number\":9");
+        write_lines(&path, &lines);
+        assert!(read(&path).is_err(), "on ne lit pas un journal altéré");
+
+        assert!(read(dir.path().join("absent.log")).unwrap().is_empty());
     }
 
     #[test]
