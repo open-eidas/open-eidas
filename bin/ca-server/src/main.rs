@@ -389,7 +389,7 @@ fn join_comment(parts: &[String]) -> String {
 
 async fn run_ra_list(state: Option<String>) {
     tracing_subscriber::fmt::init();
-    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
     let store: Arc<dyn oe_castore::Store> = Arc::new(open_store(&cfg).await);
 
     let filter = match state.as_deref() {
@@ -431,7 +431,7 @@ async fn run_decide(
     comment: Vec<String>,
 ) {
     tracing_subscriber::fmt::init();
-    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
     let store: Arc<dyn oe_castore::Store> = Arc::new(open_store(&cfg).await);
     let journal = Arc::new(open_journal(&cfg));
     let recorder: Arc<dyn oe_raflow::Recorder> = Arc::new(AuditRecorder(journal));
@@ -483,7 +483,7 @@ async fn run_operators_bootstrap_admin(name: String, ttl_minutes: i64) {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
     // Ouvre le magasin de la CA pour appliquer les migrations, comme `serve`.
     let _ = open_store(&cfg).await;
     let registry = oe_actions::Registry::connect(&cfg.dsn)

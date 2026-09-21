@@ -106,7 +106,23 @@ fn to_time_duration(d: Duration, fallback: time::Duration) -> time::Duration {
 }
 
 impl Config {
+    /// Configuration complète : tout ce que `serve`, `ceremony` et `revoke` exigent,
+    /// PIN du token de la CA émettrice et adresse publique comprises.
     pub fn load() -> Result<Config, String> {
+        Self::load_with(true)
+    }
+
+    /// Pour les commandes qui n'ouvrent aucun token PKCS#11 et ne gravent aucune
+    /// adresse dans un certificat (`ra list|approve|reject`,
+    /// `operators bootstrap-admin`) : le PIN de l'émettrice et l'adresse publique
+    /// ne sont pas exigés. Quiconque n'a pas ce secret peut ainsi les lancer, ce
+    /// qui est le but : moins de secrets répandus dans les commandes d'exploitation.
+    /// Ce qui reste exigé (DSN, journal, durées) est validé comme avant.
+    pub fn load_without_hsm() -> Result<Config, String> {
+        Self::load_with(false)
+    }
+
+    fn load_with(needs_hsm: bool) -> Result<Config, String> {
         let key_bits = env_u64("OPENEIDAS_CA_KEY_BITS", 4096)?;
         // Une CA signe des certificats qui lui survivent : sa clé est tenue
         // à une exigence au moins égale à celle des entités finales (ETSI
@@ -123,11 +139,11 @@ impl Config {
             );
         }
         let issuing_pin = std::env::var("OPENEIDAS_ISSUING_PIN").unwrap_or_default();
-        if issuing_pin.is_empty() {
+        if needs_hsm && issuing_pin.is_empty() {
             return Err("OPENEIDAS_ISSUING_PIN est obligatoire (code PIN du token PKCS#11 de la CA émettrice)".to_string());
         }
         let public_url = env_str("OPENEIDAS_PKI_PUBLIC_URL", "");
-        if public_url.is_empty() {
+        if needs_hsm && public_url.is_empty() {
             return Err("OPENEIDAS_PKI_PUBLIC_URL est obligatoire (adresse publique gravée dans les extensions CDP/AIA)".to_string());
         }
         let root_pin = std::env::var("OPENEIDAS_ROOT_PIN").unwrap_or_default();
