@@ -139,31 +139,8 @@ impl Registry {
         c: NewCredential<'_>,
         now: OffsetDateTime,
     ) -> Result<(), sqlx::Error> {
-        let passkey = serde_json::to_value(c.passkey).map_err(|e| sqlx::Error::Encode(e.into()))?;
-        let id = credential_id(c.passkey.cred_id().as_ref());
-        sqlx::query(
-            "INSERT INTO webauthn_credentials
-               (credential_id, operator_id, public_key, aaguid, attestation_format,
-                attestation_object, backup_eligible, label, initiated_by, initiated_at,
-                confirmed_by, confirmed_at, passkey)
-             VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8, $9, $10, $11, $12)",
-        )
-        .bind(id)
-        .bind(c.operator_id)
-        // Copie lisible sans la bibliothèque : la clé complète est dans `passkey`.
-        .bind(passkey.to_string().into_bytes())
-        .bind(c.aaguid)
-        .bind(c.attestation_format)
-        .bind(c.attestation_object)
-        .bind(c.label)
-        .bind(c.initiated_by)
-        .bind(now)
-        .bind(c.confirmed_by)
-        .bind(c.confirmed_by.map(|_| now))
-        .bind(passkey)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut conn = self.pool.acquire().await?;
+        insert_credential(&mut conn, c, now).await
     }
 
     pub async fn operator(&self, id: Uuid) -> Result<Option<Operator>, sqlx::Error> {
@@ -251,6 +228,39 @@ impl Registry {
             .await?;
         Ok(())
     }
+}
+
+/// Même inscription, dans la transaction de l'appelant.
+pub(crate) async fn insert_credential(
+    conn: &mut sqlx::PgConnection,
+    c: NewCredential<'_>,
+    now: OffsetDateTime,
+) -> Result<(), sqlx::Error> {
+    let passkey = serde_json::to_value(c.passkey).map_err(|e| sqlx::Error::Encode(e.into()))?;
+    let id = credential_id(c.passkey.cred_id().as_ref());
+    sqlx::query(
+        "INSERT INTO webauthn_credentials
+           (credential_id, operator_id, public_key, aaguid, attestation_format,
+            attestation_object, backup_eligible, label, initiated_by, initiated_at,
+            confirmed_by, confirmed_at, passkey)
+         VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8, $9, $10, $11, $12)",
+    )
+    .bind(id)
+    .bind(c.operator_id)
+    // Copie lisible sans la bibliothèque : la clé complète est dans `passkey`.
+    .bind(passkey.to_string().into_bytes())
+    .bind(c.aaguid)
+    .bind(c.attestation_format)
+    .bind(c.attestation_object)
+    .bind(c.label)
+    .bind(c.initiated_by)
+    .bind(now)
+    .bind(c.confirmed_by)
+    .bind(c.confirmed_by.map(|_| now))
+    .bind(passkey)
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -559,3 +559,97 @@ async fn revoke_rejects_empty_operator() {
         "révoquer sans identité d'opérateur doit être refusé — traçabilité de la décision"
     );
 }
+
+fn public_key() -> Vec<u8> {
+    SoftwareToken::generate(2048).public_key_der().unwrap()
+}
+
+#[tokio::test]
+async fn internal_client_only_accepts_its_fixed_common_name() {
+    let store = store();
+    let (issuer, _) = issuer_from_ceremony(store.clone()).await;
+    let p = profile::internal_client();
+
+    let err = issuer
+        .issue(&public_key(), "quelqu-un-d-autre", &p, "txn-x")
+        .await
+        .expect_err("un autre CN doit être refusé");
+    assert!(err.to_string().contains("ra-console"), "{err}");
+
+    let cert = issuer
+        .issue(&public_key(), "ra-console", &p, "txn-c")
+        .await
+        .expect("le CN imposé est admis");
+    oe_conformance::check_internal_client_certificate("client", &cert).unwrap();
+    assert!(oe_conformance::has_certificate_policy(
+        &cert,
+        oe_conformance::OID_POLICY_INTERNAL_CLIENT
+    ));
+    // Aucune politique de l'autre profil, aucun SAN.
+    assert!(!oe_conformance::has_certificate_policy(
+        &cert,
+        oe_conformance::OID_POLICY_INTERNAL_SERVER
+    ));
+    assert!(oe_conformance::dns_names(&cert).is_empty());
+}
+
+#[tokio::test]
+async fn internal_server_takes_its_san_from_a_dns_common_name() {
+    let store = store();
+    let (issuer, _) = issuer_from_ceremony(store.clone()).await;
+    let p = profile::internal_server();
+
+    for bad in ["CA", "ca server", "*.example.test", "10.0.0.1", "-ca", ""] {
+        assert!(
+            issuer.issue(&public_key(), bad, &p, "txn-x").await.is_err(),
+            "{bad:?} ne doit pas être admis"
+        );
+    }
+
+    let cert = issuer
+        .issue(&public_key(), "ca.internal.svc", &p, "txn-s")
+        .await
+        .unwrap();
+    oe_conformance::check_internal_server_certificate("serveur", &cert).unwrap();
+    assert_eq!(oe_conformance::dns_names(&cert), vec!["ca.internal.svc"]);
+}
+
+#[tokio::test]
+async fn the_internal_checks_tell_the_profiles_apart() {
+    let store = store();
+    let (issuer, _) = issuer_from_ceremony(store.clone()).await;
+    let client = issuer
+        .issue(
+            &public_key(),
+            "ra-console",
+            &profile::internal_client(),
+            "t1",
+        )
+        .await
+        .unwrap();
+    let server = issuer
+        .issue(
+            &public_key(),
+            "ca.internal.svc",
+            &profile::internal_server(),
+            "t2",
+        )
+        .await
+        .unwrap();
+    let tsu = issuer
+        .issue(
+            &public_key(),
+            "tsu.example.test",
+            &profile::tsa_signer(),
+            "t3",
+        )
+        .await
+        .unwrap();
+
+    // Un certificat de serveur ne passe pas pour un client, et inversement.
+    assert!(oe_conformance::check_internal_client_certificate("x", &server).is_err());
+    assert!(oe_conformance::check_internal_server_certificate("x", &client).is_err());
+    // Un certificat de TSU (autre EKU, aucune politique) n'est ni l'un ni l'autre.
+    assert!(oe_conformance::check_internal_client_certificate("x", &tsu).is_err());
+    assert!(oe_conformance::check_internal_server_certificate("x", &tsu).is_err());
+}

@@ -383,6 +383,9 @@ impl Flow {
         verify_hmac(csr_der, &self.opts.hmac_secret, signature_hex)?;
         let profile = oe_ca_core::profile_by_name(profile_name).map_err(RaflowError::Other)?;
         let (cn, spki_der) = parse_and_verify_csr(csr_der)?;
+        // Refusé dès le dépôt : une demande vouée à l'échec à l'émission ne
+        // doit pas occuper un opérateur RA.
+        profile.validate_cn(&cn).map_err(RaflowError::Other)?;
 
         let fp = fingerprint(csr_der);
         let existing = match self.opts.store.request_by_fingerprint(&fp).await {
