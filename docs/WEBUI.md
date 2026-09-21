@@ -1756,7 +1756,9 @@ façon.
 
 ### Surface d'attaque du binaire
 
-- **`ra-console` ne lie ni `oe-hsm` ni `cryptoki`** : pas de module PKCS#11
+- **`ra-console` ne lie pas `cryptoki`** (elle garde, de `oe-hsm`, le seul trait
+  `SigningToken` : la feature `pkcs11` est désactivée, et
+  `bin/ra-console/tests/no_pkcs11.rs` lit le graphe réel des dépendances) : pas de module PKCS#11
   dans son image de conteneur, pas de variable `OPENEIDAS_PIN`, pas de
   volume de token à monter. L'image est plus petite et son profil
   `cargo audit` est mécaniquement plus court que celui de `ca-server`.

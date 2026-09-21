@@ -14,11 +14,11 @@ workspace = true
 name = "ra-console"
 path = "src/main.rs"
 
-# ra-console n'ouvre jamais de session PKCS#11 (docs/WEBUI.md §16) : aucune
-# dépendance directe à oe-hsm ni à oe-ca-core, dont le code de signature n'a rien
-# à faire ici (oe-enroll ne tire d'oe-hsm que le trait `SigningToken`, pour signer
-# sa CSR avec une clé logicielle). Les constantes du lien interne viennent de
-# oe-conformance.
+# ra-console n'ouvre jamais de session PKCS#11 (docs/WEBUI.md §16) et ne lie pas
+# `cryptoki` : aucune dépendance directe à oe-hsm ni à oe-ca-core. oe-enroll ne tire
+# d'oe-hsm que le trait `SigningToken` (sans la feature `pkcs11`), pour signer sa CSR
+# avec une clé logicielle. `tests/no_pkcs11.rs` lit le graphe réel et échoue si
+# `cryptoki` y revient. Les constantes du lien interne viennent de oe-conformance.
 [dependencies]
 oe-conformance = { path = "../../crates/oe-conformance" }
 oe-enroll = { path = "../../crates/oe-enroll" }
