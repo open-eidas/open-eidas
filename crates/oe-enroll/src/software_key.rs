@@ -1,5 +1,6 @@
-//! Certificat du serveur du lien interne (docs/WEBUI.md §14, §16) : la clé
-//! logicielle, sa CSR, et l'écriture des fichiers que lit `serve`.
+//! Clé logicielle du lien interne `ra-console` ↔ `ca-server` (docs/WEBUI.md
+//! §14, §16), partagée par les deux services : la clé, et l'écriture des fichiers
+//! qu'ils relisent.
 //!
 //! La clé est logicielle par conception : elle n'authentifie qu'un canal et ne
 //! signe ni certificat, ni jeton, ni réponse OCSP. Elle reste sur le volume du

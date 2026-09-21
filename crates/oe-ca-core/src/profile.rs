@@ -11,7 +11,7 @@ pub const PROFILE_INTERNAL_CLIENT: &str = "internal_client";
 pub const PROFILE_INTERNAL_SERVER: &str = "internal_server";
 
 /// Le seul nom courant que `internal_client` accepte (docs/WEBUI.md §16).
-pub const INTERNAL_CLIENT_CN: &str = "ra-console";
+pub use oe_conformance::INTERNAL_CLIENT_CN;
 
 pub use oe_conformance::{
     OID_EKU_CLIENT_AUTH, OID_EKU_SERVER_AUTH, OID_POLICY_INTERNAL_CLIENT,

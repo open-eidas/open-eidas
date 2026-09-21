@@ -17,7 +17,7 @@ use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use oe_actions::{Action, Error, Service};
 use oe_webauthn::{PublicKeyCredential, RegisterPublicKeyCredential, Uuid};
@@ -66,6 +66,7 @@ struct RegisterFinish {
 
 pub fn router(service: Arc<Service>, max_request_bytes: usize) -> Router {
     Router::new()
+        .route("/internal/v1/ping", get(handle_ping))
         .route("/internal/v1/challenge", post(handle_challenge))
         .route("/internal/v1/actions", post(handle_actions))
         .route("/internal/v1/register/begin", post(handle_register_begin))
@@ -114,6 +115,13 @@ fn failure(e: Error) -> Response {
         return error(status, code, "journal indisponible, action non émise");
     }
     error(status, code, e.to_string())
+}
+
+/// Ne fait rien, et ne dit rien de plus que « je suis là » : `ra-console` s'en
+/// sert pour savoir si le lien interne (mTLS compris) fonctionne, sans avoir à
+/// forger une action.
+async fn handle_ping() -> Response {
+    Json(serde_json::json!({ "ok": true })).into_response()
 }
 
 async fn handle_challenge(State(service): State<Arc<Service>>, body: Bytes) -> Response {

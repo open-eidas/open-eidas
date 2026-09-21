@@ -75,7 +75,7 @@ jobs:
           set -o pipefail
           test -n "$OE_CASTORE_TEST_DSN" || { echo "::error::OE_CASTORE_TEST_DSN n'est pas définie"; exit 1; }
           pg_isready -h localhost -p 5432 -U postgres || { echo "::error::PostgreSQL ne répond pas : les tests seraient ignorés"; exit 1; }
-          cargo test -p oe-castore -p oe-actions -p ca-server --features oe-castore/postgres -- --nocapture 2>&1 | tee pg-tests.log
+          cargo test -p oe-castore -p oe-actions -p ca-server -p ra-console --features oe-castore/postgres -- --nocapture 2>&1 | tee pg-tests.log
           if grep -q "test PostgreSQL ignoré" pg-tests.log; then
             echo "::error::des tests PostgreSQL se sont ignorés alors que la base est censée être disponible"
             grep -n "test PostgreSQL ignoré" pg-tests.log | head

@@ -12,9 +12,7 @@
 
 use std::sync::Arc;
 
-use ca_server::{
-    config, http, internal, internal_cert, internal_tls, registry_check, revoker, webauthn_models,
-};
+use ca_server::{config, http, internal, internal_tls, registry_check, revoker, webauthn_models};
 use clap::{Parser, Subcommand};
 use config::Config;
 use oe_hsm::SigningToken;
@@ -776,8 +774,10 @@ async fn run_internal_cert_server(dns: String) {
         die("nom DNS", e);
     }
 
-    let key = internal_cert::load_or_create_key(std::path::Path::new(&cfg.internal_tls_key_file))
-        .unwrap_or_else(|e| die("clé du serveur interne", e));
+    let key = oe_enroll::software_key::load_or_create_key(std::path::Path::new(
+        &cfg.internal_tls_key_file,
+    ))
+    .unwrap_or_else(|e| die("clé du serveur interne", e));
     let (csr_der, _) = oe_enroll::build_csr(&key, &oe_enroll::Subject { common_name: dns })
         .unwrap_or_else(|e| die("demande de certificat", e));
 
@@ -807,7 +807,7 @@ async fn run_internal_cert_server(dns: String) {
             let pem = cert
                 .to_pem(der::pem::LineEnding::LF)
                 .unwrap_or_else(|e| die("encodage du certificat", e));
-            internal_cert::write_certificate(
+            oe_enroll::software_key::write_certificate(
                 std::path::Path::new(&cfg.internal_tls_cert_file),
                 &pem,
             )
