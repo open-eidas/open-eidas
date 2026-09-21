@@ -235,6 +235,43 @@ lancé à la demande (ou par un job périodique, avec une alerte hors console) ;
 lancement au démarrage et le blocage des actions sur constat relèvent de
 `operators reconcile`, à venir.
 
+### Registre restauré en arrière : rejeu du journal et `reconcile`
+
+Le journal chaîné est un fichier, répliqué hors de l'hôte : il n'est pas restauré
+avec la base. Une clé révoquée à T réapparaît donc **active** dans une base
+restaurée à T-1 alors que le journal atteste la révocation. Le journal fait foi
+pour le registre ([docs/WEBUI.md](WEBUI.md) §21).
+
+Quand le lien interne est activé, `ca-server` rejoue au démarrage, puis toutes les
+`OPENEIDAS_REGISTRY_CHECK_INTERVAL` (60 s), les événements du journal qui touchent
+le registre et les compare à la base. Toute divergence **ferme la garde** :
+plus aucun challenge, aucune exécution, aucune inscription de clé
+(`registry_blocked`, 503), et `/healthz` passe en 503 avec le détail. Un journal
+illisible ou rompu ferme aussi la garde : on ne juge pas le registre contre un
+journal douteux. Une divergence doit persister quelques secondes pour fermer la
+garde (le journal s'écrit *avant* la validation en base : un contrôle qui tombe
+dans cette fenêtre ne doit rien bloquer).
+
+```bash
+ca-server operators reconcile --reason "base restaurée du 2026-09-18" --dry-run
+ca-server operators reconcile --reason "base restaurée du 2026-09-18"
+# une clé perdue ne se recrée pas : on en prend acte, ou on la ré-enrôle
+ca-server operators reconcile --reason "…" --acknowledge-missing <credential_id>
+```
+
+- **Réparable** : une révocation ou un rôle du journal absent de la base est
+  ré-appliqué.
+- **Non réparable** : une clé que le journal dit active et que la base n'a plus. Le
+  journal ne porte pas la clé publique : `reconcile` ne peut pas la recréer, et n'en
+  prend acte que sur `--acknowledge-missing`, motivé, consigné au journal. La clé se
+  ré-enrôle par une invitation. On ne cache jamais une clé perdue.
+- Chaque résolution s'écrit au journal (`operators.reconciled`) **avant** d'être
+  validée : journal en échec, rien n'est modifié.
+- Codes de sortie : `0` tout est résolu ; `1` reste des divergences ; `2` journal
+  illisible ou rompu.
+
+La garde se rouvre au contrôle suivant (au plus 60 s) ou au redémarrage.
+
 ## 4. Enrôlement et approbation
 
 ```
@@ -410,4 +447,5 @@ il est porté comme exigence hors périmètre dans la matrice.
 | `OPENEIDAS_INTERNAL_LISTEN` | — (désactivé) | Adresse du lien interne `/internal/v1/*` |
 | `OPENEIDAS_INTERNAL_TLS_CERT_FILE` / `_KEY_FILE` | — | Certificat `internal_server` et sa clé (PEM). Les deux ou aucun ; sans eux, boucle locale seulement |
 | `OPENEIDAS_WEBAUTHN_RP_ID` / `_ORIGIN` / `_RP_NAME` | — (obligatoires avec le lien interne, sauf le nom) | Relying Party WebAuthn des opérateurs |
+| `OPENEIDAS_REGISTRY_CHECK_INTERVAL` | 60s | Fréquence du contrôle du registre contre le journal (avec le lien interne) |
 | `OPENEIDAS_WEBAUTHN_MODELS_FILE` | — (obligatoire avec le lien interne) | Liste blanche de modèles de clés (JSON : `description`, `aaguid`, `root_pem`) |

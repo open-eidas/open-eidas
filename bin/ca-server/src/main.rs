@@ -7,12 +7,14 @@
 //! du « big bang ».
 //!
 //! Sous-commandes : `ceremony`, `serve`, `ra list|approve|reject`, `revoke`,
-//! `operators bootstrap-admin|recover-admin|audit`, `internal-cert server`, `conformance`,
+//! `operators bootstrap-admin|recover-admin|audit|reconcile`, `internal-cert server`, `conformance`,
 //! `healthcheck`, `verify-audit`.
 
 use std::sync::Arc;
 
-use ca_server::{config, http, internal, internal_cert, internal_tls, revoker, webauthn_models};
+use ca_server::{
+    config, http, internal, internal_cert, internal_tls, registry_check, revoker, webauthn_models,
+};
 use clap::{Parser, Subcommand};
 use config::Config;
 use oe_hsm::SigningToken;
@@ -97,6 +99,27 @@ enum OperatorsAction {
         /// Durée de validité de l'invitation, en minutes (1 à 1440).
         #[arg(long, default_value_t = 15)]
         ttl_minutes: i64,
+    },
+    /// Résout les divergences entre le registre et le journal chaîné
+    /// (docs/WEBUI.md §21), par exemple après une restauration de la base : le
+    /// journal fait foi. Une révocation ou un rôle du journal absent de la base est
+    /// ré-appliqué ; une clé perdue ne peut pas être recréée, et n'est acquittée
+    /// que sur demande explicite. Chaque résolution est consignée au journal.
+    /// Code de sortie 0 : tout est résolu ; 1 : reste des divergences ; 2 : journal
+    /// illisible ou rompu.
+    Reconcile {
+        /// Motif écrit (consigné au journal).
+        #[arg(long)]
+        reason: String,
+        /// Prend acte de la perte de cette clé (à ré-enrôler). Répétable.
+        #[arg(long = "acknowledge-missing")]
+        acknowledge_missing: Vec<String>,
+        /// Montre ce qui serait fait, sans rien modifier ni écrire au journal.
+        #[arg(long)]
+        dry_run: bool,
+        /// Journal à lire (défaut : `OPENEIDAS_AUDIT_FILE`).
+        #[arg(long)]
+        journal: Option<String>,
     },
     /// Audite la chaîne du registre (docs/WEBUI.md §21) : chaque clé active se
     /// remonte, signatures re-vérifiées, jusqu'à une ancre attestée par le journal
@@ -359,7 +382,11 @@ async fn build_actions_service(
     store: Arc<dyn oe_castore::Store>,
     recorder: Arc<dyn oe_raflow::Recorder>,
     issuer: Arc<oe_ca_core::Issuer>,
-) -> Arc<oe_actions::Service> {
+) -> (
+    Arc<oe_actions::Service>,
+    Arc<oe_actions::RegistryGuard>,
+    oe_actions::Registry,
+) {
     for (name, value) in [
         ("OPENEIDAS_WEBAUTHN_RP_ID", &cfg.webauthn_rp_id),
         ("OPENEIDAS_WEBAUTHN_ORIGIN", &cfg.webauthn_origin),
@@ -387,17 +414,23 @@ async fn build_actions_service(
         recorder: Some(recorder.clone()),
         clock: None,
     });
-    Arc::new(
+    // Fermée tant que le contrôle du registre contre le journal n'a pas dit
+    // qu'il est sain : le service ne sert rien avant.
+    let guard = oe_actions::RegistryGuard::new();
+    guard.block(vec!["contrôle du registre en cours".to_string()]);
+    let service = Arc::new(
         oe_actions::Service::new(
-            registry,
+            registry.clone(),
             verifier,
             store,
             decider,
             recorder,
             Arc::new(time::OffsetDateTime::now_utc),
         )
-        .with_revoker(Arc::new(revoker::IssuerRevoker(issuer))),
-    )
+        .with_revoker(Arc::new(revoker::IssuerRevoker(issuer)))
+        .with_guard(guard.clone()),
+    );
+    (service, guard, registry)
 }
 
 fn build_flow(
@@ -476,9 +509,17 @@ async fn run_serve() {
     let internal_service = if cfg.internal_listen.is_empty() {
         None
     } else {
-        Some(
-            build_actions_service(&cfg, store.clone(), flow_recorder.clone(), issuer.clone()).await,
+        let (service, guard, registry) =
+            build_actions_service(&cfg, store.clone(), flow_recorder.clone(), issuer.clone()).await;
+        // Avant d'ouvrir quoi que ce soit : le registre est-il conforme au journal ?
+        registry_check::refresh(
+            &registry,
+            &cfg.audit_file,
+            &guard,
+            std::time::Duration::ZERO,
         )
+        .await;
+        Some((service, guard, registry))
     };
     let internal_tls = internal_link_tls(&cfg, issuer.certificate());
     let internal_store = store.clone();
@@ -508,13 +549,22 @@ async fn run_serve() {
         ])),
     );
 
-    let server = Arc::new(http::Server::new(
-        issuer.clone(),
-        flow,
-        env!("CARGO_PKG_VERSION").to_string(),
-    ));
+    let mut server = http::Server::new(issuer.clone(), flow, env!("CARGO_PKG_VERSION").to_string());
+    if let Some((_, guard, _)) = &internal_service {
+        server = server.with_registry_guard(guard.clone());
+    }
+    let server = Arc::new(server);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    if let Some((_, guard, registry)) = &internal_service {
+        registry_check::spawn_periodic(
+            registry.clone(),
+            cfg.audit_file.clone(),
+            guard.clone(),
+            cfg.registry_check_interval,
+            shutdown_rx.clone(),
+        );
+    }
     server
         .start_crl_publication(cfg.crl_refresh, shutdown_rx.clone())
         .await
@@ -526,7 +576,7 @@ async fn run_serve() {
         .unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.listen), e));
     tracing::info!(adresse = %cfg.listen, emettrice = %server.issuer().certificate().tbs_certificate().subject(), "autorité de certification en écoute");
 
-    if let Some(service) = internal_service {
+    if let Some((service, _, _)) = internal_service {
         let tcp = tokio::net::TcpListener::bind(bind_addr(&cfg.internal_listen))
             .await
             .unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.internal_listen), e));
@@ -782,6 +832,69 @@ async fn run_internal_cert_server(dns: String) {
     }
 }
 
+async fn run_operators_reconcile(
+    reason: String,
+    acknowledge_missing: Vec<String>,
+    dry_run: bool,
+    journal: Option<String>,
+) {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
+    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let _ = open_store(&cfg).await;
+    let registry = oe_actions::Registry::connect(&cfg.dsn)
+        .await
+        .unwrap_or_else(|e| die("ouverture du registre des opérateurs", e));
+    let path = journal.unwrap_or_else(|| cfg.audit_file.clone());
+    let events = registry_check::journal_events(&path).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        eprintln!("Rien n'est résolu contre un journal dont l'intégrité n'est pas garantie.");
+        std::process::exit(2);
+    });
+    // Les résolutions s'écrivent dans le même journal que celui qu'on a relu.
+    let recorder = AuditRecorder(Arc::new(open_journal(&cfg)));
+
+    let outcome = oe_actions::reconcile(
+        &registry,
+        &recorder,
+        &oe_actions::Replay::from_events(events),
+        &reason,
+        &acknowledge_missing,
+        dry_run,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap_or_else(|e| die("résolution des divergences", e));
+
+    for line in &outcome.resolved {
+        println!("OK\t{line}");
+    }
+    for d in &outcome.unresolved {
+        println!("KO\t{d}");
+    }
+    eprintln!(
+        "{} résolue(s), {} en suspens.{}",
+        outcome.resolved.len(),
+        outcome.unresolved.len(),
+        if dry_run {
+            " (essai à blanc : rien n'a été modifié)"
+        } else {
+            ""
+        }
+    );
+    if !outcome.unresolved.is_empty() {
+        eprintln!(
+            "Une clé perdue se ré-enrôle (invitation) ; `--acknowledge-missing <clé> --reason …` \
+             en prend acte au journal."
+        );
+        std::process::exit(1);
+    }
+    if !dry_run {
+        eprintln!("Les actions reprennent au prochain contrôle du registre (OPENEIDAS_REGISTRY_CHECK_INTERVAL) ou au redémarrage.");
+    }
+}
+
 async fn run_operators_audit(journal: Option<String>) {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -1004,6 +1117,12 @@ async fn main() {
                 run_operators_bootstrap_admin(name, ttl_minutes).await
             }
             OperatorsAction::Audit { journal } => run_operators_audit(journal).await,
+            OperatorsAction::Reconcile {
+                reason,
+                acknowledge_missing,
+                dry_run,
+                journal,
+            } => run_operators_reconcile(reason, acknowledge_missing, dry_run, journal).await,
             OperatorsAction::RecoverAdmin {
                 name,
                 reason,

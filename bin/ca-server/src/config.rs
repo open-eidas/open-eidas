@@ -63,6 +63,8 @@ pub struct Config {
     /// deux ou aucun : sans eux, le lien n'écoute que sur la boucle locale.
     pub internal_tls_cert_file: String,
     pub internal_tls_key_file: String,
+    /// Fréquence du contrôle du registre contre le journal (docs/WEBUI.md §21).
+    pub registry_check_interval: Duration,
 }
 
 fn env_str(key: &str, fallback: &str) -> String {
@@ -247,6 +249,10 @@ impl Config {
             webauthn_models_file: env_str("OPENEIDAS_WEBAUTHN_MODELS_FILE", ""),
             internal_tls_cert_file: env_str("OPENEIDAS_INTERNAL_TLS_CERT_FILE", ""),
             internal_tls_key_file: env_str("OPENEIDAS_INTERNAL_TLS_KEY_FILE", ""),
+            registry_check_interval: env_duration(
+                "OPENEIDAS_REGISTRY_CHECK_INTERVAL",
+                Duration::from_secs(60),
+            )?,
         })
     }
 }

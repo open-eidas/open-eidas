@@ -34,6 +34,8 @@ pub struct Server {
     /// jamais reconstruite par requête — son contenu ne change qu'au
     /// redémarrage du service.
     repository_html: String,
+    /// Fermée quand le registre des opérateurs diverge du journal (§21).
+    registry_guard: Option<Arc<oe_actions::RegistryGuard>>,
 }
 
 impl Server {
@@ -66,7 +68,15 @@ impl Server {
                 err: None,
             }),
             repository_html,
+            registry_guard: None,
         }
+    }
+
+    /// Fait dépendre `/healthz` de la garde du registre : un registre qui diverge
+    /// du journal met le service en 503, avec le détail.
+    pub fn with_registry_guard(mut self, guard: Arc<oe_actions::RegistryGuard>) -> Server {
+        self.registry_guard = Some(guard);
+        self
     }
 
     pub fn issuer(&self) -> &oe_ca_core::Issuer {
@@ -521,6 +531,18 @@ async fn handle_health(State(server): State<Arc<Server>>) -> Response {
             detail = format!("dernière publication en échec : {err}");
         }
     }
+    // Un registre qui diverge du journal n'exécute aucune action : c'est visible ici.
+    let registry_blocked = server.registry_guard.as_ref().and_then(|g| g.blocked());
+    if let Some(reasons) = &registry_blocked {
+        statut = "degrade";
+        status = StatusCode::SERVICE_UNAVAILABLE;
+        let text = format!("registre des opérateurs bloqué : {}", reasons.join(" ; "));
+        detail = if detail.is_empty() {
+            text
+        } else {
+            format!("{detail} ; {text}")
+        };
+    }
 
     let body = serde_json::json!({
         "statut": statut,
@@ -529,6 +551,7 @@ async fn handle_health(State(server): State<Arc<Server>>) -> Response {
         "crl_numero": crl_numero,
         "crl_next_update": crl_next_update,
         "detail": if detail.is_empty() { None } else { Some(detail) },
+        "registre_bloque": registry_blocked,
     });
     (status, Json(body)).into_response()
 }

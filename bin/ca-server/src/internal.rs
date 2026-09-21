@@ -99,6 +99,7 @@ fn failure(e: Error) -> Response {
         Error::StateLost => (StatusCode::CONFLICT, "ceremony_lost"),
         Error::Verification(_) => (StatusCode::UNAUTHORIZED, "signature_rejected"),
         Error::Journal(_) => (StatusCode::SERVICE_UNAVAILABLE, "journal_unavailable"),
+        Error::Blocked(_) => (StatusCode::SERVICE_UNAVAILABLE, "registry_blocked"),
         Error::Db(_) | Error::Effect(_) => {
             tracing::error!(erreur = %e, "action interne en échec");
             return error(

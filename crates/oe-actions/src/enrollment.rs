@@ -161,6 +161,7 @@ impl Service {
     /// Ouvre la cérémonie d'enregistrement. Ne consomme pas le jeton : un
     /// navigateur qui échoue ou une clé mal branchée se réessaient.
     pub async fn begin_registration(&self, token: &str) -> Result<RegistrationBegun, Error> {
+        self.ensure_open()?;
         let now = self.now();
         let invite = self.live_invite(InviteKey::Token(token), now).await?;
 
@@ -215,6 +216,7 @@ impl Service {
         ceremony_id: Uuid,
         credential: &RegisterPublicKeyCredential,
     ) -> Result<Registered, Error> {
+        self.ensure_open()?;
         let now = self.now();
         let pending = self
             .registrations

@@ -23,18 +23,22 @@
 mod assertion;
 mod audit;
 mod enrollment;
+mod guard;
 mod onboarding;
 mod quorum;
 mod registry;
 mod registry_actions;
+mod replay;
 mod revocation;
 
 pub use enrollment::{key_fingerprint, KeyStatus, Registered, RegistrationBegun, PENDING_TTL};
 pub use onboarding::{bootstrap_admin, recover_admin, Invite, MAX_INVITE_TTL, MIN_INVITE_TTL};
 
 pub use audit::{audit_registry, AuditReport, JournalView, KeyReport, Verdict};
+pub use guard::RegistryGuard;
 pub use quorum::{QUORUM, QUORUM_WINDOW};
 pub use registry::{credential_id, Key, NewCredential, Operator, Registry, Role};
+pub use replay::{find_divergences, reconcile, Divergence, ReconcileOutcome, Replay};
 pub use revocation::Revoker;
 
 use oe_castore::{RequestState, Store, StoreError};
@@ -179,6 +183,8 @@ pub enum Error {
     Db(#[from] sqlx::Error),
     #[error("exécution : {0}")]
     Effect(String),
+    #[error("registre bloqué, aucune action n'est exécutée : {0}")]
+    Blocked(String),
 }
 
 /// Un challenge émis, à présenter à l'opérateur.
@@ -234,6 +240,8 @@ pub struct Service {
     // Sans lui, la révocation de certificat est refusée : un service qui ne
     // sait pas révoquer ne doit pas faire signer une révocation.
     revoker: Option<Arc<dyn Revoker>>,
+    // Fermée tant que le registre diverge du journal (§21) ; ouverte si absente.
+    guard: Option<Arc<RegistryGuard>>,
 }
 
 impl Service {
@@ -255,6 +263,22 @@ impl Service {
             pending: Mutex::new(HashMap::new()),
             registrations: Mutex::new(HashMap::new()),
             revoker: None,
+            guard: None,
+        }
+    }
+
+    /// Branche la garde du registre : tant qu'elle est fermée, ce service
+    /// n'émet aucun challenge, n'exécute aucune action et n'enregistre aucune clé.
+    pub fn with_guard(mut self, guard: Arc<RegistryGuard>) -> Service {
+        self.guard = Some(guard);
+        self
+    }
+
+    /// Échec fermé si le registre est bloqué.
+    pub(crate) fn ensure_open(&self) -> Result<(), Error> {
+        match self.guard.as_ref().and_then(|g| g.blocked()) {
+            Some(reasons) => Err(Error::Blocked(reasons.join(" ; "))),
+            None => Ok(()),
         }
     }
 
@@ -388,6 +412,7 @@ impl Service {
         action: Action,
         operator_hint: Uuid,
     ) -> Result<Issued, Error> {
+        self.ensure_open()?;
         let operator = self.eligible_signer(operator_hint, &action).await?;
         let required = self.required_signatures(&action).await?;
         if required > 1 {
@@ -492,6 +517,7 @@ impl Service {
         operator_hint: Uuid,
     ) -> Result<Issued, Error> {
         use sqlx::Row;
+        self.ensure_open()?;
         let now = self.now();
         let row = sqlx::query(
             "SELECT body, body_hash, expires_at, executed_at, required_signatures
@@ -591,6 +617,7 @@ impl Service {
         challenge_id: Uuid,
         assertion: &PublicKeyCredential,
     ) -> Result<Executed, Error> {
+        self.ensure_open()?;
         let now = self.now();
 
         let row = sqlx::query(
