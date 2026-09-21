@@ -720,15 +720,20 @@ async fn run_internal_cert_server(dns: String) {
                 &pem,
             )
             .unwrap_or_else(|e| die("écriture du certificat", e));
+            // Rien de `result` n'est affiché : c'est une valeur qui porte le certificat,
+            // et l'analyse de flux de données la traite comme sensible même pour un
+            // champ public (l'identifiant de demande). Le chemin, lui, vient de la
+            // configuration.
             eprintln!(
-                "Certificat émis (demande {}), écrit dans {}.",
-                result.transaction_id, cfg.internal_tls_cert_file
+                "Certificat émis, écrit dans {}.",
+                cfg.internal_tls_cert_file
             );
         }
         None => {
             eprintln!(
-                "Demande {} en attente d'approbation ({:?}). Un opérateur l'approuve avec `ca-server ra approve`, puis relancez cette commande.",
-                result.transaction_id, result.state
+                "Demande déposée, en attente d'approbation. Un opérateur la retrouve avec \
+                 `ca-server ra list PENDING` et l'approuve avec `ca-server ra approve`, \
+                 puis relancez cette commande."
             );
             std::process::exit(3);
         }
