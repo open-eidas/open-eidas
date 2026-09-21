@@ -378,14 +378,32 @@ fn random_serial_number() -> Vec<u8> {
     use rand::RngCore;
     let mut bytes = [0u8; 20];
     rand::thread_rng().fill_bytes(&mut bytes);
-    if bytes[0] & 0x80 != 0 {
-        let mut padded = Vec::with_capacity(21);
-        padded.push(0);
-        padded.extend_from_slice(&bytes);
-        padded
-    } else {
-        bytes.to_vec()
+    minimal_positive_integer(&bytes)
+}
+
+/// Les octets de contenu d'un `INTEGER` DER **minimal** et positif pour cet
+/// entier big-endian (X.690 §8.3.2) : aucun octet de tête superflu, et un `0x00`
+/// devant seulement si le bit de poids fort est posé (sinon le nombre serait lu
+/// négatif).
+///
+/// Le bug corrigé ici : le tirage de 20 octets commençait parfois par `0x00`
+/// (1 fois sur 256), suivi d'un octet `< 0x80` (1 fois sur 2). Ce `0x00` était
+/// gardé tel quel, l'`INTEGER` n'était plus minimal, et un vérificateur strict
+/// (OpenSSL : « illegal padding », champ `serial`) rejetait le jeton, soit environ
+/// **un jeton d'horodatage sur 512**.
+fn minimal_positive_integer(bytes: &[u8; 20]) -> Vec<u8> {
+    // Retire les zéros de tête ; s'il n'en reste rien, le nombre est 0, ce qui n'est
+    // pas un numéro de série admissible : on prend 1. (Probabilité : 2⁻¹⁶⁰.)
+    let significant = match bytes.iter().position(|b| *b != 0) {
+        Some(i) => &bytes[i..],
+        None => &[1u8][..],
+    };
+    let mut out = Vec::with_capacity(significant.len() + 1);
+    if significant[0] & 0x80 != 0 {
+        out.push(0);
     }
+    out.extend_from_slice(significant);
+    out
 }
 
 /// Convertit une durée en `Accuracy` (secondes/millis/micros), en reproduisant
@@ -592,5 +610,66 @@ mod tests {
         // `openssl ts -reply -text` dans le test bout-en-bout.
         let encoded = minimal_positive_int(1).unwrap();
         assert_eq!(encoded.as_bytes(), &[1]);
+    }
+}
+
+#[cfg(test)]
+mod serial_tests {
+    use super::*;
+    use der::{Decode, Encode};
+
+    /// Ce qu'un vérificateur strict fait : décoder l'`INTEGER` en DER, qui refuse
+    /// tout encodage non minimal.
+    fn strictly_decodes(content: &[u8]) -> bool {
+        let der = Int::new(content).and_then(|i| i.to_der());
+        matches!(der, Ok(bytes) if Int::from_der(&bytes).is_ok()
+            && bytes.len() == content.len() + 2)
+    }
+
+    fn padded(prefix: &[u8]) -> [u8; 20] {
+        let mut b = [0x11u8; 20];
+        b[..prefix.len()].copy_from_slice(prefix);
+        b
+    }
+
+    #[test]
+    fn the_serial_is_minimal_positive_der_for_every_shape_of_leading_bytes() {
+        let cases: [(&[u8], &[u8]); 6] = [
+            // Le cas fautif : 0x00 devant un octet < 0x80.
+            (&[0x00, 0x01], &[0x01]),
+            (&[0x00, 0x00, 0x7f], &[0x7f]),
+            // Un zéro de tête que le bit de poids fort du suivant rend nécessaire.
+            (&[0x00, 0x80], &[0x00, 0x80]),
+            (&[0x00, 0x00, 0xff], &[0x00, 0xff]),
+            // Aucun zéro de tête, bit de poids fort posé : un seul 0x00 est ajouté.
+            (&[0x80], &[0x00, 0x80]),
+            (&[0x7f], &[0x7f]),
+        ];
+        for (prefix, expected_start) in cases {
+            let out = minimal_positive_integer(&padded(prefix));
+            assert!(
+                out.starts_with(expected_start),
+                "{prefix:02x?} : {out:02x?} ne commence pas par {expected_start:02x?}"
+            );
+            assert!(strictly_decodes(&out), "{prefix:02x?} : {out:02x?}");
+            // Jamais négatif ni superflu.
+            assert!(
+                out.len() < 2 || out[0] != 0 || out[1] & 0x80 != 0,
+                "{out:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_all_zero_draw_becomes_one() {
+        assert_eq!(minimal_positive_integer(&[0u8; 20]), vec![1]);
+    }
+
+    #[test]
+    fn random_serials_always_decode_strictly() {
+        // 1 tirage sur ~512 était fautif : 20 000 tirages l'auraient vu ~40 fois.
+        for _ in 0..20_000 {
+            assert!(strictly_decodes(&random_serial_number()));
+        }
     }
 }
