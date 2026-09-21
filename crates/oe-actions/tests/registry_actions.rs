@@ -255,8 +255,7 @@ async fn an_admin_invites_and_confirms_the_invitee_key() {
             alice.id,
         )
         .await
-        .err()
-        .expect("empreinte fausse");
+        .expect_err("empreinte fausse");
     assert!(matches!(wrong, Error::Denied(_)), "{wrong}");
     assert_eq!(
         env.count("SELECT count(*) FROM pending_credentials").await,
@@ -304,8 +303,7 @@ async fn only_an_admin_may_touch_the_registry() {
             ra.id,
         )
         .await
-        .err()
-        .expect("un ra_operateur n'invite pas");
+        .expect_err("un ra_operateur n'invite pas");
     assert!(matches!(err, Error::Denied(_)), "{err}");
     assert_eq!(
         env.count("SELECT count(*) FROM operators WHERE name = 'eve'")
@@ -362,8 +360,7 @@ async fn nobody_confirms_their_own_key() {
             bob.id,
         )
         .await
-        .err()
-        .expect("auto-confirmation");
+        .expect_err("auto-confirmation");
     assert!(matches!(err, Error::Denied(_)), "{err}");
     assert_eq!(
         env.count("SELECT count(*) FROM pending_credentials").await,
@@ -487,8 +484,7 @@ async fn a_key_revocation_needs_a_reason_and_never_removes_the_last_admin() {
             alice.id,
         )
         .await
-        .err()
-        .expect("motif obligatoire");
+        .expect_err("motif obligatoire");
     assert!(matches!(err, Error::BadRequest(_)), "{err}");
 
     // La clé du seul administrateur.
@@ -502,8 +498,7 @@ async fn a_key_revocation_needs_a_reason_and_never_removes_the_last_admin() {
             alice.id,
         )
         .await
-        .err()
-        .expect("dernier administrateur");
+        .expect_err("dernier administrateur");
     assert!(matches!(err, Error::Denied(_)), "{err}");
 
     // La clé d'un autre opérateur, elle, se révoque.
@@ -529,7 +524,6 @@ async fn a_key_revocation_needs_a_reason_and_never_removes_the_last_admin() {
             alice.id,
         )
         .await
-        .err()
-        .expect("déjà révoquée");
+        .expect_err("déjà révoquée");
     assert!(matches!(err, Error::Denied(_)), "{err}");
 }

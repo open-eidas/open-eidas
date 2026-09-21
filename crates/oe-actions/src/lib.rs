@@ -24,11 +24,13 @@ mod enrollment;
 mod onboarding;
 mod registry;
 mod registry_actions;
+mod revocation;
 
 pub use enrollment::{key_fingerprint, KeyStatus, Registered, RegistrationBegun, PENDING_TTL};
 pub use onboarding::{bootstrap_admin, Invite, MAX_INVITE_TTL, MIN_INVITE_TTL};
 
 pub use registry::{credential_id, Key, NewCredential, Operator, Registry, Role};
+pub use revocation::Revoker;
 
 use oe_castore::{RequestState, Store, StoreError};
 use oe_raflow::Decider;
@@ -85,6 +87,16 @@ pub enum Action {
         operator: String,
         role: Role,
     },
+    /// Révoque un certificat émis et republie la CRL. `serial` est le numéro
+    /// de série en hexadécimal minuscule, sans préfixe : la forme canonique
+    /// est exigée pour que le corps signé n'ait qu'une écriture.
+    RevokeCertificate {
+        serial: String,
+        /// Code RFC 5280 §5.3.1. « unspecified » (0) est refusé : il ne
+        /// justifie pas une décision devant un auditeur.
+        reason: i32,
+        comment: String,
+    },
 }
 
 fn default_invite_ttl_minutes() -> i64 {
@@ -100,6 +112,7 @@ impl Action {
             Action::ConfirmKey { .. } => "confirm_key",
             Action::RevokeKey { .. } => "revoke_key",
             Action::SetRole { .. } => "set_role",
+            Action::RevokeCertificate { .. } => "revoke_certificate",
         }
     }
 
@@ -116,6 +129,8 @@ impl Action {
             | Action::ConfirmKey { .. }
             | Action::RevokeKey { .. }
             | Action::SetRole { .. } => &[Role::Admin],
+            // Décider de la fin de vie d'un certificat est un acte de la CA.
+            Action::RevokeCertificate { .. } => &[Role::CaOperateur],
         }
     }
 
@@ -162,6 +177,7 @@ pub enum Error {
 }
 
 /// Un challenge émis, à présenter à l'opérateur.
+#[derive(Debug)]
 pub struct Issued {
     pub challenge_id: Uuid,
     pub action_id: Uuid,
@@ -202,6 +218,9 @@ pub struct Service {
     pending: Mutex<HashMap<Uuid, Pending>>,
     // Idem pour les cérémonies d'enregistrement de clé.
     registrations: Mutex<HashMap<Uuid, enrollment::PendingRegistration>>,
+    // Sans lui, la révocation de certificat est refusée : un service qui ne
+    // sait pas révoquer ne doit pas faire signer une révocation.
+    revoker: Option<Arc<dyn Revoker>>,
 }
 
 impl Service {
@@ -222,7 +241,14 @@ impl Service {
             clock,
             pending: Mutex::new(HashMap::new()),
             registrations: Mutex::new(HashMap::new()),
+            revoker: None,
         }
+    }
+
+    /// Branche la CA qui exécute les révocations de certificats.
+    pub fn with_revoker(mut self, revoker: Arc<dyn Revoker>) -> Service {
+        self.revoker = Some(revoker);
+        self
     }
 
     fn now(&self) -> OffsetDateTime {
@@ -276,6 +302,7 @@ impl Service {
             Action::ApproveRequest { .. } | Action::RejectRequest { .. } => {
                 self.check_target(action).await
             }
+            Action::RevokeCertificate { .. } => self.check_revocation(action).await,
             _ => self
                 .run_registry_action(action, actor, self.now(), false)
                 .await
@@ -556,6 +583,14 @@ impl Service {
                 .await
                 .map(|_| None)
                 .map_err(|e| Error::Effect(e.to_string()))?,
+            Action::RevokeCertificate {
+                serial,
+                reason,
+                comment,
+            } => Some(
+                self.revoke_certificate(serial, *reason, &operator.name, comment)
+                    .await?,
+            ),
             registry_action => Some(
                 self.run_registry_action(registry_action, &operator, now, true)
                     .await?,

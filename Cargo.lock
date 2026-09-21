@@ -296,6 +296,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 name = "ca-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "clap",
@@ -1472,6 +1473,7 @@ dependencies = [
 name = "oe-actions"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "hex",
  "oe-castore",
  "oe-raflow",

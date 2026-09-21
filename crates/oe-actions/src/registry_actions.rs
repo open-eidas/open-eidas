@@ -320,9 +320,11 @@ impl Service {
                 serde_json::json!({ "operator": operator, "role": role.as_str() })
             }
 
-            Action::ApproveRequest { .. } | Action::RejectRequest { .. } => {
+            Action::ApproveRequest { .. }
+            | Action::RejectRequest { .. }
+            | Action::RevokeCertificate { .. } => {
                 return Err(Error::BadRequest(
-                    "action de demande d'enrôlement, pas de registre".to_string(),
+                    "action hors du registre des opérateurs".to_string(),
                 ))
             }
         };
