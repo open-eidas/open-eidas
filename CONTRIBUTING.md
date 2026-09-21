@@ -40,7 +40,7 @@ pour le détail de chaque point :
   `release-please` sur `dev`.
 
 ```bash
-git clone https://github.com/open-eidas/open-eidas.git
+git clone https://github.com/otspi/open-eidas.git
 cd open-eidas
 git checkout dev
 git checkout -b feat/ma-contribution

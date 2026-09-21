@@ -41,7 +41,7 @@ curl -s -X POST http://localhost:8318/api/v1/timestamp \
 
 ## Déploiement avec ArgoCD
 
-Voir [open-eidas/deploy](https://github.com/open-eidas/deploy), dépôt
+Voir [otspi/deploy](https://github.com/otspi/deploy), dépôt
 app-of-apps qui référence ce chart.
 
 ## Déploiement public de démonstration (staging)
@@ -55,7 +55,7 @@ L'API d'enrôlement, elle, n'est jamais exposée : seuls les services du
 cluster s'y adressent.
 
 Préalables sur le cluster cible (à provisionner séparément, non gérés par ce
-chart — voir [open-eidas/deploy](https://github.com/open-eidas/deploy) pour
+chart — voir [otspi/deploy](https://github.com/otspi/deploy) pour
 ce qui EST géré par ce dépôt) :
 
 1. Une Gateway API (`gateway.networking.k8s.io`) nommée `shared-gateway`
@@ -66,7 +66,7 @@ ce qui EST géré par ce dépôt) :
    Gateway : `api.staging.open-eidas.eu`, `pki.staging.open-eidas.eu` et
    `ocsp.staging.open-eidas.eu`.
 3. Le Secret `open-eidas-generated` (scellé via kubeseal, voir
-   `open-eidas/deploy`) déjà présent dans le namespace `open-eidas-staging`,
+   `otspi/deploy`) déjà présent dans le namespace `open-eidas-staging`,
    ainsi que le Cluster CloudNativePG qu'il amorce.
 
 Puis, soit en `helm install` direct :
@@ -77,8 +77,8 @@ helm install open-eidas deploy/helm/open-eidas \
     -f deploy/helm/open-eidas/values-staging.yaml
 ```
 
-soit via ArgoCD : [apps/open-eidas-staging.yaml](https://github.com/open-eidas/deploy/blob/main/apps/open-eidas-staging.yaml)
-dans le dépôt [open-eidas/deploy](https://github.com/open-eidas/deploy).
+soit via ArgoCD : [apps/open-eidas-staging.yaml](https://github.com/otspi/deploy/blob/main/apps/open-eidas-staging.yaml)
+dans le dépôt [otspi/deploy](https://github.com/otspi/deploy).
 
 ## Architecture du chart
 
