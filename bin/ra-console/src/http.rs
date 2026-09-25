@@ -1,10 +1,11 @@
-//! Routes de `ra-console`. Pour l'instant : `/healthz` (aucune authentification
-//! d'opérateur n'est encore branchée).
+//! Routes de `ra-console` (docs/WEBUI.md §5, §15) : `/healthz`, l'enregistrement
+//! et la connexion WebAuthn, les sessions, et la première route de lecture
+//! seule (`/api/v1/requests`, étape 2a).
 
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -15,7 +16,8 @@ use sqlx::PgPool;
 
 use crate::ca_link::{CaLink, Relayed};
 use crate::login::{LoginError, LoginService};
-use crate::session::{SessionError, Sessions, COOKIE_NAME, SESSION_TTL};
+use crate::requests;
+use crate::session::{Authenticated, SessionError, Sessions, COOKIE_NAME, SESSION_TTL};
 
 /// Assez pour un objet d'attestation, pas pour bourrer la mémoire.
 const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -42,6 +44,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/webauthn/login/finish", post(handle_login_finish))
         .route("/api/v1/me", get(handle_me))
         .route("/api/v1/logout", post(handle_logout))
+        .route("/api/v1/requests", get(handle_requests))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
@@ -367,20 +370,71 @@ fn session_id_from(headers: &HeaderMap) -> Option<String> {
     })
 }
 
+/// Authentifie la requête par son cookie de session, ou rend directement la
+/// réponse 401 uniforme à retourner (§16 : absente, expirée, révoquée,
+/// opérateur désactivé ne se distinguent jamais).
+///
+/// `Response` est volontairement l'`Err`, malgré sa taille (`clippy::result_large_err`,
+/// visible seulement sur la toolchain 1.98 de la CI) : c'est justement la réponse à
+/// renvoyer telle quelle à l'appelant, la boxer n'apporterait rien ici.
+#[allow(clippy::result_large_err)]
+async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Authenticated, Response> {
+    let id = session_id_from(headers).ok_or_else(unauthenticated)?;
+    state
+        .sessions
+        .authenticate(&id)
+        .await
+        .map_err(|SessionError::Invalid| unauthenticated())
+}
+
 /// `GET /api/v1/me` : identité et rôle relus en base à l'instant de l'appel
 /// (§16, une session ne porte qu'un identifiant, jamais une décision mise en
 /// cache).
 async fn handle_me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    let Some(id) = session_id_from(&headers) else {
-        return unauthenticated();
-    };
-    match state.sessions.authenticate(&id).await {
+    match authenticate(&state, &headers).await {
         Ok(a) => Json(serde_json::json!({
             "operator": a.operator,
             "role": a.role.as_str(),
         }))
         .into_response(),
-        Err(SessionError::Invalid) => unauthenticated(),
+        Err(resp) => resp,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestsQuery {
+    state: Option<String>,
+}
+
+/// `GET /api/v1/requests?state=PENDING` : la file d'enrôlement, en lecture
+/// seule (docs/WEBUI.md §5, §15 étape 2a). Le rôle minimal documenté
+/// (`auditeur`) n'est, comme tout contrôle de rôle de `ra-console`, qu'un
+/// affichage (§3) : toute session authentifiée peut lire cette route, la
+/// vraie barrière reste côté `ca-server` pour l'écriture.
+async fn handle_requests(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<RequestsQuery>,
+) -> Response {
+    if let Err(resp) = authenticate(&state, &headers).await {
+        return resp;
+    }
+    if let Some(s) = &q.state {
+        if !requests::STATES.contains(&s.as_str()) {
+            return error(StatusCode::BAD_REQUEST, "bad_request", "état invalide");
+        }
+    }
+    match requests::list(&state.pool, q.state.as_deref()).await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(erreur = %e, "requests : base indisponible");
+            error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                "service indisponible",
+            )
+        }
     }
 }
 
