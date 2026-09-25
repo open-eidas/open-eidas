@@ -20,7 +20,7 @@ total moins de 2 Go de limites mémoire cumulées, voir `values.yaml`).
 L'exposition externe se fait via la [Gateway API](https://gateway-api.sigs.k8s.io/)
 (`HTTPRoute`), pas via un Ingress classique ; les secrets sensibles et le
 PostgreSQL de staging sont gérés en dehors du chart, dans le dépôt
-app-of-apps [open-eidas/deploy](https://github.com/open-eidas/deploy).
+app-of-apps [otspi/deploy](https://github.com/otspi/deploy).
 
 ## 0. Outils requis en local
 
@@ -40,14 +40,14 @@ Trois briques tournent en dehors du chart open-eidas et sont prérequises :
    mode Gateway API, ou tout contrôleur listé par le projet upstream).
 2. **[sealed-secrets](https://github.com/bitnami-labs/sealed-secrets)**, pour
    déchiffrer côté cluster les Secret scellés committés dans
-   `open-eidas/deploy` :
+   `otspi/deploy` :
    ```bash
    helm install sealed-secrets sealed-secrets \
        --repo https://bitnami-labs.github.io/sealed-secrets \
        --namespace sealed-secrets --create-namespace
    ```
 3. **[CloudNativePG](https://cloudnative-pg.io/)**, pour le PostgreSQL de
-   staging (un Cluster CR géré par `open-eidas/deploy`, pas le StatefulSet
+   staging (un Cluster CR géré par `otspi/deploy`, pas le StatefulSet
    intégré au chart) :
    ```bash
    kubectl apply --server-side -f \
@@ -122,7 +122,7 @@ kubeseal --controller-namespace sealed-secrets \
 shred -u /tmp/open-eidas-generated.yaml
 ```
 
-Committer `sealed-secret.yaml` dans `open-eidas/deploy` (voir son README),
+Committer `sealed-secret.yaml` dans `otspi/deploy` (voir son README),
 avec le Cluster CloudNativePG qui le consomme via
 `bootstrap.initdb.secret.name`. Une fois ces manifestes fusionnés et
 synchronisés (ArgoCD ou `kubectl apply` direct), vérifier que le Secret a
@@ -148,7 +148,7 @@ helm install open-eidas deploy/helm/open-eidas \
 **Option B — ArgoCD** (si déjà installé sur le cluster) :
 
 Appliquer une fois `root-app.yaml` du dépôt
-[open-eidas/deploy](https://github.com/open-eidas/deploy) (motif
+[otspi/deploy](https://github.com/otspi/deploy) (motif
 app-of-apps) :
 
 ```bash

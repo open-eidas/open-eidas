@@ -88,7 +88,7 @@ for repo in "${REPOS[@]}"; do
   echo "  Traitement du dépôt : $repo"
   echo "=================================================================="
 
-  DESC="[Miroir] Dépôt miroir d'Open eIDAS. Les contributions et issues se font sur https://github.com/open-eidas/$repo"
+  DESC="[Miroir] Dépôt miroir d'Open eIDAS. Les contributions et issues se font sur https://github.com/otspi/$repo"
 
   # --- A. CODEBERG ---
   echo "  [Codeberg] Vérification de $CODEBERG_ORG/$repo..."
@@ -169,7 +169,7 @@ for repo in "${REPOS[@]}"; do
   # --- D. SYNCHRONISATION INITIALE ---
   echo "  [Sync] Synchronisation miroir immédiate pour $repo..."
   TMP_MIRROR=$(mktemp -d)
-  if git clone --bare "https://github.com/open-eidas/${repo}.git" "$TMP_MIRROR" 2>/dev/null; then
+  if git clone --bare "https://github.com/otspi/${repo}.git" "$TMP_MIRROR" 2>/dev/null; then
     git --git-dir="$TMP_MIRROR" push --prune --tags "https://${CODEBERG_TOKEN}@codeberg.org/${CODEBERG_ORG}/${repo}.git" "+refs/heads/*:refs/heads/*" || true
     git --git-dir="$TMP_MIRROR" push --prune --tags "https://oauth2:${GITLAB_TOKEN}@gitlab.com/${GITLAB_NAMESPACE}/${repo}.git" "+refs/heads/*:refs/heads/*" || true
     echo "  [Sync] $repo synchronisé avec succès sur Codeberg et GitLab."

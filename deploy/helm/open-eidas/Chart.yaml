@@ -8,9 +8,9 @@ description: >-
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-home: https://github.com/open-eidas/open-eidas
+home: https://github.com/otspi/open-eidas
 sources:
-  - https://github.com/open-eidas/open-eidas
+  - https://github.com/otspi/open-eidas
 keywords:
   - eidas
   - rfc3161
@@ -19,4 +19,4 @@ keywords:
   - certificate-authority
 maintainers:
   - name: Open eIDAS
-    url: https://github.com/open-eidas
+    url: https://github.com/otspi

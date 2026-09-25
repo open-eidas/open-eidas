@@ -88,7 +88,7 @@ l'infrastructure et l'audit initial.
 Prérequis : Docker avec le plugin Compose, `git`, `openssl`, `curl`.
 
 ```bash
-git clone https://github.com/open-eidas/open-eidas.git
+git clone https://github.com/otspi/open-eidas.git
 cd open-eidas
 
 make up      # amorce la CA, émet les certificats TSU et OCSP, démarre la pile
@@ -142,7 +142,7 @@ helm install open-eidas deploy/helm/open-eidas --namespace open-eidas --create-n
 ```
 
 Voir [deploy/helm/open-eidas/README.md](deploy/helm/open-eidas/README.md) et
-le dépôt app-of-apps [open-eidas/deploy](https://github.com/open-eidas/deploy).
+le dépôt app-of-apps [otspi/deploy](https://github.com/otspi/deploy).
 
 ## Documentation
 
@@ -190,8 +190,8 @@ conformité ETSI EN 319 421 / 319 422 et le développement des futurs services d
  
 - **Site web officiel :** [https://open-eidas.eu](https://open-eidas.eu)
 - **Contact :** [contact@open-eidas.eu](mailto:contact@open-eidas.eu)
-- **Organisation GitHub :** [github.com/open-eidas](https://github.com/open-eidas)
-- **Code source du site web :** [open-eidas/website](https://github.com/open-eidas/website)
+- **Organisation GitHub :** [github.com/otspi](https://github.com/otspi)
+- **Code source du site web :** [otspi/website](https://github.com/otspi/website)
 
 ## Licence
 
