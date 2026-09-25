@@ -11,7 +11,15 @@ description = "Moteur d'émission et de révocation de la CA (profils, cérémon
 workspace = true
 
 [dependencies]
-oe-hsm = { path = "../oe-hsm" }
+# `default-features = false` : ce crate n'utilise que le trait `SigningToken`
+# générique, jamais `Pkcs11Token` directement. Sans ce réglage, un binaire qui
+# dépend d'`oe-ca-core` sans avoir besoin d'ouvrir de session PKCS#11 (aucun
+# aujourd'hui, mais un futur consommateur en lecture seule y serait exposé)
+# lierait quand même `cryptoki` : les fonctionnalités d'une dépendance de chemin
+# partagée s'unifient sur tout le graphe d'un même binaire. `ca-server`, qui a
+# besoin de `Pkcs11Token`, la redemande explicitement dans son propre
+# `Cargo.toml`.
+oe-hsm = { path = "../oe-hsm", default-features = false }
 oe-certs = { path = "../oe-certs" }
 oe-castore = { path = "../oe-castore" }
 oe-conformance = { path = "../oe-conformance" }

@@ -15,8 +15,10 @@ use oe_ca_core::{profile, Issuer, Options, Profile};
 use oe_castore::{Memory, Store};
 use oe_hsm::testing::SoftwareToken;
 use ra_console::config::LinkConfig;
+use ra_console::login::LoginService;
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use rsa::RsaPrivateKey;
+use webauthn_authenticator_rs::softtoken::{SoftToken, AAGUID};
 use x509_cert::Certificate;
 
 pub const HOST: &str = "localhost";
@@ -157,6 +159,31 @@ impl Pki {
     pub fn issuing_der(&self) -> Vec<u8> {
         self.issuer.certificate().to_der().unwrap()
     }
+}
+
+/// Une `LoginService` réelle (vrai `Verifier`, vraie liste blanche à un
+/// modèle), pour les tests qui construisent un `AppState` complet — qu'ils
+/// exercent la connexion ou seulement les autres routes.
+pub fn login_service(pool: sqlx::PgPool) -> LoginService {
+    let (_token, root) = SoftToken::new(true).unwrap();
+    let models = oe_webauthn::trusted_models(&[oe_webauthn::TrustedModel {
+        root_pem: &root.to_pem().unwrap(),
+        aaguid: AAGUID,
+        description: "SoftToken (test)",
+    }])
+    .unwrap();
+    let verifier = oe_webauthn::Verifier::new(
+        HOST,
+        &oe_webauthn::Url::parse(&format!("https://{HOST}")).unwrap(),
+        "Open eIDAS Console — test",
+        models,
+    )
+    .unwrap();
+    LoginService::new(
+        oe_actions::Registry::new(pool),
+        verifier,
+        b"secret-de-test-au-moins-16-octets".to_vec(),
+    )
 }
 
 pub mod tempdir {

@@ -15,6 +15,10 @@ fn run(args: &[&str], env: &[(&str, &str)]) -> (i32, String) {
         "OPENEIDAS_CA_CERT_FILE",
         "OPENEIDAS_ENROLL_URL",
         "OPENEIDAS_ENROLL_HMAC_KEY",
+        "OPENEIDAS_WEBAUTHN_RP_ID",
+        "OPENEIDAS_WEBAUTHN_ORIGIN",
+        "OPENEIDAS_WEBAUTHN_MODELS_FILE",
+        "OPENEIDAS_LOGIN_DECOY_SECRET",
     ] {
         cmd.env_remove(key);
     }
@@ -51,6 +55,38 @@ fn serve_names_what_is_missing() {
     let (code, err) = run(&["serve"], &base);
     assert_eq!(code, 1);
     assert!(err.contains("OPENEIDAS_CA_CERT_FILE"), "{err}");
+
+    // La vérification des connexions (§15, étape 1c) est elle aussi exigée.
+    let mut with_ca_cert = base.to_vec();
+    with_ca_cert.push(("OPENEIDAS_CA_CERT_FILE", "/nulle/part.pem"));
+    let (code, err) = run(&["serve"], &with_ca_cert);
+    assert_eq!(code, 1);
+    assert!(err.contains("OPENEIDAS_WEBAUTHN_RP_ID"), "{err}");
+
+    let mut with_rp_id = with_ca_cert.clone();
+    with_rp_id.push(("OPENEIDAS_WEBAUTHN_RP_ID", "console.example.com"));
+    let (code, err) = run(&["serve"], &with_rp_id);
+    assert_eq!(code, 1);
+    assert!(err.contains("OPENEIDAS_WEBAUTHN_ORIGIN"), "{err}");
+
+    let mut with_origin = with_rp_id.clone();
+    with_origin.push(("OPENEIDAS_WEBAUTHN_ORIGIN", "https://console.example.com"));
+    let (code, err) = run(&["serve"], &with_origin);
+    assert_eq!(code, 1);
+    assert!(err.contains("OPENEIDAS_WEBAUTHN_MODELS_FILE"), "{err}");
+
+    let mut with_models = with_origin.clone();
+    with_models.push(("OPENEIDAS_WEBAUTHN_MODELS_FILE", "/nulle/part.json"));
+    let (code, err) = run(&["serve"], &with_models);
+    assert_eq!(code, 1);
+    assert!(err.contains("OPENEIDAS_LOGIN_DECOY_SECRET"), "{err}");
+
+    // Un secret trop court est refusé, pas seulement son absence.
+    let mut with_short_secret = with_models.clone();
+    with_short_secret.push(("OPENEIDAS_LOGIN_DECOY_SECRET", "trop-court"));
+    let (code, err) = run(&["serve"], &with_short_secret);
+    assert_eq!(code, 1);
+    assert!(err.contains("OPENEIDAS_LOGIN_DECOY_SECRET"), "{err}");
 }
 
 #[test]

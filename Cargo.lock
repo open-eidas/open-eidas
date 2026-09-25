@@ -1760,9 +1760,12 @@ dependencies = [
 name = "oe-webauthn"
 version = "0.1.0"
 dependencies = [
+ "rand 0.8.8",
+ "serde_json",
  "thiserror 2.0.20",
  "webauthn-authenticator-rs",
  "webauthn-rs",
+ "webauthn-rs-proto",
 ]
 
 [[package]]
@@ -2049,6 +2052,7 @@ dependencies = [
  "ca-server",
  "clap",
  "der 0.8.2",
+ "hmac",
  "http-body-util",
  "oe-actions",
  "oe-ca-core",
@@ -2065,6 +2069,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "thiserror 2.0.20",
  "time",

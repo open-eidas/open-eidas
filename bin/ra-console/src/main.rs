@@ -7,7 +7,8 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use ra_console::ca_link::CaLink;
 use ra_console::config::Config;
-use ra_console::{db_guard, http};
+use ra_console::login::LoginService;
+use ra_console::{db_guard, http, webauthn_models};
 use sqlx::postgres::PgPoolOptions;
 
 #[derive(Parser)]
@@ -67,7 +68,23 @@ async fn run_serve() {
         Err(e) => tracing::warn!(erreur = %e, "lien vers ca-server indisponible au démarrage"),
     }
 
-    let app = http::router(Arc::new(http::AppState { pool, link }));
+    // Vérification des connexions (docs/WEBUI.md §15, étape 1c) : le même format
+    // de liste blanche que `ca-server`, mais un exemplaire propre à la console
+    // (§16, elle ne dépend d'aucun code de ca-server).
+    let models = webauthn_models::load(&cfg.webauthn.models_file)
+        .unwrap_or_else(|e| die("liste blanche de modèles WebAuthn", e));
+    let origin = oe_webauthn::Url::parse(&cfg.webauthn.origin)
+        .unwrap_or_else(|e| die("OPENEIDAS_WEBAUTHN_ORIGIN", e));
+    let verifier =
+        oe_webauthn::Verifier::new(&cfg.webauthn.rp_id, &origin, &cfg.webauthn.rp_name, models)
+            .unwrap_or_else(|e| die("configuration WebAuthn", e));
+    let login = LoginService::new(
+        oe_actions::Registry::new(pool.clone()),
+        verifier,
+        cfg.webauthn.login_decoy_secret.into_bytes(),
+    );
+
+    let app = http::router(Arc::new(http::AppState { pool, link, login }));
     let listener = tokio::net::TcpListener::bind(bind_addr(&cfg.listen))
         .await
         .unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.listen), e));
