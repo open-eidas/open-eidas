@@ -71,16 +71,27 @@ async fn the_token_pin_from_stdin_is_the_proof_of_custody() {
     let pool = PgPoolOptions::new().connect(&dsn).await.unwrap();
     let audit = dir.join("audit.log");
 
-    // `env_pin` : ce que porte le service dans son environnement.
-    let run = |args: &[&str], stdin: &str, env_pin: &str| -> Output {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_ca-server"))
-            .args(["operators", "recover-admin", "alice"])
+    // `env_pin` : ce que porte le service dans son environnement. `None` :
+    // absente, comme un opérateur sans ce secret la lancerait
+    // (`Config::load_without_hsm`).
+    let run = |args: &[&str], stdin: &str, env_pin: Option<&str>| -> Output {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ca-server"));
+        cmd.args(["operators", "recover-admin", "alice"])
             .args(args)
             .env("SOFTHSM2_CONF", dir.join("softhsm.conf"))
             .env("OPENEIDAS_DB_DSN", &dsn)
-            .env("OPENEIDAS_ISSUING_PIN", env_pin)
-            .env("OPENEIDAS_PKI_PUBLIC_URL", "https://pki.example.test")
-            .env("OPENEIDAS_AUDIT_FILE", &audit)
+            .env("OPENEIDAS_AUDIT_FILE", &audit);
+        match env_pin {
+            Some(pin) => {
+                cmd.env("OPENEIDAS_ISSUING_PIN", pin)
+                    .env("OPENEIDAS_PKI_PUBLIC_URL", "https://pki.example.test");
+            }
+            None => {
+                cmd.env_remove("OPENEIDAS_ISSUING_PIN")
+                    .env_remove("OPENEIDAS_PKI_PUBLIC_URL");
+            }
+        }
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -103,7 +114,11 @@ async fn the_token_pin_from_stdin_is_the_proof_of_custody() {
     };
 
     // Sans la confirmation explicite : refusé, sans même chercher le PIN.
-    let out = run(&["--reason", "perte", "--pin-stdin"], "1234\n", TOKEN_PIN);
+    let out = run(
+        &["--reason", "perte", "--pin-stdin"],
+        "1234\n",
+        Some(TOKEN_PIN),
+    );
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("--confirm-recovery"));
 
@@ -111,7 +126,7 @@ async fn the_token_pin_from_stdin_is_the_proof_of_custody() {
     let out = run(
         &["--reason", "perte", "--confirm-recovery"],
         "1234\n",
-        TOKEN_PIN,
+        Some(TOKEN_PIN),
     );
     assert!(!out.status.success());
 
@@ -120,7 +135,7 @@ async fn the_token_pin_from_stdin_is_the_proof_of_custody() {
     let out = run(
         &["--reason", "perte", "--confirm-recovery", "--pin-stdin"],
         "0000\n",
-        TOKEN_PIN,
+        Some(TOKEN_PIN),
     );
     assert!(!out.status.success());
     assert!(out.stdout.is_empty(), "aucun jeton ne doit sortir");
@@ -132,7 +147,9 @@ async fn the_token_pin_from_stdin_is_the_proof_of_custody() {
     assert!(!journal().contains("\"operators.admin_recovery\""));
     assert_eq!(operators().await, 0);
 
-    // Le bon PIN présenté, alors que l'environnement du service en porte un faux.
+    // Le bon PIN présenté, alors que le service n'a ni `OPENEIDAS_ISSUING_PIN`
+    // ni `OPENEIDAS_PKI_PUBLIC_URL` dans son environnement (`load_without_hsm`) :
+    // ce n'est pas ce que porte le service qui compte, et ce n'est pas exigé.
     let out = run(
         &[
             "--reason",
@@ -141,7 +158,7 @@ async fn the_token_pin_from_stdin_is_the_proof_of_custody() {
             "--pin-stdin",
         ],
         "1234\n",
-        "9999",
+        None,
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{stderr}");
