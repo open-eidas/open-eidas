@@ -12,6 +12,7 @@
 //! tables de `ca-server`, et le lien mTLS vers `ca-server`. Aucune authentification
 //! d'opérateur n'y est encore branchée.
 
+pub mod audit;
 pub mod ca_link;
 pub mod config;
 pub mod db_guard;

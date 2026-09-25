@@ -69,6 +69,7 @@ impl Env {
             registry.clone(),
             Verifier::new("console.example.com", &origin(), "test", models()).unwrap(),
             b"secret-de-test-au-moins-16-octets".to_vec(),
+            Arc::new(ra_console::audit::NullRecorder),
         );
 
         let pool = PgPoolOptions::new().connect(&dsn).await.unwrap();

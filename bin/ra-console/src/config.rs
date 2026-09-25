@@ -15,6 +15,9 @@ pub struct Config {
     /// Fréquence de la purge des sessions et challenges expirés (docs/WEBUI.md
     /// §15 étape 1c-2b).
     pub purge_interval: Duration,
+    /// Journal chaîné propre à `ra-console` (docs/WEBUI.md §7, §15 étape 2b-A) :
+    /// jamais celui de `ca-server`, une chaîne distincte.
+    pub audit_file: String,
 }
 
 /// Vérification des connexions (docs/WEBUI.md §15, étape 1c, §16) : `ra-console`
@@ -110,6 +113,10 @@ impl Config {
                 },
             },
             purge_interval: duration_seconds("OPENEIDAS_PURGE_INTERVAL_SECONDS", 60)?,
+            audit_file: optional(
+                "OPENEIDAS_RA_AUDIT_FILE",
+                "/var/lib/open-eidas/state/ra-console-audit.log",
+            ),
         })
     }
 

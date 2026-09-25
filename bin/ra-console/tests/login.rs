@@ -36,8 +36,17 @@ struct Env {
     registry: Registry,
     authn: WebauthnAuthenticator<SoftToken>,
     verifier: Verifier,
+    audit_file: std::path::PathBuf,
     _dir: Dir,
     _pki: common::Pki,
+}
+
+impl Env {
+    /// Le contenu du journal propre à `ra-console` (docs/WEBUI.md §7), tel
+    /// qu'un test le relit — jamais celui de `ca-server`.
+    fn journal_text(&self) -> String {
+        std::fs::read_to_string(&self.audit_file).unwrap_or_default()
+    }
 }
 
 impl Env {
@@ -69,10 +78,15 @@ impl Env {
             .unwrap()
         };
         let verifier = Verifier::new("console.example.com", &origin(), "test", models()).unwrap();
+        let audit_file = std::env::temp_dir().join(format!("{name}.ra-audit.log"));
+        let journal: Arc<dyn ra_console::audit::Recorder> = Arc::new(
+            ra_console::audit::AuditRecorder(Arc::new(oe_audit::Log::open(&audit_file).unwrap())),
+        );
         let login = LoginService::new(
             registry.clone(),
             Verifier::new("console.example.com", &origin(), "test", models()).unwrap(),
             DECOY_SECRET.to_vec(),
+            journal.clone(),
         );
 
         // Un lien vers ca-server injoignable : les routes de login ne le
@@ -91,8 +105,9 @@ impl Env {
             .port();
         let link = CaLink::new(&ca_pki.files(&dir, &client, dead)).unwrap();
 
+        let sessions = ra_console::session::Sessions::new(Registry::new(pool.clone()), journal);
         let console = router(Arc::new(AppState {
-            sessions: common::sessions(pool.clone()),
+            sessions,
             pool,
             link,
             login,
@@ -102,6 +117,7 @@ impl Env {
             registry,
             authn: WebauthnAuthenticator::new(token),
             verifier,
+            audit_file,
             _dir: dir,
             _pki: ca_pki,
         })
@@ -566,4 +582,42 @@ async fn logout_revokes_the_session() {
         .post_with_headers(LOGOUT, serde_json::json!({}), None)
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Une seule fermeture consignée : la déconnexion rejouée n'a rien fermé.
+    let journal = env.journal_text();
+    assert_eq!(journal.matches("ra.session_closed").count(), 1, "{journal}");
+}
+
+/// Le journal propre à `ra-console` (docs/WEBUI.md §7) consigne connexions et
+/// sessions, avec la vraie raison d'un refus — jamais visible, elle, dans la
+/// réponse HTTP uniforme (§16).
+#[tokio::test]
+async fn the_console_journal_records_connections_and_their_real_refusal_reason() {
+    let mut env = env!();
+    env.operator_with_key("alice").await;
+    env.log_in("alice").await;
+
+    let journal = env.journal_text();
+    assert!(journal.contains("ra.login_succeeded"), "{journal}");
+    assert!(journal.contains("ra.session_opened"), "{journal}");
+    assert!(journal.contains("\"alice\""), "{journal}");
+
+    // Un nom inconnu : le leurre est journalisé avec sa vraie raison, jamais
+    // uniforme comme la réponse HTTP.
+    let (_, begun) = env
+        .post(BEGIN, serde_json::json!({"name": "personne-de-ce-nom"}))
+        .await;
+    env.post(
+        FINISH,
+        serde_json::json!({
+            "challenge_id": begun["challenge_id"],
+            "credential": {"id": "x", "rawId": "eA", "response": {
+                "authenticatorData": "eA", "clientDataJSON": "eA", "signature": "eA"
+            }, "type": "public-key"},
+        }),
+    )
+    .await;
+    let journal = env.journal_text();
+    assert!(journal.contains("ra.login_refused"), "{journal}");
+    assert!(journal.contains("leurre"), "{journal}");
 }

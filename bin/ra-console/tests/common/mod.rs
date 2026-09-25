@@ -183,11 +183,15 @@ pub fn login_service(pool: sqlx::PgPool) -> LoginService {
         oe_actions::Registry::new(pool),
         verifier,
         b"secret-de-test-au-moins-16-octets".to_vec(),
+        std::sync::Arc::new(ra_console::audit::NullRecorder),
     )
 }
 
 pub fn sessions(pool: sqlx::PgPool) -> ra_console::session::Sessions {
-    ra_console::session::Sessions::new(oe_actions::Registry::new(pool))
+    ra_console::session::Sessions::new(
+        oe_actions::Registry::new(pool),
+        std::sync::Arc::new(ra_console::audit::NullRecorder),
+    )
 }
 
 pub mod tempdir {
