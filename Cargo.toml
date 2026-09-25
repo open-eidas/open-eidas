@@ -28,7 +28,7 @@ members = [
 [workspace.package]
 edition = "2021"
 rust-version = "1.97"
-license = "AGPL-3.0-or-later"
+license = "EUPL-1.2"
 repository = "https://github.com/open-eidas/open-eidas"
 
 [workspace.lints.rust]
