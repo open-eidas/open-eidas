@@ -128,12 +128,15 @@ impl Config {
         Self::load_with(true)
     }
 
-    /// Pour les commandes qui n'ouvrent aucun token PKCS#11 et ne gravent aucune
-    /// adresse dans un certificat (`ra list|approve|reject`,
-    /// `operators bootstrap-admin`) : le PIN de l'émettrice et l'adresse publique
-    /// ne sont pas exigés. Quiconque n'a pas ce secret peut ainsi les lancer, ce
-    /// qui est le but : moins de secrets répandus dans les commandes d'exploitation.
-    /// Ce qui reste exigé (DSN, journal, durées) est validé comme avant.
+    /// Pour les commandes qui n'ouvrent aucun token PKCS#11 avec le PIN du
+    /// service et ne gravent aucune adresse dans un certificat
+    /// (`ra list|approve|reject`, `operators bootstrap-admin|audit|reconcile`) :
+    /// le PIN de l'émettrice et l'adresse publique ne sont pas exigés. Quiconque
+    /// n'a pas ce secret peut ainsi les lancer, ce qui est le but : moins de
+    /// secrets répandus dans les commandes d'exploitation. `recover-admin` lit
+    /// aussi sa configuration ainsi : le PIN qu'elle vérifie vient de l'entrée
+    /// standard, jamais de `OPENEIDAS_ISSUING_PIN`. Ce qui reste exigé (DSN,
+    /// journal, durées) est validé comme avant.
     pub fn load_without_hsm() -> Result<Config, String> {
         Self::load_with(false)
     }

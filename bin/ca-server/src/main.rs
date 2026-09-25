@@ -841,7 +841,7 @@ async fn run_operators_reconcile(
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
     let _ = open_store(&cfg).await;
     let registry = oe_actions::Registry::connect(&cfg.dsn)
         .await
@@ -899,7 +899,7 @@ async fn run_operators_audit(journal: Option<String>) {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
     let _ = open_store(&cfg).await;
     let registry = oe_actions::Registry::connect(&cfg.dsn)
         .await
@@ -994,7 +994,7 @@ async fn run_operators_recover_admin(
         die("récupération", "aucun PIN reçu sur l'entrée standard");
     }
 
-    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
     let _ = open_store(&cfg).await;
     let registry = oe_actions::Registry::connect(&cfg.dsn)
         .await

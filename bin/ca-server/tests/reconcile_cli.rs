@@ -248,3 +248,42 @@ async fn the_registry_check_closes_the_guard_and_reopens_it() {
     ca_server::registry_check::refresh(&registry, path, &guard, zero).await;
     assert!(guard.blocked().unwrap()[0].contains("journal illisible ou rompu"));
 }
+
+/// `operators reconcile` n'ouvre aucun token PKCS#11 et ne grave aucune adresse
+/// dans un certificat : ni `OPENEIDAS_ISSUING_PIN` ni `OPENEIDAS_PKI_PUBLIC_URL`
+/// ne doivent être exigées (`Config::load_without_hsm`).
+#[tokio::test]
+async fn the_reconcile_command_does_not_require_hsm_configuration() {
+    let Ok(base) = std::env::var("OE_CASTORE_TEST_DSN") else {
+        eprintln!("OE_CASTORE_TEST_DSN non définie : test PostgreSQL ignoré");
+        return;
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let name = format!("reconohsm_{nanos}");
+    let admin = PgPoolOptions::new().connect(&base).await.unwrap();
+    sqlx::query(&format!("CREATE DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let dsn = format!("{}/{name}", base.rsplit_once('/').unwrap().0);
+    let audit = std::env::temp_dir().join(format!("{name}.audit.log"));
+
+    let run = |args: &[&str]| -> Output {
+        Command::new(env!("CARGO_BIN_EXE_ca-server"))
+            .args(args)
+            .env("OPENEIDAS_DB_DSN", &dsn)
+            .env_remove("OPENEIDAS_ISSUING_PIN")
+            .env_remove("OPENEIDAS_PKI_PUBLIC_URL")
+            .env("OPENEIDAS_AUDIT_FILE", &audit)
+            .output()
+            .expect("lancement de ca-server")
+    };
+
+    let out = run(&["operators", "bootstrap-admin", "alice"]);
+    assert!(out.status.success(), "{out:?}");
+    let out = run(&["operators", "reconcile", "--reason", "contrôle"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
