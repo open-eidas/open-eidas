@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use ra_console::ca_link::CaLink;
 use ra_console::config::Config;
 use ra_console::login::LoginService;
+use ra_console::session::Sessions;
 use ra_console::{db_guard, http, webauthn_models};
 use sqlx::postgres::PgPoolOptions;
 
@@ -83,8 +84,14 @@ async fn run_serve() {
         verifier,
         cfg.webauthn.login_decoy_secret.into_bytes(),
     );
+    let sessions = Sessions::new(oe_actions::Registry::new(pool.clone()));
 
-    let app = http::router(Arc::new(http::AppState { pool, link, login }));
+    let app = http::router(Arc::new(http::AppState {
+        pool,
+        link,
+        login,
+        sessions,
+    }));
     let listener = tokio::net::TcpListener::bind(bind_addr(&cfg.listen))
         .await
         .unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.listen), e));

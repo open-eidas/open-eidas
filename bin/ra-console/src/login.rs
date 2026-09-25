@@ -4,10 +4,10 @@
 //! `ra-console` vérifie elle-même l'assertion contre le registre en lecture
 //! seule : une session n'est jamais une ancre de confiance, `ca-server`
 //! re-vérifie chaque action (§16), mais la connexion elle-même n'a besoin
-//! d'aucun aller-retour vers `ca-server`. Cette tranche (1c-1) prouve
-//! l'identité et met à jour le compteur anti-clonage ; la session (cookie,
-//! `/api/v1/me`, déconnexion, purge, débit) est la tranche suivante (1c-2) —
-//! `finish` ne rend donc pour l'instant que l'identité vérifiée.
+//! d'aucun aller-retour vers `ca-server`. `finish` prouve l'identité et met à
+//! jour le compteur anti-clonage ; l'ouverture de la session elle-même (cookie,
+//! `/api/v1/me`, déconnexion) est l'affaire de `crate::session`, à partir de
+//! l'identité que ce module rend.
 //!
 //! Une seule erreur, `LoginError::Invalid`, sort de tout ce qui peut échouer
 //! après `begin` : nom inconnu, clé factice, challenge périmé ou déjà
@@ -41,10 +41,14 @@ pub struct Begun {
     pub options: RequestChallengeResponse,
 }
 
-/// Identité vérifiée par `login/finish`. Pas encore de session (1c-2).
+/// Identité vérifiée par `login/finish`. `operator_id` et `credential_id` :
+/// de quoi ouvrir une session (1c-2, `crate::session`), sans que ce module
+/// n'ait à connaître les sessions.
 pub struct Verified {
+    pub operator_id: Uuid,
     pub operator: String,
     pub role: Role,
+    pub credential_id: String,
 }
 
 pub struct LoginService {
@@ -219,8 +223,10 @@ impl LoginService {
         .map_err(|_| LoginError::Invalid)?;
 
         Ok(Verified {
+            operator_id: operator.id,
             operator: operator.name,
             role: operator.role,
+            credential_id,
         })
     }
 }

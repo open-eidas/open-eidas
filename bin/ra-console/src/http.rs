@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, State};
+use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -14,6 +15,7 @@ use sqlx::PgPool;
 
 use crate::ca_link::{CaLink, Relayed};
 use crate::login::{LoginError, LoginService};
+use crate::session::{SessionError, Sessions, COOKIE_NAME, SESSION_TTL};
 
 /// Assez pour un objet d'attestation, pas pour bourrer la mémoire.
 const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -22,6 +24,7 @@ pub struct AppState {
     pub pool: PgPool,
     pub link: CaLink,
     pub login: LoginService,
+    pub sessions: Sessions,
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -37,6 +40,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/v1/webauthn/login/begin", post(handle_login_begin))
         .route("/api/v1/webauthn/login/finish", post(handle_login_finish))
+        .route("/api/v1/me", get(handle_me))
+        .route("/api/v1/logout", post(handle_logout))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
@@ -274,8 +279,9 @@ async fn handle_login_begin(
 }
 
 /// `POST /api/v1/webauthn/login/finish` : assertion vérifiée contre le
-/// registre en lecture seule. Ne rend pas encore de session (1c-2, docs/WEBUI.md
-/// §15 étape 1c) : seulement l'identité, une fois l'assertion admise.
+/// registre en lecture seule, puis session ouverte (docs/WEBUI.md §15 étape
+/// 1c-2) — cookie `HttpOnly; Secure; SameSite=Strict` qui ne porte que
+/// `sessions.id`.
 async fn handle_login_finish(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -295,14 +301,33 @@ async fn handle_login_finish(
         Ok(c) => c,
         Err(_) => return invalid_credential(),
     };
-    match state.login.finish(challenge_id, &credential).await {
-        Ok(v) => Json(serde_json::json!({
-            "operator": v.operator,
-            "role": v.role.as_str(),
-        }))
-        .into_response(),
-        Err(LoginError::Invalid) => invalid_credential(),
-    }
+    let verified = match state.login.finish(challenge_id, &credential).await {
+        Ok(v) => v,
+        Err(LoginError::Invalid) => return invalid_credential(),
+    };
+    let session_id = match state
+        .sessions
+        .create(verified.operator_id, &verified.credential_id)
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(erreur = %e, "login/finish : ouverture de la session");
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                "service indisponible",
+            );
+        }
+    };
+    (
+        [(SET_COOKIE, set_session_cookie(&session_id))],
+        Json(serde_json::json!({
+            "operator": verified.operator,
+            "role": verified.role.as_str(),
+        })),
+    )
+        .into_response()
 }
 
 /// Une seule forme pour tout refus de `login/finish` (§16) : nom inconnu,
@@ -314,5 +339,76 @@ fn invalid_credential() -> Response {
         StatusCode::UNAUTHORIZED,
         "invalid_credential",
         "identifiants invalides",
+    )
+}
+
+/// `Set-Cookie` d'une session ouverte : `HttpOnly` (jamais lu par un script),
+/// `Secure` (jamais en clair), `SameSite=Strict` (jamais envoyé par un site
+/// tiers, y compris une navigation entrante) — docs/WEBUI.md §15 étape 1c-2.
+fn set_session_cookie(id: &str) -> String {
+    format!(
+        "{COOKIE_NAME}={id}; Path=/; Max-Age={}; HttpOnly; Secure; SameSite=Strict",
+        SESSION_TTL.whole_seconds()
+    )
+}
+
+/// Efface le cookie côté navigateur (déconnexion) : même forme, âge nul.
+fn clear_session_cookie() -> String {
+    format!("{COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict")
+}
+
+/// Lit l'identifiant de session dans l'en-tête `Cookie`. Un seul cookie
+/// nous intéresse : pas besoin d'une bibliothèque dédiée pour ce format.
+fn session_id_from(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(COOKIE)?.to_str().ok()?;
+    raw.split(';').find_map(|kv| {
+        let (k, v) = kv.trim().split_once('=')?;
+        (k == COOKIE_NAME).then(|| v.to_string())
+    })
+}
+
+/// `GET /api/v1/me` : identité et rôle relus en base à l'instant de l'appel
+/// (§16, une session ne porte qu'un identifiant, jamais une décision mise en
+/// cache).
+async fn handle_me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let Some(id) = session_id_from(&headers) else {
+        return unauthenticated();
+    };
+    match state.sessions.authenticate(&id).await {
+        Ok(a) => Json(serde_json::json!({
+            "operator": a.operator,
+            "role": a.role.as_str(),
+        }))
+        .into_response(),
+        Err(SessionError::Invalid) => unauthenticated(),
+    }
+}
+
+/// `POST /api/v1/logout` : révoque la session sans attendre son expiration.
+/// Idempotent, sans cookie ou avec un cookie déjà invalide compris : dans
+/// tous les cas, plus aucune session valide n'existe ensuite.
+async fn handle_logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Some(id) = session_id_from(&headers) {
+        if let Err(e) = state.sessions.revoke(&id).await {
+            tracing::error!(erreur = %e, "logout : révocation de la session");
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                "service indisponible",
+            );
+        }
+    }
+    (
+        StatusCode::NO_CONTENT,
+        [(SET_COOKIE, clear_session_cookie())],
+    )
+        .into_response()
+}
+
+fn unauthenticated() -> Response {
+    error(
+        StatusCode::UNAUTHORIZED,
+        "unauthenticated",
+        "connexion requise",
     )
 }

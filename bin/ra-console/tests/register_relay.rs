@@ -109,7 +109,8 @@ impl Env {
         let console = router(Arc::new(AppState {
             pool: pool.clone(),
             link,
-            login: common::login_service(pool),
+            login: common::login_service(pool.clone()),
+            sessions: common::sessions(pool),
         }));
 
         Some(Env {
@@ -349,7 +350,8 @@ async fn an_unreachable_ca_server_gives_a_generic_bad_gateway() {
     let console = router(Arc::new(AppState {
         pool: pool.clone(),
         link,
-        login: common::login_service(pool),
+        login: common::login_service(pool.clone()),
+        sessions: common::sessions(pool),
     }));
 
     let res = console
