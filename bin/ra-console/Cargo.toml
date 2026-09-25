@@ -44,6 +44,9 @@ time = { version = "0.3", features = ["std", "formatting", "serde"] }
 thiserror = "2"
 sha2 = "0.10"
 hmac = "0.12"
+# Identifiant de session (§16, 256 bits tirés du système), même construction
+# que les jetons d'invitation et de récupération côté ca-server.
+rand = "0.8"
 
 [dev-dependencies]
 oe-raflow = { path = "../../crates/oe-raflow" }
@@ -54,6 +57,5 @@ oe-castore = { path = "../../crates/oe-castore", features = ["postgres"] }
 oe-hsm = { path = "../../crates/oe-hsm" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rsa = "0.9"
-rand = "0.8"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

@@ -12,7 +12,7 @@ mod common;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use common::{pki, tempdir::Dir};
 use http_body_util::BodyExt;
 use oe_actions::{NewCredential, Registry, Role};
@@ -91,7 +91,12 @@ impl Env {
             .port();
         let link = CaLink::new(&ca_pki.files(&dir, &client, dead)).unwrap();
 
-        let console = router(Arc::new(AppState { pool, link, login }));
+        let console = router(Arc::new(AppState {
+            sessions: common::sessions(pool.clone()),
+            pool,
+            link,
+            login,
+        }));
         Some(Env {
             console,
             registry,
@@ -103,15 +108,52 @@ impl Env {
     }
 
     async fn post(&self, path: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+        let (status, _, body) = self.post_with_headers(path, body, None).await;
+        (status, body)
+    }
+
+    /// Comme `post`, mais expose les en-têtes de la réponse (`Set-Cookie`) et
+    /// accepte d'en présenter un (`Cookie`) — pour exercer la session.
+    async fn post_with_headers(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        cookie: Option<&str>,
+    ) -> (StatusCode, HeaderMap, serde_json::Value) {
+        let mut req = Request::post(path).header("content-type", "application/json");
+        if let Some(c) = cookie {
+            req = req.header("cookie", c);
+        }
         let res = self
             .console
             .clone()
-            .oneshot(
-                Request::post(path)
-                    .header("content-type", "application/json")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
-            )
+            .oneshot(req.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = res.status();
+        let headers = res.headers().clone();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            headers,
+            serde_json::from_slice(&bytes).unwrap_or_default(),
+        )
+    }
+
+    /// `GET` avec un cookie éventuel, pour `/api/v1/me`.
+    async fn get_with_cookie(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::get(path);
+        if let Some(c) = cookie {
+            req = req.header("cookie", c);
+        }
+        let res = self
+            .console
+            .clone()
+            .oneshot(req.body(Body::empty()).unwrap())
             .await
             .unwrap();
         let status = res.status();
@@ -148,6 +190,36 @@ impl Env {
             .await
             .unwrap();
         id
+    }
+}
+
+impl Env {
+    /// Connexion complète (begin + finish réels) : rend le cookie de session
+    /// posé par `Set-Cookie`, tel qu'un navigateur le renverrait ensuite.
+    async fn log_in(&mut self, name: &str) -> String {
+        let (_, begun) = self.post(BEGIN, serde_json::json!({"name": name})).await;
+        let options: oe_webauthn::RequestChallengeResponse =
+            serde_json::from_value(serde_json::json!({ "publicKey": begun["webauthn"] })).unwrap();
+        let assertion = self.authn.do_authentication(origin(), options).unwrap();
+        let (status, headers, _) = self
+            .post_with_headers(
+                FINISH,
+                serde_json::json!({
+                    "challenge_id": begun["challenge_id"],
+                    "credential": assertion,
+                }),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let set_cookie = headers
+            .get(axum::http::header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        // Ce qu'un navigateur renvoie ensuite dans `Cookie` : seul le couple
+        // nom=valeur, sans les attributs (`Path`, `HttpOnly`…).
+        set_cookie.split(';').next().unwrap().to_string()
     }
 }
 
@@ -410,4 +482,88 @@ async fn malformed_requests_are_rejected_before_touching_the_database() {
             "{body} {status} {err}"
         );
     }
+}
+
+const ME: &str = "/api/v1/me";
+const LOGOUT: &str = "/api/v1/logout";
+
+/// La connexion ouvre une session (docs/WEBUI.md §15 étape 1c-2) : le cookie
+/// qu'elle pose authentifie ensuite `/api/v1/me`, avec l'identité et le rôle
+/// relus en base, pas mis en cache dans la session.
+#[tokio::test]
+async fn login_opens_a_session_that_me_reports() {
+    let mut env = env!();
+    env.operator_with_key("alice").await;
+    let cookie = env.log_in("alice").await;
+    assert!(cookie.starts_with("session="), "{cookie}");
+
+    let (status, me) = env.get_with_cookie(ME, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["operator"], "alice");
+    assert_eq!(me["role"], "ra_operateur");
+
+    // Sans cookie, ou avec un cookie inventé : refusé, sans distinction.
+    let (status, err) = env.get_with_cookie(ME, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{err}");
+    assert_eq!(err["error"], "unauthenticated");
+    let (status, err) = env
+        .get_with_cookie(ME, Some("session=n-importe-quoi"))
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{err}");
+    assert_eq!(err["error"], "unauthenticated");
+}
+
+/// Un opérateur désactivé après l'ouverture de sa session perd l'accès sans
+/// attendre l'expiration (§16 : l'identité et le rôle sont relus à chaque
+/// requête, jamais mis en cache).
+#[tokio::test]
+async fn a_session_stops_working_once_the_operator_is_disabled() {
+    let mut env = env!();
+    let id = env.operator_with_key("alice").await;
+    let cookie = env.log_in("alice").await;
+
+    sqlx::query("UPDATE operators SET disabled_at = now() WHERE id = $1")
+        .bind(id)
+        .execute(env.registry.pool())
+        .await
+        .unwrap();
+
+    let (status, err) = env.get_with_cookie(ME, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{err}");
+    assert_eq!(err["error"], "unauthenticated");
+}
+
+/// La déconnexion révoque la session : le même cookie ne rouvre plus rien
+/// ensuite, et elle est idempotente (sans cookie, ou rejouée, elle ne casse
+/// pas — le résultat visible est le même : plus de session).
+#[tokio::test]
+async fn logout_revokes_the_session() {
+    let mut env = env!();
+    env.operator_with_key("alice").await;
+    let cookie = env.log_in("alice").await;
+
+    let (status, headers, _) = env
+        .post_with_headers(LOGOUT, serde_json::json!({}), Some(&cookie))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let cleared = headers
+        .get(axum::http::header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(cleared.contains("Max-Age=0"), "{cleared}");
+
+    let (status, err) = env.get_with_cookie(ME, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{err}");
+    assert_eq!(err["error"], "unauthenticated");
+
+    // Rejouer la déconnexion, ou sans cookie du tout : toujours 204.
+    let (status, _, _) = env
+        .post_with_headers(LOGOUT, serde_json::json!({}), Some(&cookie))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = env
+        .post_with_headers(LOGOUT, serde_json::json!({}), None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }
