@@ -461,8 +461,9 @@ fn assert_ski_and_aki_present_and_linked(cert: &Certificate, issuer_cert: &Certi
 #[derive(Default, Clone)]
 struct EventLog(Arc<std::sync::Mutex<Vec<String>>>);
 
+#[async_trait::async_trait]
 impl oe_ca_core::Recorder for EventLog {
-    fn append(&self, event: &str, _data: serde_json::Value) -> Result<(), String> {
+    async fn append(&self, event: &str, _data: serde_json::Value) -> Result<(), String> {
         self.0.lock().unwrap().push(event.to_string());
         Ok(())
     }
@@ -652,4 +653,185 @@ async fn the_internal_checks_tell_the_profiles_apart() {
     // Un certificat de TSU (autre EKU, aucune politique) n'est ni l'un ni l'autre.
     assert!(oe_conformance::check_internal_client_certificate("x", &tsu).is_err());
     assert!(oe_conformance::check_internal_server_certificate("x", &tsu).is_err());
+}
+
+/// Un journal qui échoue systématiquement : preuve que le journal *avant*
+/// l'écriture durable (§15 étape 2b) n'est pas qu'une clause de commentaire,
+/// mais bloque réellement la cérémonie, l'émission, la révocation et la
+/// publication de CRL avant qu'elles ne touchent le store.
+struct FailingRecorder;
+
+#[async_trait::async_trait]
+impl oe_ca_core::Recorder for FailingRecorder {
+    async fn append(&self, _event: &str, _data: serde_json::Value) -> Result<(), String> {
+        Err("stockage du journal injoignable (test)".to_string())
+    }
+}
+
+#[tokio::test]
+async fn a_journal_failure_blocks_the_ceremony_before_any_authority_is_saved() {
+    let store = store();
+    let err = run_ceremony(CeremonyOptions {
+        root_signer: Arc::new(SoftwareToken::generate(2048)),
+        issuing_signer: Arc::new(SoftwareToken::generate(2048)),
+        root_cn: "Test Root CA".to_string(),
+        issuing_cn: "Test Issuing CA".to_string(),
+        organization: "Open eIDAS Test".to_string(),
+        country: "FR".to_string(),
+        root_validity: time::Duration::days(20 * 365),
+        issuing_validity: time::Duration::days(10 * 365),
+        root_token_label: "root".to_string(),
+        root_key_label: "root-key".to_string(),
+        issuing_token_label: "issuing".to_string(),
+        issuing_key_label: "issuing-key".to_string(),
+        store: store.clone(),
+        operator: "test-operator".to_string(),
+        recorder: Some(Arc::new(FailingRecorder)),
+    })
+    .await
+    .err()
+    .expect("la cérémonie doit échouer");
+    assert!(err.to_string().contains("journal"), "{err}");
+    assert!(
+        store.authority(AUTHORITY_ROOT).await.is_err(),
+        "aucune autorité ne doit être persistée : la cérémonie a échoué avant"
+    );
+    assert!(store.authority(AUTHORITY_ISSUING).await.is_err());
+}
+
+#[tokio::test]
+async fn a_journal_failure_blocks_issuance_before_any_certificate_is_saved() {
+    let store = store();
+    let (_root_signer, issuing_signer, _root, issuing) = run_test_ceremony(store.clone()).await;
+    let issuer = Issuer::new(Options {
+        signer: issuing_signer.clone(),
+        certificate: issuing.clone(),
+        chain: vec![],
+        store: store.clone(),
+        public_url: "https://ca.example.test".to_string(),
+        ocsp_url: None,
+        crl_validity: time::Duration::hours(24),
+        crl_grace: time::Duration::hours(1),
+        recorder: Some(Arc::new(FailingRecorder)),
+    })
+    .unwrap();
+
+    let err = issuer
+        .issue(
+            &public_key(),
+            "audit.example.test",
+            &profile::tsa_signer(),
+            "txn-fail",
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("journal"), "{err}");
+
+    // Un second essai, même signataire et même certificat émetteur, mais
+    // cette fois sans journal défaillant : doit réussir, rien n'a été laissé
+    // dans un état à moitié écrit qui empêcherait de rejouer l'émission.
+    let issuer_ok = Issuer::new(Options {
+        signer: issuing_signer,
+        certificate: issuing,
+        chain: vec![],
+        store: store.clone(),
+        public_url: "https://ca.example.test".to_string(),
+        ocsp_url: None,
+        crl_validity: time::Duration::hours(24),
+        crl_grace: time::Duration::hours(1),
+        recorder: None,
+    })
+    .unwrap();
+    let cert = issuer_ok
+        .issue(
+            &public_key(),
+            "audit.example.test",
+            &profile::tsa_signer(),
+            "txn-fail",
+        )
+        .await
+        .expect("l'émission doit réussir une fois le journal disponible");
+    let serial = oe_ca_core::canonical_serial(cert.tbs_certificate().serial_number());
+    let stored = store.certificate(&serial).await.unwrap();
+    assert_eq!(stored.status, oe_castore::CertificateStatus::Issued);
+}
+
+#[tokio::test]
+async fn a_journal_failure_blocks_revocation_before_the_store_is_touched() {
+    let store = store();
+    let (_root_signer, issuing_signer, _root, issuing) = run_test_ceremony(store.clone()).await;
+    let issuer = Issuer::new(Options {
+        signer: issuing_signer.clone(),
+        certificate: issuing.clone(),
+        chain: vec![],
+        store: store.clone(),
+        public_url: "https://ca.example.test".to_string(),
+        ocsp_url: None,
+        crl_validity: time::Duration::hours(24),
+        crl_grace: time::Duration::hours(1),
+        recorder: None,
+    })
+    .unwrap();
+    let cert = issuer
+        .issue(
+            &public_key(),
+            "audit.example.test",
+            &profile::tsa_signer(),
+            "txn-rev",
+        )
+        .await
+        .unwrap();
+    let serial = oe_ca_core::canonical_serial(cert.tbs_certificate().serial_number());
+
+    // Même signataire, même certificat émetteur : seul le journal change.
+    let failing_issuer = Issuer::new(Options {
+        signer: issuing_signer,
+        certificate: issuing,
+        chain: vec![],
+        store: store.clone(),
+        public_url: "https://ca.example.test".to_string(),
+        ocsp_url: None,
+        crl_validity: time::Duration::hours(24),
+        crl_grace: time::Duration::hours(1),
+        recorder: Some(Arc::new(FailingRecorder)),
+    })
+    .unwrap();
+
+    let err = failing_issuer
+        .revoke(&serial, 1, "test-operator", "test")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("journal"), "{err}");
+
+    let still_active = store.certificate(&serial).await.unwrap();
+    assert_eq!(
+        still_active.status,
+        oe_castore::CertificateStatus::Issued,
+        "le certificat ne doit pas être révoqué : le journal a échoué avant l'écriture"
+    );
+}
+
+#[tokio::test]
+async fn a_journal_failure_blocks_crl_publication_before_the_store_is_touched() {
+    let store = store();
+    let (_root_signer, issuing_signer, _root, issuing) = run_test_ceremony(store.clone()).await;
+    let issuer = Issuer::new(Options {
+        signer: issuing_signer,
+        certificate: issuing,
+        chain: vec![],
+        store: store.clone(),
+        public_url: "https://ca.example.test".to_string(),
+        ocsp_url: None,
+        crl_validity: time::Duration::hours(24),
+        crl_grace: time::Duration::hours(1),
+        recorder: Some(Arc::new(FailingRecorder)),
+    })
+    .unwrap();
+
+    let err = issuer.publish_crl().await.unwrap_err();
+    assert!(err.to_string().contains("journal"), "{err}");
+    assert!(
+        store.latest_crl().await.is_err(),
+        "aucune CRL ne doit être publiée : le journal a échoué avant"
+    );
 }

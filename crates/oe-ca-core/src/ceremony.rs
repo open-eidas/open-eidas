@@ -84,6 +84,33 @@ pub async fn run_ceremony(o: CeremonyOptions) -> Result<Hierarchy, CaError> {
     let root = sign_root(&o, now).await?;
     let issuing = sign_issuing(&o, now, &root).await?;
 
+    // Procès-verbal de cérémonie (ETSI EN 319 411-1 §6.5.1) : les empreintes
+    // permettent de rattacher a posteriori une signature à la clé exacte
+    // créée ce jour-là, sans exposer la clé elle-même. *Avant* d'inscrire les
+    // autorités au store (§15 étape 2b) : si le journal échoue, la cérémonie
+    // échoue avec lui, rejouable (elle est idempotente, voir l'en-tête du
+    // fichier) plutôt que de laisser une hiérarchie sans procès-verbal.
+    if let Some(recorder) = &o.recorder {
+        recorder
+            .append(
+                "ca.ceremony",
+                serde_json::json!({
+                    "operateur": o.operator,
+                    "date": now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+                    "racine_sujet": root.tbs_certificate().subject().to_string(),
+                    "racine_serie": hex::encode(crate::canonical_serial(root.tbs_certificate().serial_number())),
+                    "racine_empreinte": hex::encode(sha2::Sha256::digest(root.to_der()?)),
+                    "racine_token": o.root_token_label,
+                    "emettrice_sujet": issuing.tbs_certificate().subject().to_string(),
+                    "emettrice_serie": hex::encode(crate::canonical_serial(issuing.tbs_certificate().serial_number())),
+                    "emettrice_empreinte": hex::encode(sha2::Sha256::digest(issuing.to_der()?)),
+                    "emettrice_token": o.issuing_token_label,
+                }),
+            )
+            .await
+            .map_err(|e| CaError::Other(format!("journal : {e}")))?;
+    }
+
     for a in [
         Authority {
             name: AUTHORITY_ROOT.to_string(),
@@ -103,27 +130,6 @@ pub async fn run_ceremony(o: CeremonyOptions) -> Result<Hierarchy, CaError> {
         },
     ] {
         o.store.save_authority(a).await?;
-    }
-
-    // Procès-verbal de cérémonie (ETSI EN 319 411-1 §6.5.1) : les empreintes
-    // permettent de rattacher a posteriori une signature à la clé exacte
-    // créée ce jour-là, sans exposer la clé elle-même.
-    if let Some(recorder) = &o.recorder {
-        let _ = recorder.append(
-            "ca.ceremony",
-            serde_json::json!({
-                "operateur": o.operator,
-                "date": now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
-                "racine_sujet": root.tbs_certificate().subject().to_string(),
-                "racine_serie": hex::encode(crate::canonical_serial(root.tbs_certificate().serial_number())),
-                "racine_empreinte": hex::encode(sha2::Sha256::digest(root.to_der()?)),
-                "racine_token": o.root_token_label,
-                "emettrice_sujet": issuing.tbs_certificate().subject().to_string(),
-                "emettrice_serie": hex::encode(crate::canonical_serial(issuing.tbs_certificate().serial_number())),
-                "emettrice_empreinte": hex::encode(sha2::Sha256::digest(issuing.to_der()?)),
-                "emettrice_token": o.issuing_token_label,
-            }),
-        );
     }
 
     Ok(Hierarchy {

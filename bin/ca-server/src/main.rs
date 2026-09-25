@@ -211,8 +211,9 @@ fn json_to_audit_data(data: serde_json::Value) -> Option<oe_audit::Data> {
     }
 }
 
+#[async_trait::async_trait]
 impl oe_ca_core::Recorder for AuditRecorder {
-    fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String> {
+    async fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String> {
         self.0
             .append(event, json_to_audit_data(data))
             .map_err(|e| e.to_string())
