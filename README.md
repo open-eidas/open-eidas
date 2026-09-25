@@ -8,7 +8,7 @@
 # Open eIDAS — Les services de confiance eIDAS comme infrastructure ouverte
 
 [![CI](https://github.com/open-eidas/open-eidas/actions/workflows/ci.yml/badge.svg)](https://github.com/open-eidas/open-eidas/actions/workflows/ci.yml)
-[![Licence AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
+[![Licence EUPL-1.2](https://img.shields.io/badge/licence-EUPL--1.2-blue.svg)](LICENSE)
 [![Site Web](https://img.shields.io/badge/Site%20Web-open--eidas.eu-003399?style=flat-square)](https://open-eidas.eu)
 [![Contact](https://img.shields.io/badge/Contact-contact%40open--eidas.eu-0F2042?style=flat-square)](mailto:contact@open-eidas.eu)
 
@@ -195,6 +195,8 @@ conformité ETSI EN 319 421 / 319 422 et le développement des futurs services d
 
 ## Licence
 
-GNU Affero General Public License v3.0 (AGPLv3) — voir [LICENSE](LICENSE).
+Licence publique de l'Union européenne (EUPL) v1.2 — voir [LICENSE](LICENSE).
 
-L'AGPL garantit que toute amélioration apportée à cette infrastructure de confiance partagée reste un bien commun ouvert à tous, y compris lorsqu'elle est opérée en tant que service réseau.
+L'EUPL est une licence à réciprocité (*copyleft*) : toute version modifiée et distribuée, y compris lorsqu'elle est mise à disposition en tant que service en réseau, doit rester publiée sous la même licence. Elle est compatible avec la GNU AGPL v3, ce qui permet de combiner le projet avec des composants sous cette licence.
+
+Les versions publiées avant ce changement restent disponibles sous AGPL v3.

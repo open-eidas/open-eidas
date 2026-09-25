@@ -90,4 +90,4 @@ Ne pas ouvrir d'*issue* publique pour une vulnérabilité. Voir
 ## Licence
 
 En contribuant, vous acceptez que vos changements soient publiés sous la
-licence du projet, AGPL-3.0 (voir [LICENSE](LICENSE)).
+licence du projet, la licence publique de l'Union européenne EUPL-1.2 (voir [LICENSE](LICENSE)).
