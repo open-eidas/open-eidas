@@ -12,6 +12,9 @@ pub struct Config {
     pub link: LinkConfig,
     pub enroll: EnrollConfig,
     pub webauthn: WebauthnConfig,
+    /// Fréquence de la purge des sessions et challenges expirés (docs/WEBUI.md
+    /// §15 étape 1c-2b).
+    pub purge_interval: Duration,
 }
 
 /// Vérification des connexions (docs/WEBUI.md §15, étape 1c, §16) : `ra-console`
@@ -106,6 +109,7 @@ impl Config {
                     secret
                 },
             },
+            purge_interval: duration_seconds("OPENEIDAS_PURGE_INTERVAL_SECONDS", 60)?,
         })
     }
 
@@ -127,17 +131,20 @@ impl Config {
     }
 }
 
-fn enroll_timeout() -> Result<Duration, String> {
-    match std::env::var("OPENEIDAS_ENROLL_TIMEOUT_SECONDS")
-        .ok()
-        .filter(|v| !v.is_empty())
-    {
-        None => Ok(Duration::from_secs(10 * 60)),
+/// Un entier de secondes dans une variable d'environnement, ou une valeur par
+/// défaut si elle est absente ou vide.
+fn duration_seconds(key: &str, fallback_secs: u64) -> Result<Duration, String> {
+    match std::env::var(key).ok().filter(|v| !v.is_empty()) {
+        None => Ok(Duration::from_secs(fallback_secs)),
         Some(v) => v
             .parse::<u64>()
             .map(Duration::from_secs)
-            .map_err(|_| format!("OPENEIDAS_ENROLL_TIMEOUT_SECONDS: entier attendu, reçu {v:?}")),
+            .map_err(|_| format!("{key}: entier attendu, reçu {v:?}")),
     }
+}
+
+fn enroll_timeout() -> Result<Duration, String> {
+    duration_seconds("OPENEIDAS_ENROLL_TIMEOUT_SECONDS", 10 * 60)
 }
 
 impl EnrollConfig {

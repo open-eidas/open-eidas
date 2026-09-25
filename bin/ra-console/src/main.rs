@@ -9,7 +9,7 @@ use ra_console::ca_link::CaLink;
 use ra_console::config::Config;
 use ra_console::login::LoginService;
 use ra_console::session::Sessions;
-use ra_console::{db_guard, http, webauthn_models};
+use ra_console::{db_guard, http, purge, webauthn_models};
 use sqlx::postgres::PgPoolOptions;
 
 #[derive(Parser)]
@@ -85,6 +85,10 @@ async fn run_serve() {
         cfg.webauthn.login_decoy_secret.into_bytes(),
     );
     let sessions = Sessions::new(oe_actions::Registry::new(pool.clone()));
+
+    // Purge périodique des sessions et challenges expirés (§15 étape 1c-2b) :
+    // aucune opération manuelle, arrêtée par le même signal que le serveur.
+    purge::spawn_periodic(pool.clone(), cfg.purge_interval);
 
     let app = http::router(Arc::new(http::AppState {
         pool,
