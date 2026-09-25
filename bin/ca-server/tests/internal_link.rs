@@ -19,8 +19,9 @@ use webauthn_authenticator_rs::softtoken::{SoftToken, AAGUID};
 use webauthn_authenticator_rs::WebauthnAuthenticator;
 
 struct NullJournal;
+#[async_trait::async_trait]
 impl Recorder for NullJournal {
-    fn append(&self, _: &str, _: serde_json::Value) -> Result<(), String> {
+    async fn append(&self, _: &str, _: serde_json::Value) -> Result<(), String> {
         Ok(())
     }
 }

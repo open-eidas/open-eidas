@@ -30,8 +30,9 @@ struct MemJournal {
     events: Mutex<Vec<(String, serde_json::Value)>>,
 }
 
+#[async_trait::async_trait]
 impl Recorder for MemJournal {
-    fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String> {
+    async fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String> {
         self.events.lock().unwrap().push((event.to_string(), data));
         Ok(())
     }

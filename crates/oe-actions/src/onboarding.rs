@@ -107,11 +107,14 @@ pub async fn bootstrap_admin(
     .fetch_one(&mut *tx)
     .await?;
     if active_admin {
-        // Un refus est aussi un événement : quelqu'un a essayé.
-        let _ = journal.append(
-            "operators.bootstrap_admin_refused",
-            serde_json::json!({ "nom": name, "motif": "un administrateur actif existe déjà" }),
-        );
+        // Un refus est aussi un événement : quelqu'un a essayé. Best-effort,
+        // volontairement : le refus lui-même n'attend pas le journal.
+        let _ = journal
+            .append(
+                "operators.bootstrap_admin_refused",
+                serde_json::json!({ "nom": name, "motif": "un administrateur actif existe déjà" }),
+            )
+            .await;
         return Err(Error::Denied(
             "un administrateur actif existe déjà : l'amorçage n'est plus possible \
              (récupération : voir « recover-admin », docs/WEBUI.md §21)"
@@ -187,6 +190,7 @@ pub async fn bootstrap_admin(
                     .unwrap_or_default(),
             }),
         )
+        .await
         .map_err(Error::Journal)?;
 
     tx.commit().await?;
@@ -323,6 +327,7 @@ pub async fn recover_admin(
                     .unwrap_or_default(),
             }),
         )
+        .await
         .map_err(Error::Journal)?;
 
     tx.commit().await?;

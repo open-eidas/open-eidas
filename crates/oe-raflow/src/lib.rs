@@ -64,8 +64,19 @@ fn comment_suffix(c: &str) -> String {
 /// Consigne les décisions au journal d'audit — reproduit `raflow.Recorder`
 /// (Go), découplé de `oe-audit` par la même convention que
 /// `oe_ca_core::Recorder`.
+///
+/// Async et bloquant, comme `oe_ca_core::Recorder` (docs/WEBUI.md §15 étape
+/// 2b) : son échec propage une erreur plutôt que d'être ignoré. `Flow::open`
+/// journalise *avant* d'enregistrer la demande (rien d'irréversible n'a
+/// encore eu lieu si le journal échoue). `Decider::decide` est l'exception
+/// documentée : l'écriture optimiste (`update_request`, CAS sur l'état
+/// `Pending`) doit rester *avant* le journal, car c'est elle qui départage
+/// deux décisions concurrentes sur la même demande — journaliser avant
+/// risquerait de consigner une décision qui perd la course et n'a jamais eu
+/// lieu.
+#[async_trait::async_trait]
 pub trait Recorder: Send + Sync {
-    fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String>;
+    async fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String>;
 }
 
 /// Authentifiant HMAC-SHA256 attendu sur les octets DER bruts d'une CSR. Le
@@ -190,10 +201,14 @@ impl Decider {
         }
     }
 
-    fn record(&self, event: &str, data: serde_json::Value) {
+    async fn record(&self, event: &str, data: serde_json::Value) -> Result<(), RaflowError> {
         if let Some(recorder) = &self.opts.recorder {
-            let _ = recorder.append(event, data);
+            recorder
+                .append(event, data)
+                .await
+                .map_err(|e| RaflowError::Other(format!("journal : {e}")))?;
         }
+        Ok(())
     }
 
     /// Fait passer une demande de PENDING à APPROVED. C'est la SEULE
@@ -270,6 +285,9 @@ impl Decider {
         } else {
             "ca.request_approved"
         };
+        // Exception documentée (voir `Recorder`) : l'écriture optimiste
+        // ci-dessus, qui départage deux décisions concurrentes, reste avant
+        // le journal — pas après, comme partout ailleurs.
         self.record(
             event,
             serde_json::json!({
@@ -279,7 +297,8 @@ impl Decider {
                 "operateur": operator,
                 "commentaire": comment,
             }),
-        );
+        )
+        .await?;
         Ok(updated)
     }
 
@@ -361,10 +380,14 @@ impl Flow {
         }
     }
 
-    fn record(&self, event: &str, data: serde_json::Value) {
+    async fn record(&self, event: &str, data: serde_json::Value) -> Result<(), RaflowError> {
         if let Some(recorder) = &self.opts.recorder {
-            let _ = recorder.append(event, data);
+            recorder
+                .append(event, data)
+                .await
+                .map_err(|e| RaflowError::Other(format!("journal : {e}")))?;
         }
+        Ok(())
     }
 
     /// Reçoit une demande d'enrôlement, ou reprend celle qui correspond
@@ -427,7 +450,13 @@ impl Flow {
             issued_at: None,
             certificate_serial: None,
         };
-        self.opts.store.create_request(r).await?;
+        // Le journal *avant* l'enregistrement durable (§15 étape 2b) : si
+        // l'écriture échoue, aucune demande n'est créée — rejouable sans
+        // laisser de trace à moitié écrite. (Deux soumissions strictement
+        // simultanées de la même CSR pourraient, plus rarement encore,
+        // journaliser deux fois la même réception si l'une des deux échoue
+        // ensuite à `create_request` : imprécision mineure d'audit, pas une
+        // décision faussée, contrairement au cas de `Decider::decide`.)
         self.record(
             "ca.request_received",
             serde_json::json!({
@@ -436,7 +465,9 @@ impl Flow {
                 "sujet_cn": cn,
                 "empreinte": fp,
             }),
-        );
+        )
+        .await?;
+        self.opts.store.create_request(r).await?;
         Ok(SubmitResult {
             state: RequestState::Pending,
             transaction_id: tx,

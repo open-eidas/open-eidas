@@ -116,10 +116,16 @@ impl Service {
                 "serial": serial, "reason": reason, "crl_number": number, "crl_published": true,
             })),
             Err(e) => {
-                let _ = self.journal.append(
-                    "operators.crl_publication_failed",
-                    serde_json::json!({ "serie": serial, "erreur": e }),
-                );
+                // Best-effort, volontairement (voir le commentaire de
+                // fonction) : la révocation reste acquise même si cette
+                // note ne peut pas être journalisée.
+                let _ = self
+                    .journal
+                    .append(
+                        "operators.crl_publication_failed",
+                        serde_json::json!({ "serie": serial, "erreur": e }),
+                    )
+                    .await;
                 Ok(serde_json::json!({
                     "serial": serial, "reason": reason, "crl_published": false,
                 }))

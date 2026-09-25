@@ -28,8 +28,9 @@ fn origin() -> Url {
 }
 
 struct NullJournal;
+#[async_trait::async_trait]
 impl Recorder for NullJournal {
-    fn append(&self, _: &str, _: serde_json::Value) -> Result<(), String> {
+    async fn append(&self, _: &str, _: serde_json::Value) -> Result<(), String> {
         Ok(())
     }
 }

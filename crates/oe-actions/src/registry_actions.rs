@@ -107,6 +107,7 @@ impl Service {
                                 "expire_a": rfc3339(expires_at),
                             }),
                         )
+                        .await
                         .map_err(Error::Journal)?;
                 }
                 serde_json::json!({
@@ -193,6 +194,7 @@ impl Service {
                                 "confirmee_par": actor.name,
                             }),
                         )
+                        .await
                         .map_err(Error::Journal)?;
                 }
                 serde_json::json!({ "operator": owner, "credential_id": credential_id })
@@ -264,6 +266,7 @@ impl Service {
                                 "par": actor.name,
                             }),
                         )
+                        .await
                         .map_err(Error::Journal)?;
                 }
                 serde_json::json!({ "operator": owner, "credential_id": credential_id })
@@ -316,6 +319,7 @@ impl Service {
                                 "par": actor.name,
                             }),
                         )
+                        .await
                         .map_err(Error::Journal)?;
                 }
                 serde_json::json!({ "operator": operator, "role": role.as_str() })
