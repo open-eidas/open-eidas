@@ -47,6 +47,7 @@ async fn healthz_needs_both_the_database_and_the_link() {
     let app = router(Arc::new(AppState {
         pool: pool.clone(),
         link,
+        login: common::login_service(pool.clone()),
     }));
     let (status, body) = get(&app).await;
     assert_eq!(status, axum::http::StatusCode::OK, "{body}");
@@ -60,7 +61,11 @@ async fn healthz_needs_both_the_database_and_the_link() {
         l.local_addr().unwrap().port()
     };
     let link = CaLink::new(&pki.files(&dir, &client, dead)).unwrap();
-    let app = router(Arc::new(AppState { pool, link }));
+    let app = router(Arc::new(AppState {
+        pool: pool.clone(),
+        link,
+        login: common::login_service(pool),
+    }));
     let (status, body) = get(&app).await;
     assert_eq!(
         status,

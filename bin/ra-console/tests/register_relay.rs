@@ -106,7 +106,11 @@ impl Env {
             .await;
         let link = CaLink::new(&pki.files(&dir, &client, port)).unwrap();
         let pool = PgPoolOptions::new().connect(&dsn).await.unwrap();
-        let console = router(Arc::new(AppState { pool, link }));
+        let console = router(Arc::new(AppState {
+            pool: pool.clone(),
+            link,
+            login: common::login_service(pool),
+        }));
 
         Some(Env {
             console,
@@ -342,7 +346,11 @@ async fn an_unreachable_ca_server_gives_a_generic_bad_gateway() {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://x@127.0.0.1:1/x")
         .unwrap();
-    let console = router(Arc::new(AppState { pool, link }));
+    let console = router(Arc::new(AppState {
+        pool: pool.clone(),
+        link,
+        login: common::login_service(pool),
+    }));
 
     let res = console
         .oneshot(

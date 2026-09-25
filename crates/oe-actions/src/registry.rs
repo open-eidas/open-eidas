@@ -159,6 +159,24 @@ impl Registry {
         }))
     }
 
+    /// Un opérateur par son nom (connexion, §16 « connexion par nom »). `None`
+    /// ne distingue pas un nom absent d'une erreur de frappe : à l'appelant de
+    /// répondre de la même forme dans les deux cas.
+    pub async fn operator_by_name(&self, name: &str) -> Result<Option<Operator>, sqlx::Error> {
+        let row = sqlx::query("SELECT id, name, role, disabled_at FROM operators WHERE name = $1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.and_then(|r| {
+            Some(Operator {
+                id: r.get("id"),
+                name: r.get("name"),
+                role: Role::parse(r.get::<&str, _>("role"))?,
+                disabled: r.get::<Option<OffsetDateTime>, _>("disabled_at").is_some(),
+            })
+        }))
+    }
+
     fn key_from_row(r: &sqlx::postgres::PgRow) -> Result<Key, sqlx::Error> {
         let passkey: serde_json::Value = r.get("passkey");
         let passkey = serde_json::from_value(passkey).map_err(|e| sqlx::Error::Decode(e.into()))?;

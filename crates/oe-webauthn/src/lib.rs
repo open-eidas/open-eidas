@@ -22,6 +22,9 @@ pub use webauthn_rs::prelude::{
 use webauthn_rs::prelude::{AttestationCaListBuilder, CredentialID};
 use webauthn_rs::{Webauthn, WebauthnBuilder};
 
+mod decoy;
+pub use decoy::decoy_authentication_challenge;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("configuration WebAuthn : {0}")]
@@ -108,6 +111,7 @@ pub fn summarize_attestation(key: &AttestedPasskey) -> Result<AttestationSummary
 pub struct Verifier {
     webauthn: Webauthn,
     models: AttestationCaList,
+    rp_id: String,
 }
 
 /// Résultat d'une assertion vérifiée.
@@ -147,7 +151,17 @@ impl Verifier {
             .rp_name(rp_name)
             .build()
             .map_err(|e| Error::Config(e.to_string()))?;
-        Ok(Verifier { webauthn, models })
+        Ok(Verifier {
+            webauthn,
+            models,
+            rp_id: rp_id.to_string(),
+        })
+    }
+
+    /// Le RP ID de ce vérificateur, pour construire un défi de la même forme
+    /// qu'une authentification réelle sans en être une (`decoy_authentication_challenge`).
+    pub fn rp_id(&self) -> &str {
+        &self.rp_id
     }
 
     pub fn start_registration(

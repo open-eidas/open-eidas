@@ -11,8 +11,18 @@ description = "Vérification WebAuthn des opérateurs pour ca-server : attestati
 workspace = true
 
 [dependencies]
-webauthn-rs = "0.5"
+# `danger-allow-state-serialisation` : ra-console persiste l'état d'une
+# cérémonie de connexion entre `login/begin` et `login/finish` dans sa propre
+# table (`webauthn_challenges.request_body`, docs/WEBUI.md §16) plutôt qu'en
+# mémoire du processus, qui ne survivrait pas à un redémarrage. Rien n'y est
+# jamais exposé au navigateur : seul le corps signé par la clé en sort.
+webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+# Uniquement pour les types de données du défi d'authentification (decoy.rs) :
+# aucun accès à la logique cryptographique de webauthn-rs-core.
+webauthn-rs-proto = "0.5"
+rand = "0.8"
 thiserror = "2"
 
 [dev-dependencies]
 webauthn-authenticator-rs = { version = "0.5", features = ["softtoken"] }
+serde_json = "1"

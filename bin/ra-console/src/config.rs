@@ -11,6 +11,27 @@ pub struct Config {
     pub database_url: String,
     pub link: LinkConfig,
     pub enroll: EnrollConfig,
+    pub webauthn: WebauthnConfig,
+}
+
+/// Vérification des connexions (docs/WEBUI.md §15, étape 1c, §16) : `ra-console`
+/// vérifie elle-même l'assertion, contre le registre en lecture seule.
+#[derive(Debug, Clone)]
+pub struct WebauthnConfig {
+    pub rp_id: String,
+    pub origin: String,
+    pub rp_name: String,
+    /// Même format que `OPENEIDAS_WEBAUTHN_MODELS_FILE` côté `ca-server`
+    /// (`ca_server::webauthn_models`) : les deux services doivent admettre les
+    /// mêmes modèles de clés, sans quoi une clé admise à l'enregistrement
+    /// pourrait être refusée à la connexion, ou l'inverse.
+    pub models_file: String,
+    /// Secret du service, jamais transmis : dérive l'identifiant de la clé
+    /// factice qu'un nom inconnu se voit proposer (anti-énumération, §16
+    /// « connexion par nom, réponses uniformes »). Une valeur vide ferait des
+    /// factices toutes identiques (dérivées du seul nom) : facile à
+    /// distinguer d'une vraie clé, dont l'identifiant ne dépend d'aucun nom.
+    pub login_decoy_secret: String,
 }
 
 /// Le lien mTLS vers `ca-server` (docs/WEBUI.md §16 « Lien interne »).
@@ -69,6 +90,22 @@ impl Config {
                 ca_file: required("OPENEIDAS_CA_CERT_FILE")?,
             },
             enroll: EnrollConfig::from_env_lenient(),
+            webauthn: WebauthnConfig {
+                rp_id: required("OPENEIDAS_WEBAUTHN_RP_ID")?,
+                origin: required("OPENEIDAS_WEBAUTHN_ORIGIN")?,
+                rp_name: optional("OPENEIDAS_WEBAUTHN_RP_NAME", "Open eIDAS Console"),
+                models_file: required("OPENEIDAS_WEBAUTHN_MODELS_FILE")?,
+                login_decoy_secret: {
+                    let secret = required("OPENEIDAS_LOGIN_DECOY_SECRET")?;
+                    if secret.len() < 16 {
+                        return Err(
+                            "OPENEIDAS_LOGIN_DECOY_SECRET: au moins 16 octets (secret du service)"
+                                .to_string(),
+                        );
+                    }
+                    secret
+                },
+            },
         })
     }
 

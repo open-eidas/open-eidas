@@ -154,6 +154,60 @@ fn a_counter_that_does_not_advance_is_a_presumed_clone() {
         .expect("compteur jamais positif");
 }
 
+/// `ra-console` persiste l'état d'authentification entre `login/begin` et
+/// `login/finish` dans sa propre table (docs/WEBUI.md §16), pas en mémoire du
+/// processus : il doit donc survivre à un aller-retour JSON.
+#[test]
+fn authentication_state_survives_a_json_round_trip() {
+    let (mut authn, root) = token();
+    let v = verifier(&root, AAGUID);
+    let (options, state) = v.start_registration(Uuid::new_v4(), "alice", None).unwrap();
+    let reg = authn.do_registration(origin(), options).unwrap();
+    let key = v.finish_registration(&reg, &state).unwrap();
+
+    let (challenge, auth_state) = v.start_authentication(&[key]).unwrap();
+    let response = authn.do_authentication(origin(), challenge).unwrap();
+
+    let json = serde_json::to_string(&auth_state).expect("sérialisable");
+    let restored: oe_webauthn::AttestedPasskeyAuthentication =
+        serde_json::from_str(&json).expect("désérialisable");
+
+    v.finish_authentication(&response, &restored, 0)
+        .expect("assertion valide contre l'état restauré");
+}
+
+/// Le défi factice d'un nom inconnu (anti-énumération) a la même forme qu'une
+/// vraie authentification à une seule clé : même RP ID, mêmes réglages,
+/// même délai. Seuls le challenge et la clé proposée diffèrent forcément.
+#[test]
+fn the_decoy_challenge_has_the_same_shape_as_a_real_one() {
+    let (mut authn, root) = token();
+    let v = verifier(&root, AAGUID);
+    let (options, state) = v.start_registration(Uuid::new_v4(), "alice", None).unwrap();
+    let reg = authn.do_registration(origin(), options).unwrap();
+    let key = v.finish_registration(&reg, &state).unwrap();
+    let (real, _) = v.start_authentication(&[key]).unwrap();
+
+    let decoy = oe_webauthn::decoy_authentication_challenge(RP_ID, b"identifiant-factice");
+
+    assert_eq!(decoy.public_key.rp_id, real.public_key.rp_id);
+    assert_eq!(decoy.public_key.timeout, real.public_key.timeout);
+    assert_eq!(
+        decoy.public_key.user_verification,
+        real.public_key.user_verification
+    );
+    assert_eq!(decoy.public_key.hints, real.public_key.hints);
+    assert_eq!(
+        decoy.public_key.allow_credentials.len(),
+        real.public_key.allow_credentials.len()
+    );
+    assert_eq!(
+        decoy.public_key.challenge.len(),
+        real.public_key.challenge.len()
+    );
+    assert_ne!(decoy.public_key.challenge, real.public_key.challenge);
+}
+
 #[test]
 fn the_verifier_refuses_to_start_with_inconsistent_settings() {
     let (_authn, root) = token();

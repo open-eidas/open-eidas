@@ -13,6 +13,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 
 use crate::ca_link::{CaLink, Relayed};
+use crate::login::{LoginError, LoginService};
 
 /// Assez pour un objet d'attestation, pas pour bourrer la mémoire.
 const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -20,6 +21,7 @@ const MAX_BODY_BYTES: usize = 64 * 1024;
 pub struct AppState {
     pub pool: PgPool,
     pub link: CaLink,
+    pub login: LoginService,
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -33,6 +35,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/v1/webauthn/register/finish",
             post(handle_register_finish),
         )
+        .route("/api/v1/webauthn/login/begin", post(handle_login_begin))
+        .route("/api/v1/webauthn/login/finish", post(handle_login_finish))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
@@ -209,5 +213,106 @@ async fn handle_register_finish(
                 }),
             )
             .await,
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginBegin {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginFinish {
+    challenge_id: String,
+    /// La sortie brute de `navigator.credentials.get` : vérifiée par
+    /// `ra-console` elle-même (§16), jamais relayée à `ca-server`.
+    credential: serde_json::Value,
+}
+
+/// Un nom d'opérateur : ce qu'un humain saisit, pas un identifiant technique.
+/// Une longueur bornée suffit à écarter un corps abusif avant toute requête ;
+/// le reste (existe ou non) ne se voit jamais dans la réponse (§16).
+fn looks_like_a_name(s: &str) -> bool {
+    !s.is_empty() && s.chars().count() <= 256
+}
+
+/// `POST /api/v1/webauthn/login/begin` : options WebAuthn de même forme que le
+/// nom existe ou non (docs/WEBUI.md §16). Ni `ca-server` ni son lien interne ne
+/// sont sollicités : le registre en lecture seule suffit.
+async fn handle_login_begin(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !is_json(&headers) {
+        return unsupported_media_type();
+    }
+    let req: LoginBegin = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "bad_request", "corps invalide"),
+    };
+    if !looks_like_a_name(&req.name) {
+        return error(StatusCode::BAD_REQUEST, "bad_request", "nom invalide");
+    }
+    match state.login.begin(&req.name).await {
+        Ok(begun) => Json(serde_json::json!({
+            "challenge_id": begun.challenge_id,
+            "webauthn": begun.options.public_key,
+        }))
+        .into_response(),
+        Err(e) => {
+            tracing::error!(erreur = %e, "login/begin : base indisponible");
+            error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                "service indisponible",
+            )
+        }
+    }
+}
+
+/// `POST /api/v1/webauthn/login/finish` : assertion vérifiée contre le
+/// registre en lecture seule. Ne rend pas encore de session (1c-2, docs/WEBUI.md
+/// §15 étape 1c) : seulement l'identité, une fois l'assertion admise.
+async fn handle_login_finish(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !is_json(&headers) {
+        return unsupported_media_type();
+    }
+    let req: LoginFinish = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "bad_request", "corps invalide"),
+    };
+    let Ok(challenge_id) = req.challenge_id.parse() else {
+        return invalid_credential();
+    };
+    let credential = match serde_json::from_value(req.credential) {
+        Ok(c) => c,
+        Err(_) => return invalid_credential(),
+    };
+    match state.login.finish(challenge_id, &credential).await {
+        Ok(v) => Json(serde_json::json!({
+            "operator": v.operator,
+            "role": v.role.as_str(),
+        }))
+        .into_response(),
+        Err(LoginError::Invalid) => invalid_credential(),
+    }
+}
+
+/// Une seule forme pour tout refus de `login/finish` (§16) : nom inconnu,
+/// leurre, challenge périmé ou déjà consommé, clé révoquée, opérateur
+/// désactivé, signature refusée, compteur en régression ne se distinguent
+/// jamais de l'extérieur.
+fn invalid_credential() -> Response {
+    error(
+        StatusCode::UNAUTHORIZED,
+        "invalid_credential",
+        "identifiants invalides",
     )
 }
