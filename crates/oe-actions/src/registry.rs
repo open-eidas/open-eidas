@@ -6,7 +6,8 @@ use oe_webauthn::{AttestedPasskey, Uuid};
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     Auditeur,
     RaOperateur,
@@ -139,36 +140,31 @@ impl Registry {
         c: NewCredential<'_>,
         now: OffsetDateTime,
     ) -> Result<(), sqlx::Error> {
-        let passkey = serde_json::to_value(c.passkey).map_err(|e| sqlx::Error::Encode(e.into()))?;
-        let id = credential_id(c.passkey.cred_id().as_ref());
-        sqlx::query(
-            "INSERT INTO webauthn_credentials
-               (credential_id, operator_id, public_key, aaguid, attestation_format,
-                attestation_object, backup_eligible, label, initiated_by, initiated_at,
-                confirmed_by, confirmed_at, passkey)
-             VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8, $9, $10, $11, $12)",
-        )
-        .bind(id)
-        .bind(c.operator_id)
-        // Copie lisible sans la bibliothèque : la clé complète est dans `passkey`.
-        .bind(passkey.to_string().into_bytes())
-        .bind(c.aaguid)
-        .bind(c.attestation_format)
-        .bind(c.attestation_object)
-        .bind(c.label)
-        .bind(c.initiated_by)
-        .bind(now)
-        .bind(c.confirmed_by)
-        .bind(c.confirmed_by.map(|_| now))
-        .bind(passkey)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut conn = self.pool.acquire().await?;
+        insert_credential(&mut conn, c, now).await
     }
 
     pub async fn operator(&self, id: Uuid) -> Result<Option<Operator>, sqlx::Error> {
         let row = sqlx::query("SELECT id, name, role, disabled_at FROM operators WHERE id = $1")
             .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.and_then(|r| {
+            Some(Operator {
+                id: r.get("id"),
+                name: r.get("name"),
+                role: Role::parse(r.get::<&str, _>("role"))?,
+                disabled: r.get::<Option<OffsetDateTime>, _>("disabled_at").is_some(),
+            })
+        }))
+    }
+
+    /// Un opérateur par son nom (connexion, §16 « connexion par nom »). `None`
+    /// ne distingue pas un nom absent d'une erreur de frappe : à l'appelant de
+    /// répondre de la même forme dans les deux cas.
+    pub async fn operator_by_name(&self, name: &str) -> Result<Option<Operator>, sqlx::Error> {
+        let row = sqlx::query("SELECT id, name, role, disabled_at FROM operators WHERE name = $1")
+            .bind(name)
             .fetch_optional(&self.pool)
             .await?;
         Ok(row.and_then(|r| {
@@ -251,6 +247,39 @@ impl Registry {
             .await?;
         Ok(())
     }
+}
+
+/// Même inscription, dans la transaction de l'appelant.
+pub(crate) async fn insert_credential(
+    conn: &mut sqlx::PgConnection,
+    c: NewCredential<'_>,
+    now: OffsetDateTime,
+) -> Result<(), sqlx::Error> {
+    let passkey = serde_json::to_value(c.passkey).map_err(|e| sqlx::Error::Encode(e.into()))?;
+    let id = credential_id(c.passkey.cred_id().as_ref());
+    sqlx::query(
+        "INSERT INTO webauthn_credentials
+           (credential_id, operator_id, public_key, aaguid, attestation_format,
+            attestation_object, backup_eligible, label, initiated_by, initiated_at,
+            confirmed_by, confirmed_at, passkey)
+         VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8, $9, $10, $11, $12)",
+    )
+    .bind(id)
+    .bind(c.operator_id)
+    // Copie lisible sans la bibliothèque : la clé complète est dans `passkey`.
+    .bind(passkey.to_string().into_bytes())
+    .bind(c.aaguid)
+    .bind(c.attestation_format)
+    .bind(c.attestation_object)
+    .bind(c.label)
+    .bind(c.initiated_by)
+    .bind(now)
+    .bind(c.confirmed_by)
+    .bind(c.confirmed_by.map(|_| now))
+    .bind(passkey)
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]

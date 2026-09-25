@@ -22,6 +22,9 @@ pub use webauthn_rs::prelude::{
 use webauthn_rs::prelude::{AttestationCaListBuilder, CredentialID};
 use webauthn_rs::{Webauthn, WebauthnBuilder};
 
+mod decoy;
+pub use decoy::decoy_authentication_challenge;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("configuration WebAuthn : {0}")]
@@ -71,9 +74,44 @@ pub fn trusted_models(models: &[TrustedModel<'_>]) -> Result<AttestationCaList, 
     Ok(b.build())
 }
 
+/// Ce que l'attestation d'une clé enregistrée dit du modèle. L'AAGUID a déjà
+/// été confronté à la liste blanche par la bibliothèque ; on le lit ici pour
+/// le conserver au registre, lisible sans elle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttestationSummary {
+    pub aaguid: Uuid,
+    /// Forme de l'attestation (`basic`, `attca`, `anonca`, `self`). Jamais
+    /// `none` : une clé sans attestation est refusée.
+    pub format: &'static str,
+}
+
+/// Refuse une clé dont on ne peut pas lire un AAGUID et une attestation
+/// vérifiable : sans eux, la clé ne prouverait pas son modèle.
+pub fn summarize_attestation(key: &AttestedPasskey) -> Result<AttestationSummary, Error> {
+    use webauthn_rs::prelude::{AttestationMetadata, ParsedAttestationData};
+    let attestation = key.attestation();
+    let format = match attestation.data {
+        ParsedAttestationData::Basic(_) => "basic",
+        ParsedAttestationData::AttCa(_) => "attca",
+        ParsedAttestationData::AnonCa(_) => "anonca",
+        ParsedAttestationData::Self_ => "self",
+        _ => {
+            return Err(Error::Config(
+                "attestation absente ou non vérifiable".into(),
+            ))
+        }
+    };
+    let aaguid = match attestation.metadata {
+        AttestationMetadata::Packed { aaguid } | AttestationMetadata::Tpm { aaguid, .. } => aaguid,
+        _ => return Err(Error::Config("AAGUID absent de l'attestation".into())),
+    };
+    Ok(AttestationSummary { aaguid, format })
+}
+
 pub struct Verifier {
     webauthn: Webauthn,
     models: AttestationCaList,
+    rp_id: String,
 }
 
 /// Résultat d'une assertion vérifiée.
@@ -113,7 +151,17 @@ impl Verifier {
             .rp_name(rp_name)
             .build()
             .map_err(|e| Error::Config(e.to_string()))?;
-        Ok(Verifier { webauthn, models })
+        Ok(Verifier {
+            webauthn,
+            models,
+            rp_id: rp_id.to_string(),
+        })
+    }
+
+    /// Le RP ID de ce vérificateur, pour construire un défi de la même forme
+    /// qu'une authentification réelle sans en être une (`decoy_authentication_challenge`).
+    pub fn rp_id(&self) -> &str {
+        &self.rp_id
     }
 
     pub fn start_registration(

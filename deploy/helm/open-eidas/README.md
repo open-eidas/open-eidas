@@ -126,6 +126,55 @@ kubectl -n open-eidas exec deploy/open-eidas-ca -c ca -- \
     ca-server ra approve <transaction_id> "prenom.nom" "identité vérifiée le ..."
 ```
 
+## Lien interne des actions d'opérateur (optionnel)
+
+`ca-server` peut exposer, sur un **second port** (`ca.service.internalPort`,
+8321), les routes `/internal/v1/*` par lesquelles la console d'exploitation
+(`ra-console`, pas encore déployable) fait exécuter des actions signées par des
+opérateurs ([docs/WEBUI.md](../../../docs/WEBUI.md) §16-17). Désactivé par
+défaut : un port qui accepte des actions privilégiées ne s'ouvre que sur
+décision explicite.
+
+```yaml
+ca:
+  internal:
+    enabled: true
+    webauthn:
+      rpId: console.open-eidas.example        # nom d'hôte exact de l'origine
+      origin: https://console.open-eidas.example
+    models:                                    # liste blanche de clés (décision O6)
+      - description: "YubiKey 5 (série X)"
+        aaguid: "…"
+        rootPem: |
+          -----BEGIN CERTIFICATE-----
+```
+
+Ce que ça ajoute : le port dans le `Service` de la CA (**jamais** dans une
+`HTTPRoute`), une `ConfigMap` de la liste blanche, et une `NetworkPolicy` qui
+n'ouvre le port interne qu'aux pods `ra-console` de la release (le port public
+reste ouvert au cluster). Le rendu **échoue** si `rpId`, `origin` ou `models`
+manquent : un lien interne à moitié configuré n'est pas déployé. Le cluster doit
+faire appliquer les `NetworkPolicy` ; sans cela, le port serait joignable de tout
+le cluster (le mTLS reste, lui, exigé par `ca-server`).
+
+**Certificat du serveur (Jour 0).** Au premier démarrage, l'entrypoint dépose la
+demande de certificat `internal_server` (`ca-server internal-cert server`) et
+attend son approbation avant d'ouvrir le service : le sidecar d'approbation la
+traite en démonstration ; en production, un opérateur nommé l'approuve :
+
+```bash
+kubectl -n <ns> exec deploy/<release>-open-eidas-ca -c ca -- \
+    ca-server ra list PENDING
+kubectl -n <ns> exec deploy/<release>-open-eidas-ca -c ca -- \
+    ca-server ra approve <transaction> prenom.nom "amorçage du lien interne"
+```
+
+La clé et le certificat vivent sur le volume d'état (`internal-tls/`, clé en
+0600). La demande et la clé survivent à un redémarrage. Le certificat vaut 3 mois
+et n'est lu qu'au démarrage : le renouveler demande de supprimer `server.pem`
+puis de redémarrer le pod. Le certificat **client** de `ra-console` se demande
+côté `ra-console`, jamais approuvé par elle-même.
+
 ## Écarts notables avec le docker-compose
 
 Aucun, désormais, sur le plan des permissions : le remplacement d'OpenXPKI par

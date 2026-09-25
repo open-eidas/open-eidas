@@ -7,11 +7,12 @@
 //! du « big bang ».
 //!
 //! Sous-commandes : `ceremony`, `serve`, `ra list|approve|reject`, `revoke`,
-//! `operators bootstrap-admin`, `conformance`, `healthcheck`, `verify-audit`.
+//! `operators bootstrap-admin|recover-admin|audit|reconcile`, `internal-cert server`, `conformance`,
+//! `healthcheck`, `verify-audit`.
 
 use std::sync::Arc;
 
-use ca_server::{config, http};
+use ca_server::{config, http, internal, internal_tls, registry_check, revoker, webauthn_models};
 use clap::{Parser, Subcommand};
 use config::Config;
 use oe_hsm::SigningToken;
@@ -53,6 +54,11 @@ enum Command {
         #[command(subcommand)]
         action: OperatorsAction,
     },
+    /// Certificat du serveur du lien interne (docs/WEBUI.md §14, §16).
+    InternalCert {
+        #[command(subcommand)]
+        action: InternalCertAction,
+    },
     /// Matrice de conformité ETSI.
     Conformance {
         #[arg(long)]
@@ -68,6 +74,19 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum InternalCertAction {
+    /// Demande (ou récupère) le certificat `internal_server` de ce service.
+    /// Crée la clé si elle n'existe pas, dépose la demande, et écrit le
+    /// certificat dès qu'elle est approuvée (`ra approve`). Relancer la
+    /// commande après approbation. Code de sortie 3 : demande en attente.
+    Server {
+        /// Nom DNS du service, celui que `ra-console` utilisera pour s'y
+        /// connecter (ex. `ca.open-eidas.svc`). Minuscules, sans joker.
+        dns: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum OperatorsAction {
     /// Jour 0 : crée le premier administrateur et son invitation à usage
     /// unique. Refuse s'il existe déjà un administrateur actif. Le jeton est
@@ -75,6 +94,63 @@ enum OperatorsAction {
     BootstrapAdmin {
         /// Nom de l'administrateur (1 à 100 caractères).
         name: String,
+        /// Durée de validité de l'invitation, en minutes (1 à 1440).
+        #[arg(long, default_value_t = 15)]
+        ttl_minutes: i64,
+    },
+    /// Résout les divergences entre le registre et le journal chaîné
+    /// (docs/WEBUI.md §21), par exemple après une restauration de la base : le
+    /// journal fait foi. Une révocation ou un rôle du journal absent de la base est
+    /// ré-appliqué ; une clé perdue ne peut pas être recréée, et n'est acquittée
+    /// que sur demande explicite. Chaque résolution est consignée au journal.
+    /// Code de sortie 0 : tout est résolu ; 1 : reste des divergences ; 2 : journal
+    /// illisible ou rompu.
+    Reconcile {
+        /// Motif écrit (consigné au journal).
+        #[arg(long)]
+        reason: String,
+        /// Prend acte de la perte de cette clé (à ré-enrôler). Répétable.
+        #[arg(long = "acknowledge-missing")]
+        acknowledge_missing: Vec<String>,
+        /// Montre ce qui serait fait, sans rien modifier ni écrire au journal.
+        #[arg(long)]
+        dry_run: bool,
+        /// Journal à lire (défaut : `OPENEIDAS_AUDIT_FILE`).
+        #[arg(long)]
+        journal: Option<String>,
+    },
+    /// Audite la chaîne du registre (docs/WEBUI.md §21) : chaque clé active se
+    /// remonte, signatures re-vérifiées, jusqu'à une ancre attestée par le journal
+    /// chaîné. Code de sortie 0 : registre sain ; 1 : constats ; 2 : journal
+    /// illisible ou rompu (on ne juge pas le registre contre un journal douteux).
+    Audit {
+        /// Journal à lire (défaut : `OPENEIDAS_AUDIT_FILE`), par exemple la copie
+        /// répliquée hors de l'hôte.
+        #[arg(long)]
+        journal: Option<String>,
+    },
+    /// Récupération d'un système verrouillé (docs/WEBUI.md §21) : crée une
+    /// invitation d'administrateur alors que les administrateurs « actifs » ont
+    /// perdu leurs clés, sans rien désactiver du registre existant. Exige le PIN
+    /// du token PKCS#11 (garde de l'hôte), un motif écrit et un drapeau explicite ;
+    /// écrit l'événement `operators.admin_recovery` au journal. Le jeton est
+    /// affiché une seule fois, sur la sortie standard.
+    RecoverAdmin {
+        /// Nom de l'administrateur : nouveau, ou un administrateur existant qui a
+        /// perdu sa clé.
+        name: String,
+        /// Motif écrit (consigné au journal).
+        #[arg(long)]
+        reason: String,
+        /// Confirmation explicite : cette commande contourne le refus de
+        /// `bootstrap-admin` face à des administrateurs actifs.
+        #[arg(long)]
+        confirm_recovery: bool,
+        /// Le PIN du token de la CA émettrice est lu sur l'entrée standard (une
+        /// ligne), jamais en argument ni en variable d'environnement :
+        /// `read -rs PIN; printf %s "$PIN" | ca-server operators recover-admin … --pin-stdin`.
+        #[arg(long, required = true)]
+        pin_stdin: bool,
         /// Durée de validité de l'invitation, en minutes (1 à 1440).
         #[arg(long, default_value_t = 15)]
         ttl_minutes: i64,
@@ -296,6 +372,127 @@ async fn build_issuer(
     .unwrap_or_else(|e| die("construction de l'autorité émettrice", e))
 }
 
+/// Le service d'actions d'opérateur, derrière le lien interne. Toute lacune de
+/// configuration est fatale : un lien interne à moitié configuré n'est pas
+/// ouvert (« échec fermé »).
+async fn build_actions_service(
+    cfg: &Config,
+    store: Arc<dyn oe_castore::Store>,
+    recorder: Arc<dyn oe_raflow::Recorder>,
+    issuer: Arc<oe_ca_core::Issuer>,
+) -> (
+    Arc<oe_actions::Service>,
+    Arc<oe_actions::RegistryGuard>,
+    oe_actions::Registry,
+) {
+    for (name, value) in [
+        ("OPENEIDAS_WEBAUTHN_RP_ID", &cfg.webauthn_rp_id),
+        ("OPENEIDAS_WEBAUTHN_ORIGIN", &cfg.webauthn_origin),
+        ("OPENEIDAS_WEBAUTHN_MODELS_FILE", &cfg.webauthn_models_file),
+    ] {
+        if value.is_empty() {
+            die(
+                "lien interne",
+                format!("{name} est obligatoire quand OPENEIDAS_INTERNAL_LISTEN est défini"),
+            );
+        }
+    }
+    let models = webauthn_models::load(&cfg.webauthn_models_file)
+        .unwrap_or_else(|e| die("liste blanche de modèles de clés", e));
+    let origin = oe_webauthn::Url::parse(&cfg.webauthn_origin)
+        .unwrap_or_else(|e| die("OPENEIDAS_WEBAUTHN_ORIGIN", e));
+    let verifier =
+        oe_webauthn::Verifier::new(&cfg.webauthn_rp_id, &origin, &cfg.webauthn_rp_name, models)
+            .unwrap_or_else(|e| die("configuration WebAuthn", e));
+    let registry = oe_actions::Registry::connect(&cfg.dsn)
+        .await
+        .unwrap_or_else(|e| die("ouverture du registre des opérateurs", e));
+    let decider = oe_raflow::Decider::new(oe_raflow::DeciderOptions {
+        store: store.clone(),
+        recorder: Some(recorder.clone()),
+        clock: None,
+    });
+    // Fermée tant que le contrôle du registre contre le journal n'a pas dit
+    // qu'il est sain : le service ne sert rien avant.
+    let guard = oe_actions::RegistryGuard::new();
+    guard.block(vec!["contrôle du registre en cours".to_string()]);
+    let service = Arc::new(
+        oe_actions::Service::new(
+            registry.clone(),
+            verifier,
+            store,
+            decider,
+            recorder,
+            Arc::new(time::OffsetDateTime::now_utc),
+        )
+        .with_revoker(Arc::new(revoker::IssuerRevoker(issuer)))
+        .with_guard(guard.clone()),
+    );
+    (service, guard, registry)
+}
+
+fn build_flow(
+    cfg: &Config,
+    store: Arc<dyn oe_castore::Store>,
+    issuer: Arc<oe_ca_core::Issuer>,
+    recorder: Arc<dyn oe_raflow::Recorder>,
+) -> Arc<oe_raflow::Flow> {
+    Arc::new(
+        oe_raflow::Flow::new(oe_raflow::Options {
+            store,
+            issuer,
+            hmac_secret: cfg.enroll_hmac_key.clone(),
+            recorder: Some(recorder),
+            retry_after: time::Duration::seconds(5),
+            clock: None,
+        })
+        .unwrap_or_else(|e| die("construction de la machine à états RA", e.to_string())),
+    )
+}
+
+/// TLS du lien interne : les deux fichiers ou aucun. Sans TLS, le lien reste
+/// réservé à la boucle locale ; avec, il exige le certificat client de
+/// `ra-console` (docs/WEBUI.md §16).
+fn internal_link_tls(
+    cfg: &Config,
+    issuer: &x509_cert::Certificate,
+) -> Option<rustls::ServerConfig> {
+    if cfg.internal_listen.is_empty() {
+        if !cfg.internal_tls_cert_file.is_empty() || !cfg.internal_tls_key_file.is_empty() {
+            die(
+                "lien interne",
+                "OPENEIDAS_INTERNAL_TLS_* sans OPENEIDAS_INTERNAL_LISTEN : rien à protéger",
+            );
+        }
+        return None;
+    }
+    match (
+        cfg.internal_tls_cert_file.is_empty(),
+        cfg.internal_tls_key_file.is_empty(),
+    ) {
+        (true, true) => {
+            internal::check_loopback(&cfg.internal_listen)
+                .unwrap_or_else(|e| die("lien interne", e));
+            tracing::warn!("lien interne sans TLS : boucle locale seulement");
+            None
+        }
+        (false, false) => {
+            let cert = std::fs::read(&cfg.internal_tls_cert_file)
+                .unwrap_or_else(|e| die("certificat du lien interne", e));
+            let key = std::fs::read(&cfg.internal_tls_key_file)
+                .unwrap_or_else(|e| die("clé du lien interne", e));
+            Some(
+                internal_tls::server_config(issuer, &cert, &key, time::OffsetDateTime::now_utc())
+                    .unwrap_or_else(|e| die("TLS du lien interne", e)),
+            )
+        }
+        _ => die(
+            "lien interne",
+            "OPENEIDAS_INTERNAL_TLS_CERT_FILE et OPENEIDAS_INTERNAL_TLS_KEY_FILE vont ensemble",
+        ),
+    }
+}
+
 async fn run_serve() {
     tracing_subscriber::fmt::init();
     let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
@@ -307,17 +504,24 @@ async fn run_serve() {
     let issuer = Arc::new(build_issuer(&cfg, store.clone(), recorder).await);
 
     let flow_recorder: Arc<dyn oe_raflow::Recorder> = Arc::new(AuditRecorder(journal.clone()));
-    let flow = Arc::new(
-        oe_raflow::Flow::new(oe_raflow::Options {
-            store,
-            issuer: issuer.clone(),
-            hmac_secret: cfg.enroll_hmac_key.clone(),
-            recorder: Some(flow_recorder),
-            retry_after: time::Duration::seconds(5),
-            clock: None,
-        })
-        .unwrap_or_else(|e| die("construction de la machine à états RA", e.to_string())),
-    );
+    let internal_service = if cfg.internal_listen.is_empty() {
+        None
+    } else {
+        let (service, guard, registry) =
+            build_actions_service(&cfg, store.clone(), flow_recorder.clone(), issuer.clone()).await;
+        // Avant d'ouvrir quoi que ce soit : le registre est-il conforme au journal ?
+        registry_check::refresh(
+            &registry,
+            &cfg.audit_file,
+            &guard,
+            std::time::Duration::ZERO,
+        )
+        .await;
+        Some((service, guard, registry))
+    };
+    let internal_tls = internal_link_tls(&cfg, issuer.certificate());
+    let internal_store = store.clone();
+    let flow = build_flow(&cfg, store.clone(), issuer.clone(), flow_recorder);
 
     let _ = journal.append(
         oe_audit::EVENT_OPENED,
@@ -343,13 +547,22 @@ async fn run_serve() {
         ])),
     );
 
-    let server = Arc::new(http::Server::new(
-        issuer.clone(),
-        flow,
-        env!("CARGO_PKG_VERSION").to_string(),
-    ));
+    let mut server = http::Server::new(issuer.clone(), flow, env!("CARGO_PKG_VERSION").to_string());
+    if let Some((_, guard, _)) = &internal_service {
+        server = server.with_registry_guard(guard.clone());
+    }
+    let server = Arc::new(server);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    if let Some((_, guard, registry)) = &internal_service {
+        registry_check::spawn_periodic(
+            registry.clone(),
+            cfg.audit_file.clone(),
+            guard.clone(),
+            cfg.registry_check_interval,
+            shutdown_rx.clone(),
+        );
+    }
     server
         .start_crl_publication(cfg.crl_refresh, shutdown_rx.clone())
         .await
@@ -360,6 +573,38 @@ async fn run_serve() {
         .await
         .unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.listen), e));
     tracing::info!(adresse = %cfg.listen, emettrice = %server.issuer().certificate().tbs_certificate().subject(), "autorité de certification en écoute");
+
+    if let Some((service, _, _)) = internal_service {
+        let tcp = tokio::net::TcpListener::bind(bind_addr(&cfg.internal_listen))
+            .await
+            .unwrap_or_else(|e| die(&format!("écoute sur {}", cfg.internal_listen), e));
+        tracing::info!(adresse = %cfg.internal_listen, mtls = internal_tls.is_some(), "lien interne en écoute");
+        let app = internal::router(service, cfg.max_request_bytes);
+        let mut stop = shutdown_rx.clone();
+        let done = async move {
+            let _ = stop.changed().await;
+        };
+        match internal_tls {
+            Some(tls) => {
+                let listener = internal_tls::TlsListener::new(tcp, tls, internal_store);
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(listener, app)
+                        .with_graceful_shutdown(done)
+                        .await
+                    {
+                        die("serveur HTTP interne", e);
+                    }
+                });
+            }
+            None => {
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(tcp, app).with_graceful_shutdown(done).await {
+                        die("serveur HTTP interne", e);
+                    }
+                });
+            }
+        }
+    }
 
     let shutdown_timeout = cfg.shutdown_timeout;
     let graceful = async move {
@@ -389,7 +634,7 @@ fn join_comment(parts: &[String]) -> String {
 
 async fn run_ra_list(state: Option<String>) {
     tracing_subscriber::fmt::init();
-    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
     let store: Arc<dyn oe_castore::Store> = Arc::new(open_store(&cfg).await);
 
     let filter = match state.as_deref() {
@@ -431,7 +676,7 @@ async fn run_decide(
     comment: Vec<String>,
 ) {
     tracing_subscriber::fmt::init();
-    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
     let store: Arc<dyn oe_castore::Store> = Arc::new(open_store(&cfg).await);
     let journal = Arc::new(open_journal(&cfg));
     let recorder: Arc<dyn oe_raflow::Recorder> = Arc::new(AuditRecorder(journal));
@@ -483,7 +728,7 @@ async fn run_operators_bootstrap_admin(name: String, ttl_minutes: i64) {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
     // Ouvre le magasin de la CA pour appliquer les migrations, comme `serve`.
     let _ = open_store(&cfg).await;
     let registry = oe_actions::Registry::connect(&cfg.dsn)
@@ -510,6 +755,289 @@ async fn run_operators_bootstrap_admin(name: String, ttl_minutes: i64) {
     eprintln!(
         "Le jeton ci-dessous n'est affiché qu'une seule fois : il n'est conservé nulle part."
     );
+    println!("{}", invite.token);
+}
+
+async fn run_internal_cert_server(dns: String) {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
+    let cfg = Config::load().unwrap_or_else(|e| die("configuration invalide", &e));
+    if cfg.internal_tls_cert_file.is_empty() || cfg.internal_tls_key_file.is_empty() {
+        die(
+            "configuration invalide",
+            "OPENEIDAS_INTERNAL_TLS_CERT_FILE et OPENEIDAS_INTERNAL_TLS_KEY_FILE sont obligatoires",
+        );
+    }
+    let profile = oe_ca_core::profile::internal_server();
+    if let Err(e) = profile.validate_cn(&dns) {
+        die("nom DNS", e);
+    }
+
+    let key = oe_enroll::software_key::load_or_create_key(std::path::Path::new(
+        &cfg.internal_tls_key_file,
+    ))
+    .unwrap_or_else(|e| die("clé du serveur interne", e));
+    let (csr_der, _) = oe_enroll::build_csr(&key, &oe_enroll::Subject { common_name: dns })
+        .unwrap_or_else(|e| die("demande de certificat", e));
+
+    let store: Arc<dyn oe_castore::Store> = Arc::new(open_store(&cfg).await);
+    let journal = Arc::new(open_journal(&cfg));
+    let issuer = Arc::new(
+        build_issuer(
+            &cfg,
+            store.clone(),
+            Arc::new(AuditRecorder(journal.clone())),
+        )
+        .await,
+    );
+    let flow = build_flow(&cfg, store, issuer, Arc::new(AuditRecorder(journal)));
+    let result = flow
+        .submit(
+            &csr_der,
+            oe_ca_core::profile::PROFILE_INTERNAL_SERVER,
+            &oe_raflow::signature(&csr_der, &cfg.enroll_hmac_key),
+        )
+        .await
+        .unwrap_or_else(|e| die("dépôt de la demande", e));
+
+    match result.certificate {
+        Some(cert) => {
+            use der::EncodePem;
+            let pem = cert
+                .to_pem(der::pem::LineEnding::LF)
+                .unwrap_or_else(|e| die("encodage du certificat", e));
+            oe_enroll::software_key::write_certificate(
+                std::path::Path::new(&cfg.internal_tls_cert_file),
+                &pem,
+            )
+            .unwrap_or_else(|e| die("écriture du certificat", e));
+            // Rien de `result` n'est affiché : c'est une valeur qui porte le certificat,
+            // et l'analyse de flux de données la traite comme sensible même pour un
+            // champ public (l'identifiant de demande). Le chemin, lui, vient de la
+            // configuration.
+            eprintln!(
+                "Certificat émis, écrit dans {}.",
+                cfg.internal_tls_cert_file
+            );
+        }
+        None => {
+            eprintln!(
+                "Demande déposée, en attente d'approbation. Un opérateur la retrouve avec \
+                 `ca-server ra list PENDING` et l'approuve avec `ca-server ra approve`, \
+                 puis relancez cette commande."
+            );
+            std::process::exit(3);
+        }
+    }
+}
+
+async fn run_operators_reconcile(
+    reason: String,
+    acknowledge_missing: Vec<String>,
+    dry_run: bool,
+    journal: Option<String>,
+) {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
+    let _ = open_store(&cfg).await;
+    let registry = oe_actions::Registry::connect(&cfg.dsn)
+        .await
+        .unwrap_or_else(|e| die("ouverture du registre des opérateurs", e));
+    let path = journal.unwrap_or_else(|| cfg.audit_file.clone());
+    let events = registry_check::journal_events(&path).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        eprintln!("Rien n'est résolu contre un journal dont l'intégrité n'est pas garantie.");
+        std::process::exit(2);
+    });
+    // Les résolutions s'écrivent dans le même journal que celui qu'on a relu.
+    let recorder = AuditRecorder(Arc::new(open_journal(&cfg)));
+
+    let outcome = oe_actions::reconcile(
+        &registry,
+        &recorder,
+        &oe_actions::Replay::from_events(events),
+        &reason,
+        &acknowledge_missing,
+        dry_run,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap_or_else(|e| die("résolution des divergences", e));
+
+    for line in &outcome.resolved {
+        println!("OK\t{line}");
+    }
+    for d in &outcome.unresolved {
+        println!("KO\t{d}");
+    }
+    eprintln!(
+        "{} résolue(s), {} en suspens.{}",
+        outcome.resolved.len(),
+        outcome.unresolved.len(),
+        if dry_run {
+            " (essai à blanc : rien n'a été modifié)"
+        } else {
+            ""
+        }
+    );
+    if !outcome.unresolved.is_empty() {
+        eprintln!(
+            "Une clé perdue se ré-enrôle (invitation) ; `--acknowledge-missing <clé> --reason …` \
+             en prend acte au journal."
+        );
+        std::process::exit(1);
+    }
+    if !dry_run {
+        eprintln!("Les actions reprennent au prochain contrôle du registre (OPENEIDAS_REGISTRY_CHECK_INTERVAL) ou au redémarrage.");
+    }
+}
+
+async fn run_operators_audit(journal: Option<String>) {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
+    let _ = open_store(&cfg).await;
+    let registry = oe_actions::Registry::connect(&cfg.dsn)
+        .await
+        .unwrap_or_else(|e| die("ouverture du registre des opérateurs", e));
+
+    let path = journal.unwrap_or_else(|| cfg.audit_file.clone());
+    let records = match oe_audit::read(&path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("journal illisible ou rompu ({path}) : {e}");
+            eprintln!(
+                "Le registre n'est pas jugé contre un journal dont l'intégrité n'est pas garantie."
+            );
+            std::process::exit(2);
+        }
+    };
+    let view = oe_actions::JournalView::from_events(records.into_iter().filter_map(|r| {
+        r.data
+            .map(|d| (r.event, serde_json::Value::Object(d.into_iter().collect())))
+    }));
+    let report = oe_actions::audit_registry(&registry, &view)
+        .await
+        .unwrap_or_else(|e| die("audit du registre", e));
+
+    for k in &report.keys {
+        let short: String = k.credential_id.chars().take(16).collect();
+        match &k.verdict {
+            Ok(oe_actions::Verdict::Anchor) => {
+                println!("OK\t{}\t{short}\tancre (journal)", k.operator)
+            }
+            Ok(oe_actions::Verdict::Chained { depth }) => {
+                println!(
+                    "OK\t{}\t{short}\tchaîne signée, profondeur {depth}",
+                    k.operator
+                )
+            }
+            Err(why) => println!("KO\t{}\t{short}\t{why}", k.operator),
+        }
+    }
+    let findings = report.findings().len();
+    eprintln!(
+        "{} clé(s) active(s) auditée(s), {findings} constat(s).",
+        report.keys.len()
+    );
+    if findings > 0 {
+        std::process::exit(1);
+    }
+}
+
+/// Preuve de garde de l'hôte : le PIN présenté doit ouvrir le token de la CA
+/// émettrice. La valeur de `OPENEIDAS_ISSUING_PIN` du service n'est volontairement
+/// pas comparée : elle est lisible de tout accès shell, alors que le PIN est ce que
+/// détiennent les personnes habilitées.
+fn verify_token_pin(cfg: &Config, pin: &str) -> Result<(), String> {
+    oe_hsm::Pkcs11Token::open(&oe_hsm::Options {
+        module_path: cfg.pkcs11_module.clone(),
+        token_label: cfg.issuing_token_label.clone(),
+        key_label: cfg.issuing_key_label.clone(),
+        pin: pin.to_string(),
+    })
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+async fn run_operators_recover_admin(
+    name: String,
+    reason: String,
+    confirm_recovery: bool,
+    ttl_minutes: i64,
+) {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
+    if !confirm_recovery {
+        die(
+            "récupération",
+            "confirmation absente : ajoutez --confirm-recovery pour indiquer que vous savez \
+             que cette commande contourne le refus de `bootstrap-admin`",
+        );
+    }
+    if reason.trim().is_empty() {
+        die("récupération", "un motif écrit (--reason) est obligatoire");
+    }
+    // Le PIN vient de l'entrée standard, avant toute autre chose : une commande
+    // lancée sans lui n'ouvre ni la base ni le journal.
+    let mut pin = String::new();
+    std::io::stdin()
+        .read_line(&mut pin)
+        .unwrap_or_else(|e| die("lecture du PIN sur l'entrée standard", e));
+    let pin = pin.trim_end_matches(['\r', '\n']).to_string();
+    if pin.is_empty() {
+        die("récupération", "aucun PIN reçu sur l'entrée standard");
+    }
+
+    let cfg = Config::load_without_hsm().unwrap_or_else(|e| die("configuration invalide", &e));
+    let _ = open_store(&cfg).await;
+    let registry = oe_actions::Registry::connect(&cfg.dsn)
+        .await
+        .unwrap_or_else(|e| die("ouverture du registre des opérateurs", e));
+    let journal = Arc::new(open_journal(&cfg));
+    let recorder = AuditRecorder(journal);
+
+    if let Err(e) = verify_token_pin(&cfg, &pin) {
+        // Un refus est aussi un événement : quelqu'un a essayé.
+        let _ = oe_raflow::Recorder::append(
+            &recorder,
+            "operators.admin_recovery_refused",
+            serde_json::json!({ "nom": name, "motif_du_refus": "PIN du token refusé" }),
+        );
+        // Le détail de l'erreur PKCS#11 ne va pas à l'écran : il n'apprend rien
+        // à celui qui a la garde du PIN, et beaucoup à celui qui l'essaie.
+        tracing::debug!(erreur = %e, "PIN refusé");
+        die(
+            "récupération",
+            "le PIN présenté n'ouvre pas le token de la CA émettrice",
+        );
+    }
+
+    let invite = oe_actions::recover_admin(
+        &registry,
+        &recorder,
+        &name,
+        &reason,
+        time::Duration::minutes(ttl_minutes),
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap_or_else(|e| die("récupération de l'administrateur", e));
+
+    let expires = invite
+        .expires_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
+    eprintln!("Invitation de récupération créée pour l'administrateur {name:?}, valable jusqu'à {expires}.");
+    eprintln!(
+        "Le jeton ci-dessous n'est affiché qu'une seule fois : il n'est conservé nulle part."
+    );
+    eprintln!("Événement consigné au journal : operators.admin_recovery.");
     println!("{}", invite.token);
 }
 
@@ -588,6 +1116,20 @@ async fn main() {
             OperatorsAction::BootstrapAdmin { name, ttl_minutes } => {
                 run_operators_bootstrap_admin(name, ttl_minutes).await
             }
+            OperatorsAction::Audit { journal } => run_operators_audit(journal).await,
+            OperatorsAction::Reconcile {
+                reason,
+                acknowledge_missing,
+                dry_run,
+                journal,
+            } => run_operators_reconcile(reason, acknowledge_missing, dry_run, journal).await,
+            OperatorsAction::RecoverAdmin {
+                name,
+                reason,
+                confirm_recovery,
+                pin_stdin: _,
+                ttl_minutes,
+            } => run_operators_recover_admin(name, reason, confirm_recovery, ttl_minutes).await,
         },
         Command::Conformance { markdown } => {
             let matrix = oe_conformance::system_matrix();
@@ -610,6 +1152,9 @@ async fn main() {
         }
         Command::Healthcheck => run_healthcheck().await,
         Command::Version => println!("{}", env!("CARGO_PKG_VERSION")),
+        Command::InternalCert {
+            action: InternalCertAction::Server { dns },
+        } => run_internal_cert_server(dns).await,
         Command::VerifyAudit { path } => run_verify_audit(path).await,
     }
 }

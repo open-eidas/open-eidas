@@ -49,6 +49,22 @@ pub struct Config {
     pub crl_grace: time::Duration,
 
     pub audit_file: String,
+
+    /// Adresse du lien interne (`/internal/v1/*`, docs/WEBUI.md §17). Vide :
+    /// pas de lien interne, `ca-server` ne sert que le port public.
+    pub internal_listen: String,
+    /// Paramètres WebAuthn, obligatoires dès que le lien interne est ouvert.
+    pub webauthn_rp_id: String,
+    pub webauthn_origin: String,
+    pub webauthn_rp_name: String,
+    /// Liste blanche de modèles de clés (voir `webauthn_models`).
+    pub webauthn_models_file: String,
+    /// Certificat (PEM) et clé (PEM PKCS#8) du serveur du lien interne. Les
+    /// deux ou aucun : sans eux, le lien n'écoute que sur la boucle locale.
+    pub internal_tls_cert_file: String,
+    pub internal_tls_key_file: String,
+    /// Fréquence du contrôle du registre contre le journal (docs/WEBUI.md §21).
+    pub registry_check_interval: Duration,
 }
 
 fn env_str(key: &str, fallback: &str) -> String {
@@ -106,7 +122,26 @@ fn to_time_duration(d: Duration, fallback: time::Duration) -> time::Duration {
 }
 
 impl Config {
+    /// Configuration complète : tout ce que `serve`, `ceremony` et `revoke` exigent,
+    /// PIN du token de la CA émettrice et adresse publique comprises.
     pub fn load() -> Result<Config, String> {
+        Self::load_with(true)
+    }
+
+    /// Pour les commandes qui n'ouvrent aucun token PKCS#11 avec le PIN du
+    /// service et ne gravent aucune adresse dans un certificat
+    /// (`ra list|approve|reject`, `operators bootstrap-admin|audit|reconcile`) :
+    /// le PIN de l'émettrice et l'adresse publique ne sont pas exigés. Quiconque
+    /// n'a pas ce secret peut ainsi les lancer, ce qui est le but : moins de
+    /// secrets répandus dans les commandes d'exploitation. `recover-admin` lit
+    /// aussi sa configuration ainsi : le PIN qu'elle vérifie vient de l'entrée
+    /// standard, jamais de `OPENEIDAS_ISSUING_PIN`. Ce qui reste exigé (DSN,
+    /// journal, durées) est validé comme avant.
+    pub fn load_without_hsm() -> Result<Config, String> {
+        Self::load_with(false)
+    }
+
+    fn load_with(needs_hsm: bool) -> Result<Config, String> {
         let key_bits = env_u64("OPENEIDAS_CA_KEY_BITS", 4096)?;
         // Une CA signe des certificats qui lui survivent : sa clé est tenue
         // à une exigence au moins égale à celle des entités finales (ETSI
@@ -123,11 +158,11 @@ impl Config {
             );
         }
         let issuing_pin = std::env::var("OPENEIDAS_ISSUING_PIN").unwrap_or_default();
-        if issuing_pin.is_empty() {
+        if needs_hsm && issuing_pin.is_empty() {
             return Err("OPENEIDAS_ISSUING_PIN est obligatoire (code PIN du token PKCS#11 de la CA émettrice)".to_string());
         }
         let public_url = env_str("OPENEIDAS_PKI_PUBLIC_URL", "");
-        if public_url.is_empty() {
+        if needs_hsm && public_url.is_empty() {
             return Err("OPENEIDAS_PKI_PUBLIC_URL est obligatoire (adresse publique gravée dans les extensions CDP/AIA)".to_string());
         }
         let root_pin = std::env::var("OPENEIDAS_ROOT_PIN").unwrap_or_default();
@@ -210,6 +245,17 @@ impl Config {
                 "OPENEIDAS_AUDIT_FILE",
                 "/var/lib/open-eidas/state/ca-audit.log",
             ),
+            internal_listen: env_str("OPENEIDAS_INTERNAL_LISTEN", ""),
+            webauthn_rp_id: env_str("OPENEIDAS_WEBAUTHN_RP_ID", ""),
+            webauthn_origin: env_str("OPENEIDAS_WEBAUTHN_ORIGIN", ""),
+            webauthn_rp_name: env_str("OPENEIDAS_WEBAUTHN_RP_NAME", "Open eIDAS Console"),
+            webauthn_models_file: env_str("OPENEIDAS_WEBAUTHN_MODELS_FILE", ""),
+            internal_tls_cert_file: env_str("OPENEIDAS_INTERNAL_TLS_CERT_FILE", ""),
+            internal_tls_key_file: env_str("OPENEIDAS_INTERNAL_TLS_KEY_FILE", ""),
+            registry_check_interval: env_duration(
+                "OPENEIDAS_REGISTRY_CHECK_INTERVAL",
+                Duration::from_secs(60),
+            )?,
         })
     }
 }

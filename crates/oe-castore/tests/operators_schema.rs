@@ -349,5 +349,80 @@ async fn ra_console_role_cannot_write_ca_tables() {
             .unwrap_or_else(|e| panic!("lecture refusée à tort sur {table} : {e}"));
     }
 
+    // Ses propres tables : lecture et écriture, sans quoi la console ne tient
+    // ni session ni challenge. (Les clés étrangères vers le registre supposent le
+    // droit REFERENCES, jamais un droit d'écriture.)
+    for table in ["webauthn_challenges", "sessions", "login_counters"] {
+        for privilege in ["SELECT", "INSERT", "UPDATE", "DELETE"] {
+            let allowed: bool =
+                sqlx::query_scalar("SELECT has_table_privilege(current_user, $1, $2)")
+                    .bind(table)
+                    .bind(privilege)
+                    .fetch_one(&mut *conn)
+                    .await
+                    .unwrap();
+            assert!(allowed, "{privilege} sur {table} devrait être accordé");
+        }
+    }
+    // Et rien de plus : ni ses tables, ni celles de ca-server ne lui donnent le
+    // droit de les redéfinir ou de les vider.
+    for table in ["operators", "webauthn_credentials", "webauthn_challenges"] {
+        for privilege in ["TRUNCATE", "TRIGGER"] {
+            let allowed: bool =
+                sqlx::query_scalar("SELECT has_table_privilege(current_user, $1, $2)")
+                    .bind(table)
+                    .bind(privilege)
+                    .fetch_one(&mut *conn)
+                    .await
+                    .unwrap();
+            assert!(
+                !allowed,
+                "{privilege} sur {table} ne devrait pas être accordé"
+            );
+        }
+    }
+
     sqlx::query("RESET ROLE").execute(&mut *conn).await.unwrap();
+}
+
+/// Les invariants des tables de ra-console sont portés par la base, comme ceux du
+/// registre : un challenge de plus de 5 minutes, ou une action sans opérateur,
+/// sont refusés par PostgreSQL et non par une convention de code.
+#[tokio::test]
+async fn ra_console_tables_enforce_their_invariants() {
+    let pool = require_pool!();
+    let insert = |kind: &'static str, operator: Option<&'static str>, minutes: i32| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO webauthn_challenges (id, kind, challenge, operator_id, created_at, expires_at)
+                 VALUES (gen_random_uuid(), $1, '\\x01', $2::uuid, now(), now() + make_interval(mins => $3))",
+            )
+            .bind(kind)
+            .bind(operator)
+            .bind(minutes)
+            .execute(&pool)
+            .await
+        }
+    };
+
+    // Un challenge de connexion, court, sans opérateur encore identifié.
+    insert("login", None, 5)
+        .await
+        .expect("challenge de connexion");
+    // Plus de 5 minutes : refusé.
+    let err = insert("login", None, 6)
+        .await
+        .expect_err("challenge trop long");
+    assert_eq!(sqlstate(&err).as_deref(), Some("23514"));
+    // Un enregistrement ou une action sans opérateur : refusé.
+    for kind in ["register", "action"] {
+        let err = insert(kind, None, 5)
+            .await
+            .expect_err("opérateur obligatoire");
+        assert_eq!(sqlstate(&err).as_deref(), Some("23514"), "{kind}");
+    }
+    // Un type inconnu : refusé.
+    let err = insert("autre", None, 5).await.expect_err("type inconnu");
+    assert_eq!(sqlstate(&err).as_deref(), Some("23514"));
 }

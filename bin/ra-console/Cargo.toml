@@ -1,0 +1,59 @@
+[package]
+name = "ra-console"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Console d'exploitation RA/CA : relais des actions signées vers ca-server, sessions, lecture (docs/WEBUI.md)."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ra-console"
+path = "src/main.rs"
+
+# ra-console n'ouvre jamais de session PKCS#11 (docs/WEBUI.md §16) et ne lie pas
+# `cryptoki` : aucune dépendance directe à oe-hsm ni à oe-ca-core. oe-enroll ne tire
+# d'oe-hsm que le trait `SigningToken` (sans la feature `pkcs11`), pour signer sa CSR
+# avec une clé logicielle. oe-actions et oe-webauthn n'en dépendent pas non plus.
+# `tests/no_pkcs11.rs` lit le graphe réel et échoue si `cryptoki` y revient. Les
+# constantes du lien interne viennent de oe-conformance.
+[dependencies]
+oe-conformance = { path = "../../crates/oe-conformance" }
+oe-enroll = { path = "../../crates/oe-enroll" }
+oe-certs = { path = "../../crates/oe-certs" }
+# Registre en lecture seule (identité, clés actives) et vérification des
+# connexions (docs/WEBUI.md §15, étape 1c) : jamais l'émission ni la révocation,
+# qui restent le seul fait de ca-server (§16).
+oe-actions = { path = "../../crates/oe-actions" }
+oe-webauthn = { path = "../../crates/oe-webauthn" }
+clap = { version = "4", features = ["derive"] }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "time", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+der = { version = "0.8", features = ["pem", "std"] }
+x509-cert = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["std", "formatting", "serde"] }
+thiserror = "2"
+sha2 = "0.10"
+hmac = "0.12"
+
+[dev-dependencies]
+oe-raflow = { path = "../../crates/oe-raflow" }
+webauthn-authenticator-rs = { version = "0.5", features = ["softtoken"] }
+ca-server = { path = "../ca-server" }
+oe-ca-core = { path = "../../crates/oe-ca-core" }
+oe-castore = { path = "../../crates/oe-castore", features = ["postgres"] }
+oe-hsm = { path = "../../crates/oe-hsm" }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rsa = "0.9"
+rand = "0.8"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

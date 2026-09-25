@@ -174,3 +174,37 @@ repli interne au cluster est donc en http, pas https.
 {{- printf "http://%s-ocsp:%d" (include "open-eidas.fullname" .) (.Values.ocsp.service.port | int) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Nom DNS du lien interne de la CA : celui que ra-console utilisera, gravé dans
+le SAN du certificat internal_server.
+*/}}
+{{- define "open-eidas.caInternalDNS" -}}
+{{- default (printf "%s-ca" (include "open-eidas.fullname" .)) .Values.ca.internal.dnsName -}}
+{{- end -}}
+
+{{/*
+Variables du lien interne, pour le seul conteneur `ca` (pas pour le sidecar
+d'approbation, qui n'ouvre aucun port). Tout ce qui manque fait échouer le
+rendu : un lien interne à moitié configuré n'est pas déployé.
+*/}}
+{{- define "open-eidas.caInternalEnv" -}}
+{{- $ctx := . -}}
+{{- $w := $ctx.Values.ca.internal.webauthn -}}
+- name: OPENEIDAS_INTERNAL_LISTEN
+  value: {{ printf ":%d" ($ctx.Values.ca.service.internalPort | int) | quote }}
+- name: OPENEIDAS_INTERNAL_TLS_CERT_FILE
+  value: /var/lib/open-eidas/state/internal-tls/server.pem
+- name: OPENEIDAS_INTERNAL_TLS_KEY_FILE
+  value: /var/lib/open-eidas/state/internal-tls/server.key
+- name: OPENEIDAS_INTERNAL_DNS_NAME
+  value: {{ include "open-eidas.caInternalDNS" $ctx | quote }}
+- name: OPENEIDAS_WEBAUTHN_RP_ID
+  value: {{ required "ca.internal.webauthn.rpId est obligatoire quand ca.internal.enabled" $w.rpId | quote }}
+- name: OPENEIDAS_WEBAUTHN_ORIGIN
+  value: {{ required "ca.internal.webauthn.origin est obligatoire quand ca.internal.enabled" $w.origin | quote }}
+- name: OPENEIDAS_WEBAUTHN_RP_NAME
+  value: {{ $w.rpName | quote }}
+- name: OPENEIDAS_WEBAUTHN_MODELS_FILE
+  value: /etc/open-eidas/webauthn/models.json
+{{- end -}}

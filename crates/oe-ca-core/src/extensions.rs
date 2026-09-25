@@ -36,6 +36,8 @@ pub const OID_OCSP_NO_CHECK: &str = "1.3.6.1.5.5.7.48.1.5";
 const OID_AD_CA_ISSUERS: &str = "1.3.6.1.5.5.7.48.2";
 const OID_AD_OCSP: &str = "1.3.6.1.5.5.7.48.1";
 const OID_CRL_NUMBER: &str = "2.5.29.20";
+const OID_CERTIFICATE_POLICIES: &str = "2.5.29.32";
+const OID_SUBJECT_ALT_NAME: &str = "2.5.29.17";
 
 pub(crate) fn basic_constraints(ca: bool, path_len: Option<u8>) -> Result<Extension, CaError> {
     build(
@@ -134,4 +136,26 @@ pub(crate) fn authority_info_access(
         });
     }
     build(OID_AUTHORITY_INFO_ACCESS, false, &descriptions)
+}
+
+/// `certificatePolicies` (RFC 5280 §4.2.1.4) avec une seule politique, sans
+/// qualificateur.
+pub(crate) fn certificate_policy(policy_oid: &str) -> Result<Extension, CaError> {
+    use x509_cert::ext::pkix::certpolicy::PolicyInformation;
+    let info = PolicyInformation {
+        policy_identifier: oid(policy_oid),
+        policy_qualifiers: None,
+    };
+    build(OID_CERTIFICATE_POLICIES, false, &vec![info])
+}
+
+/// `subjectAltName` réduit à un `dNSName`. Non critique (RFC 5280 §4.2.1.6 ne
+/// l'exige que pour un sujet vide) : un vérificateur TLS identifie le serveur
+/// par ce nom, jamais par le CN.
+pub(crate) fn subject_alt_name_dns(name: &str) -> Result<Extension, CaError> {
+    build(
+        OID_SUBJECT_ALT_NAME,
+        false,
+        &vec![GeneralName::DnsName(Ia5String::new(name)?)],
+    )
 }

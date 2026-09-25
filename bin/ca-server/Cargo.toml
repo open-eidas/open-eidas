@@ -22,10 +22,12 @@ oe-ca-core = { path = "../../crates/oe-ca-core" }
 oe-raflow = { path = "../../crates/oe-raflow" }
 oe-actions = { path = "../../crates/oe-actions" }
 oe-audit = { path = "../../crates/oe-audit" }
+oe-webauthn = { path = "../../crates/oe-webauthn" }
+oe-enroll = { path = "../../crates/oe-enroll" }
 oe-conformance = { path = "../../crates/oe-conformance" }
 clap = { version = "4", features = ["derive"] }
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 der = { version = "0.8", features = ["pem", "std"] }
@@ -36,9 +38,17 @@ serde_json = "1"
 hex = "0.4"
 base64 = "0.22"
 sha2 = "0.10"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+rsa = "0.9"
+async-trait = "0.1"
+rand = "0.8"
+
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [dev-dependencies]
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+webauthn-authenticator-rs = { version = "0.5", features = ["softtoken"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

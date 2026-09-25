@@ -118,6 +118,36 @@ ca:
     tag: "latest"
   service:
     port: 8320
+    # Second port, réservé au lien interne ra-console <-> ca-server
+    # (docs/WEBUI.md §16-17). Il sert /internal/v1/* en mTLS, terminé par
+    # ca-server lui-même, et n'a jamais de HTTPRoute : une NetworkPolicy ne voit
+    # que les ports, pas les chemins.
+    internalPort: 8321
+  # Lien interne des actions signées par les opérateurs. Désactivé par défaut :
+  # ra-console n'est pas encore déployable, et un port qui accepte des actions
+  # privilégiées ne s'ouvre que sur décision explicite.
+  internal:
+    enabled: false
+    # Nom DNS sous lequel ra-console joint ca-server, repris dans le SAN du
+    # certificat `internal_server`. Vide = le nom du Service de la CA.
+    dnsName: ""
+    # Relying Party WebAuthn des opérateurs (docs/WEBUI.md §2) : rpId est le nom
+    # d'hôte exact de l'origine, jamais le domaine racine. Obligatoires.
+    webauthn:
+      rpId: ""
+      rpName: "Open eIDAS Console"
+      origin: ""
+    # Liste blanche de modèles de clés d'opérateur (décision O6) : une entrée par
+    # modèle, avec la racine PEM de son attestation. Obligatoire, revue par PR.
+    #   - description: "YubiKey 5 (série X)"
+    #     aaguid: "00000000-0000-0000-0000-000000000000"
+    #     rootPem: |
+    #       -----BEGIN CERTIFICATE-----
+    models: []
+    # Sans NetworkPolicy, le port interne serait joignable de tout le cluster. Le
+    # cluster doit faire appliquer les NetworkPolicy (CNI compatible).
+    networkPolicy:
+      enabled: true
   # Dimensionné par mesure directe (voir docs/SIZING.md) : la cérémonie de
   # clé (2x RSA-4096) réussit même au plancher minimal accepté par Docker
   # (6Mi) ; le régime `serve` sous charge réelle d'enrôlement est stable dès

@@ -296,6 +296,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 name = "ca-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "clap",
@@ -308,18 +309,26 @@ dependencies = [
  "oe-castore",
  "oe-certs",
  "oe-conformance",
+ "oe-enroll",
  "oe-hsm",
  "oe-raflow",
+ "oe-webauthn",
+ "rand 0.8.8",
  "reqwest",
+ "rsa",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",
  "sqlx",
  "time",
  "tokio",
+ "tokio-rustls",
  "tower",
  "tracing",
  "tracing-subscriber",
+ "webauthn-authenticator-rs",
  "x509-cert",
 ]
 
@@ -1464,10 +1473,13 @@ dependencies = [
 name = "oe-actions"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "base64 0.22.1",
  "hex",
  "oe-castore",
  "oe-raflow",
  "oe-webauthn",
+ "openssl",
  "rand 0.8.8",
  "serde",
  "serde_json",
@@ -1600,6 +1612,7 @@ dependencies = [
  "oe-certs",
  "oe-hsm",
  "pem",
+ "rand 0.8.8",
  "reqwest",
  "rsa",
  "serde",
@@ -1747,9 +1760,12 @@ dependencies = [
 name = "oe-webauthn"
 version = "0.1.0"
 dependencies = [
+ "rand 0.8.8",
+ "serde_json",
  "thiserror 2.0.20",
  "webauthn-authenticator-rs",
  "webauthn-rs",
+ "webauthn-rs-proto",
 ]
 
 [[package]]
@@ -2027,6 +2043,43 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "ra-console"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "ca-server",
+ "clap",
+ "der 0.8.2",
+ "hmac",
+ "http-body-util",
+ "oe-actions",
+ "oe-ca-core",
+ "oe-castore",
+ "oe-certs",
+ "oe-conformance",
+ "oe-enroll",
+ "oe-hsm",
+ "oe-raflow",
+ "oe-webauthn",
+ "rand 0.8.8",
+ "reqwest",
+ "rsa",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "webauthn-authenticator-rs",
+ "x509-cert",
+]
 
 [[package]]
 name = "rand"

@@ -238,7 +238,9 @@ async fn reject_then_resubmit_reports_the_operator_and_comment() {
             assert_eq!(operator, "operateur-ra");
             assert_eq!(comment, "sujet non autorisé");
         }
-        other => panic!("attendu RaflowError::Rejected, obtenu {other:?}"),
+        // Le résultat entier n'est pas affiché : un `Ok` porte le certificat émis.
+        Ok(_) => panic!("attendu RaflowError::Rejected, obtenu un succès"),
+        Err(e) => panic!("attendu RaflowError::Rejected, obtenu l'erreur : {e}"),
     }
 }
 

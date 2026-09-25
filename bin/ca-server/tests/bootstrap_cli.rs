@@ -39,12 +39,25 @@ async fn standard_output_carries_only_the_token() {
         Command::new(env!("CARGO_BIN_EXE_ca-server"))
             .args(["operators", "bootstrap-admin", "alice"])
             .env("OPENEIDAS_DB_DSN", &dsn)
-            .env("OPENEIDAS_ISSUING_PIN", "1234")
-            .env("OPENEIDAS_PKI_PUBLIC_URL", "https://pki.example.test")
+            // Ni PIN de l'émettrice ni adresse publique : `bootstrap-admin` n'ouvre
+            // aucun token et ne grave aucune adresse, il ne doit pas les exiger.
             .env("OPENEIDAS_AUDIT_FILE", &audit)
             .output()
             .expect("lancement de ca-server")
     };
+
+    // Idem pour la liste des demandes : commande d'exploitation, sans secret de HSM.
+    let out = Command::new(env!("CARGO_BIN_EXE_ca-server"))
+        .args(["ra", "list"])
+        .env("OPENEIDAS_DB_DSN", &dsn)
+        .env("OPENEIDAS_AUDIT_FILE", &audit)
+        .output()
+        .expect("lancement de ca-server");
+    assert!(
+        out.status.success(),
+        "ra list sans PIN : {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let mut tokens = Vec::new();
     // Deux passages : le second ré-invite, et sqlx y écrit une notice
@@ -75,4 +88,35 @@ async fn standard_output_carries_only_the_token() {
     assert_ne!(tokens[0], tokens[1], "chaque invitation a son propre jeton");
 
     let _ = std::fs::remove_file(&audit);
+}
+
+/// Les commandes qui ouvrent le token ou gravent l'adresse publique dans un
+/// certificat, elles, exigent toujours ces deux valeurs : assouplir les autres
+/// ne doit rien relâcher ici. Pas besoin de base : la configuration est refusée
+/// avant toute connexion.
+#[test]
+fn commands_that_sign_still_require_the_pin_and_the_public_address() {
+    let run = |args: &[&str], pin: Option<&str>, url: Option<&str>| -> String {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ca-server"));
+        cmd.args(args)
+            .env("OPENEIDAS_DB_DSN", "postgres://x@127.0.0.1:1/x")
+            .env_remove("OPENEIDAS_ISSUING_PIN")
+            .env_remove("OPENEIDAS_PKI_PUBLIC_URL");
+        if let Some(p) = pin {
+            cmd.env("OPENEIDAS_ISSUING_PIN", p);
+        }
+        if let Some(u) = url {
+            cmd.env("OPENEIDAS_PKI_PUBLIC_URL", u);
+        }
+        let out = cmd.output().expect("lancement de ca-server");
+        assert!(!out.status.success());
+        String::from_utf8_lossy(&out.stderr).to_string()
+    };
+
+    for args in [&["serve"][..], &["revoke", "00", "1", "alice", "test"][..]] {
+        let err = run(args, None, Some("https://pki.example.test"));
+        assert!(err.contains("OPENEIDAS_ISSUING_PIN"), "{args:?} : {err}");
+        let err = run(args, Some("1234"), None);
+        assert!(err.contains("OPENEIDAS_PKI_PUBLIC_URL"), "{args:?} : {err}");
+    }
 }

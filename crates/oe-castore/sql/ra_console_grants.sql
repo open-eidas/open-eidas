@@ -29,5 +29,12 @@ TO openeidas_ra_console;
 -- Pour les clés étrangères des tables propres à ra-console.
 GRANT REFERENCES ON operators, webauthn_credentials TO openeidas_ra_console;
 
+-- Ses propres tables (migration 0006) : ce qui ne donne aucun pouvoir sur la PKI.
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+    webauthn_challenges,
+    sessions,
+    login_counters
+TO openeidas_ra_console;
+
 -- Aucun droit, même en lecture : operator_invites (hachés de jetons),
 -- actions, action_challenges, authorities, crls.

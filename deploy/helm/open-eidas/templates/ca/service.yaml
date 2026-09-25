@@ -12,3 +12,9 @@ spec:
     - name: http
       port: {{ .Values.ca.service.port }}
       targetPort: http
+    {{- if .Values.ca.internal.enabled }}
+    # Joint uniquement par ra-console (NetworkPolicy). Jamais dans une HTTPRoute.
+    - name: internal
+      port: {{ .Values.ca.service.internalPort }}
+      targetPort: internal
+    {{- end }}

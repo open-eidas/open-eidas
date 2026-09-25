@@ -226,6 +226,7 @@ impl Issuer {
         profile: &Profile,
         transaction_id: &str,
     ) -> Result<Certificate, CaError> {
+        profile.validate_cn(subject_cn).map_err(CaError::Other)?;
         let serial = self.reserve_serial(profile.name).await?;
         let serial_bytes = canonical_serial(&serial);
 
@@ -266,6 +267,12 @@ impl Issuer {
         }
         if profile.ocsp_no_check {
             exts.push(extensions::ocsp_no_check());
+        }
+        if let Some(policy) = profile.policy_oid {
+            exts.push(extensions::certificate_policy(policy)?);
+        }
+        if profile.san_dns_from_cn {
+            exts.push(extensions::subject_alt_name_dns(subject_cn)?);
         }
         if profile.include_crl_distribution_point {
             exts.push(extensions::crl_distribution_point(&self.crl_url())?);

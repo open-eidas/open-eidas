@@ -485,6 +485,137 @@ pub fn check_ocsp_responder_certificate(
     Ok(())
 }
 
+/// OID de politique de certification des certificats du lien interne
+/// `ra-console` ↔ `ca-server` (docs/WEBUI.md §16). Aucun autre profil ne les
+/// porte : c'est ce qui distingue un certificat client interne d'un certificat
+/// d'identité ou de TSU qui porterait aussi `clientAuth`.
+///
+/// **PROVISOIRE** : sous le numéro d'entreprise 0, réservé et jamais attribué
+/// (l'arc 2.999 des exemples est refusé par `const-oid`). À remplacer par l'arc
+/// de l'association avant toute mise en production ; ces deux constantes sont
+/// les seuls endroits à changer.
+pub const OID_POLICY_INTERNAL_CLIENT: &str = "1.3.6.1.4.1.0.1.1";
+pub const OID_POLICY_INTERNAL_SERVER: &str = "1.3.6.1.4.1.0.1.2";
+/// Le seul nom courant que porte le certificat client de `ra-console`.
+pub const INTERNAL_CLIENT_CN: &str = "ra-console";
+pub const OID_EKU_SERVER_AUTH: &str = "1.3.6.1.5.5.7.3.1";
+pub const OID_EKU_CLIENT_AUTH: &str = "1.3.6.1.5.5.7.3.2";
+/// Même catégorie que le répondeur OCSP : clé logicielle, vie courte (CPS A.6).
+pub const MAX_INTERNAL_LIFETIME: time::Duration = MAX_OCSP_LIFETIME;
+
+/// Vrai si le certificat porte cette politique dans `certificatePolicies`.
+pub fn has_certificate_policy(cert: &x509_cert::Certificate, policy_oid: &str) -> bool {
+    use der::Decode;
+    use x509_cert::ext::pkix::CertificatePolicies;
+    let Ok(target) = der::asn1::ObjectIdentifier::new(policy_oid) else {
+        return false;
+    };
+    find_extension(cert, "2.5.29.32")
+        .and_then(|e| CertificatePolicies::from_der(e.extn_value.as_bytes()).ok())
+        .is_some_and(|p| p.0.iter().any(|i| i.policy_identifier == target))
+}
+
+/// Les `dNSName` du `subjectAltName`.
+pub fn dns_names(cert: &x509_cert::Certificate) -> Vec<String> {
+    use der::Decode;
+    use x509_cert::ext::pkix::name::GeneralName;
+    use x509_cert::ext::pkix::SubjectAltName;
+    find_extension(cert, "2.5.29.17")
+        .and_then(|e| SubjectAltName::from_der(e.extn_value.as_bytes()).ok())
+        .map(|san| {
+            san.0
+                .into_iter()
+                .filter_map(|n| match n {
+                    GeneralName::DnsName(d) => Some(d.to_string()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Contrôles communs aux deux certificats du lien interne : ni CA, un EKU
+/// **unique** (pas de `clientAuth` en plus de `serverAuth`), la politique
+/// dédiée, `digitalSignature`, une vie courte.
+fn check_internal_certificate(
+    subject: &str,
+    cert: &x509_cert::Certificate,
+    eku_oid: &str,
+    policy_oid: &str,
+) -> Result<(), String> {
+    use der::Decode;
+    use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage, KeyUsages};
+
+    check_signature_algorithm(subject, &cert.signature_algorithm().oid.to_string())?;
+
+    let not_before = x509_time_to_offset_date_time(&cert.tbs_certificate().validity().not_before);
+    let not_after = x509_time_to_offset_date_time(&cert.tbs_certificate().validity().not_after);
+    check_certificate_lifetime(subject, not_before, not_after, MAX_INTERNAL_LIFETIME)?;
+
+    let bc_ext = find_extension(cert, "2.5.29.19")
+        .ok_or_else(|| format!("{subject}: extension basicConstraints absente"))?;
+    let bc = BasicConstraints::from_der(bc_ext.extn_value.as_bytes())
+        .map_err(|e| format!("{subject}: basicConstraints illisible: {e}"))?;
+    if bc.ca {
+        return Err(format!("{subject}: basicConstraints CA:TRUE"));
+    }
+
+    let eku_ext = find_extension(cert, "2.5.29.37")
+        .ok_or_else(|| format!("{subject}: extension extendedKeyUsage absente"))?;
+    let eku = ExtendedKeyUsage::from_der(eku_ext.extn_value.as_bytes())
+        .map_err(|e| format!("{subject}: extendedKeyUsage illisible: {e}"))?;
+    let expected = der::asn1::ObjectIdentifier::new(eku_oid).expect("OID constant invalide");
+    if eku.0 != [expected] {
+        return Err(format!(
+            "{subject}: extendedKeyUsage doit contenir uniquement {eku_oid}"
+        ));
+    }
+
+    if !has_certificate_policy(cert, policy_oid) {
+        return Err(format!("{subject}: politique {policy_oid} absente"));
+    }
+
+    let ku_ext = find_extension(cert, "2.5.29.15")
+        .ok_or_else(|| format!("{subject}: extension keyUsage absente"))?;
+    let ku = KeyUsage::from_der(ku_ext.extn_value.as_bytes())
+        .map_err(|e| format!("{subject}: keyUsage illisible: {e}"))?;
+    if !ku.0.contains(KeyUsages::DigitalSignature) {
+        return Err(format!("{subject}: keyUsage ne porte pas digitalSignature"));
+    }
+    Ok(())
+}
+
+/// Certificat que présente `ra-console` à `ca-server` (docs/WEBUI.md §16).
+pub fn check_internal_client_certificate(
+    subject: &str,
+    cert: &x509_cert::Certificate,
+) -> Result<(), String> {
+    check_internal_certificate(
+        subject,
+        cert,
+        OID_EKU_CLIENT_AUTH,
+        OID_POLICY_INTERNAL_CLIENT,
+    )
+}
+
+/// Certificat que `ca-server` présente sur le lien interne : en plus, un SAN
+/// `dNSName` et un CN identique à ce nom (le client attend ce nom).
+pub fn check_internal_server_certificate(
+    subject: &str,
+    cert: &x509_cert::Certificate,
+) -> Result<(), String> {
+    check_internal_certificate(
+        subject,
+        cert,
+        OID_EKU_SERVER_AUTH,
+        OID_POLICY_INTERNAL_SERVER,
+    )?;
+    if dns_names(cert).is_empty() {
+        return Err(format!("{subject}: subjectAltName dNSName absent"));
+    }
+    Ok(())
+}
+
 /// La matrice de conformité applicable au portage Rust, à l'instant présent
 /// du chantier (voir la note de module : mise à jour à chaque jalon, jamais
 /// figée).

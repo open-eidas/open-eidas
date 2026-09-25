@@ -113,6 +113,165 @@ pas se réclamer d'une organisation qui n'est pas la sienne.
 vérifier la révocation de ce certificat précis — la contrepartie étant sa
 durée de vie courte, contrôlée à l'émission.
 
+### Profils du lien interne
+
+Deux profils supplémentaires servent au canal `ra-console` ↔ `ca-server`
+([docs/WEBUI.md](WEBUI.md) §16). Ils n'authentifient qu'un canal : leurs clés
+sont logicielles et ne signent ni certificat, ni jeton, ni réponse OCSP.
+
+| | `internal_client` | `internal_server` |
+|---|---|---|
+| Porteur | `ra-console` | `ca-server` (port interne) |
+| Validité | 3 mois | 3 mois |
+| `extendedKeyUsage` | `clientAuth`, critique, seul | `serverAuth`, critique, seul |
+| Politique (`certificatePolicies`) | OID dédié, qu'aucun autre profil ne porte | OID dédié |
+| Nom courant | imposé : `ra-console` | un nom DNS en minuscules, repris en `subjectAltName` |
+
+Les OID de politique sont **provisoires** (`oe_conformance::OID_POLICY_INTERNAL_*`,
+sous le numéro d'entreprise 0, réservé) : à remplacer par l'arc de l'association
+avant toute mise en production.
+
+`ca-server` termine lui-même le TLS du port interne (`OPENEIDAS_INTERNAL_LISTEN`,
+TLS 1.3 seul, certificat client obligatoire). En plus de la chaîne vers la CA
+émettrice, il exige à **chaque connexion**, avant de lire la moindre requête :
+l'EKU `clientAuth` seul, la politique dédiée, le nom courant `ra-console`, et un
+certificat inscrit dans sa table `certificates` sous le profil `internal_client`,
+identique octet pour octet et non révoqué. Révoquer le certificat de `ra-console`
+(`ca-server revoke`) coupe donc l'accès dès la connexion suivante. Sans
+`OPENEIDAS_INTERNAL_TLS_*`, le port interne refuse de s'ouvrir ailleurs que sur
+la boucle locale.
+
+```bash
+# Jour 0 : certificat du serveur interne (crée la clé, en 0600, si besoin)
+ca-server internal-cert server ca.open-eidas.svc   # code 3 : en attente
+ca-server ra approve <transaction_id> "prenom.nom" "amorçage du lien interne"
+ca-server internal-cert server ca.open-eidas.svc   # écrit le certificat
+```
+
+Le certificat n'est lu qu'au démarrage : le renouveler (tous les 3 mois) demande
+de relancer la commande puis de redémarrer `ca-server`.
+
+### Actions à double contrôle
+
+Certaines actions signées par les opérateurs (console d'exploitation,
+[docs/WEBUI.md](WEBUI.md) §8) n'agissent qu'avec **deux signatures d'opérateurs
+distincts** : la révocation d'un certificat (deux `ca_operateur`) et la création
+ou le retrait d'un rôle `admin` (deux administrateurs). Le seuil vient de la
+politique de `ca-server`, jamais de l'appelant.
+
+Le premier signataire fige l'action ; les suivants signent exactement le même
+corps. Chaque challenge WebAuthn reste limité à 5 minutes, mais l'action reste
+signable 24 heures. À l'exécution, chaque signataire doit encore être actif et
+détenir le rôle requis, et l'action ne s'exécute qu'une fois, même si deux
+signatures arrivent ensemble. Toute signature, exécutée ou non, laisse une trace
+au journal chaîné.
+
+La commande de secours `ca-server revoke` reste un seul opérateur nominatif : c'est
+la voie de la révocation d'urgence, avec la revue prévue par la décision O4.
+
+### Amorçage et récupération des administrateurs
+
+Le registre des opérateurs de la console
+([docs/WEBUI.md](WEBUI.md) §10, §21) démarre vide. Deux commandes locales,
+exécutées sur l'hôte de `ca-server` comme la cérémonie de clé, créent une
+invitation d'administrateur à usage unique ; le jeton n'est affiché qu'une fois,
+sur la sortie standard, et n'est conservé (haché) nulle part ailleurs.
+
+```bash
+# Jour 0 : le premier administrateur. Refuse si un administrateur actif existe.
+TOKEN=$(ca-server operators bootstrap-admin alice --ttl-minutes 15)
+
+# Système verrouillé : les administrateurs « actifs » ont perdu leurs clés et
+# personne n'a plus l'autorité de les révoquer.
+read -rs PIN
+printf %s "$PIN" | ca-server operators recover-admin bob \
+    --reason "clé de alice perdue, ticket 1234" --confirm-recovery --pin-stdin
+```
+
+`recover-admin` est volontairement plus lourd : il exige le **PIN du token
+PKCS#11** (lu sur l'entrée standard, jamais en argument ni en variable
+d'environnement), un **motif écrit** et un drapeau explicite. Le PIN présenté doit
+ouvrir le token de la CA émettrice ; la valeur de `OPENEIDAS_ISSUING_PIN` du
+service, lisible de tout accès shell, n'est pas ce qui compte. Un PIN refusé est
+consigné (`operators.admin_recovery_refused`). Une récupération réussie écrit
+l'événement distinct `operators.admin_recovery` (motif, nombre d'administrateurs
+actifs) et **ne désactive rien** : la clé perdue est ensuite révoquée par une
+action signée du nouvel administrateur. Sa clé entre directement dans le
+registre, sans confirmation d'un tiers (il n'y en a plus). Un seul administrateur
+ainsi créé ne suffit pas à en élever un autre (deux signatures) : lancer la
+commande une seconde fois.
+
+La politique de récupération (témoin, deux détenteurs du PIN, revue a
+posteriori) reste une décision de l'association (O8).
+
+### Audit du registre des opérateurs
+
+```bash
+ca-server operators audit [--journal <copie répliquée>]
+```
+
+Refait, pour chaque **clé active**, le chemin par lequel elle est entrée dans le
+registre ([docs/WEBUI.md](WEBUI.md) §21), sans croire la base sur parole :
+
+- une clé **confirmée** doit avoir une action `confirm_key` exécutée : corps
+  inchangé (empreinte `body_hash`), engageant bien cette clé, signée par assez
+  d'opérateurs distincts, **chaque signature étant re-vérifiée** (ES256) contre la
+  clé du signataire, qui a lui-même une chaîne valide jusqu'à une ancre ;
+- une clé **d'ancre** (amorçage, récupération) ne se prouve pas dans la base : la
+  contrainte du registre l'admet sans confirmation. Elle doit figurer au journal
+  chaîné ;
+- le corps de chaque action doit être celui que le journal a consigné **avant** la
+  signature : la signature porte sur le challenge, pas sur le corps, donc un corps
+  réécrit avec son empreinte passerait la cryptographie seule.
+
+Code de sortie **0** : registre sain ; **1** : constats (une ligne `KO` par clé) ;
+**2** : journal illisible ou rompu, auquel cas le registre n'est pas jugé. Pointer
+`--journal` vers la copie répliquée hors de l'hôte est le meilleur usage : une
+copie que la base et l'hôte ne contrôlent pas.
+
+Limites : seul ES256 est vérifiable (une autre clé est signalée, pas tenue pour
+bonne) ; l'audit ne juge pas le rôle qu'avaient les signataires à l'époque. Il est
+lancé à la demande (ou par un job périodique, avec une alerte hors console) ; le
+lancement au démarrage et le blocage des actions sur constat relèvent de
+`operators reconcile`, à venir.
+
+### Registre restauré en arrière : rejeu du journal et `reconcile`
+
+Le journal chaîné est un fichier, répliqué hors de l'hôte : il n'est pas restauré
+avec la base. Une clé révoquée à T réapparaît donc **active** dans une base
+restaurée à T-1 alors que le journal atteste la révocation. Le journal fait foi
+pour le registre ([docs/WEBUI.md](WEBUI.md) §21).
+
+Quand le lien interne est activé, `ca-server` rejoue au démarrage, puis toutes les
+`OPENEIDAS_REGISTRY_CHECK_INTERVAL` (60 s), les événements du journal qui touchent
+le registre et les compare à la base. Toute divergence **ferme la garde** :
+plus aucun challenge, aucune exécution, aucune inscription de clé
+(`registry_blocked`, 503), et `/healthz` passe en 503 avec le détail. Un journal
+illisible ou rompu ferme aussi la garde : on ne juge pas le registre contre un
+journal douteux. Une divergence doit persister quelques secondes pour fermer la
+garde (le journal s'écrit *avant* la validation en base : un contrôle qui tombe
+dans cette fenêtre ne doit rien bloquer).
+
+```bash
+ca-server operators reconcile --reason "base restaurée du 2026-09-18" --dry-run
+ca-server operators reconcile --reason "base restaurée du 2026-09-18"
+# une clé perdue ne se recrée pas : on en prend acte, ou on la ré-enrôle
+ca-server operators reconcile --reason "…" --acknowledge-missing <credential_id>
+```
+
+- **Réparable** : une révocation ou un rôle du journal absent de la base est
+  ré-appliqué.
+- **Non réparable** : une clé que le journal dit active et que la base n'a plus. Le
+  journal ne porte pas la clé publique : `reconcile` ne peut pas la recréer, et n'en
+  prend acte que sur `--acknowledge-missing`, motivé, consigné au journal. La clé se
+  ré-enrôle par une invitation. On ne cache jamais une clé perdue.
+- Chaque résolution s'écrit au journal (`operators.reconciled`) **avant** d'être
+  validée : journal en échec, rien n'est modifié.
+- Codes de sortie : `0` tout est résolu ; `1` reste des divergences ; `2` journal
+  illisible ou rompu.
+
+La garde se rouvre au contrôle suivant (au plus 60 s) ou au redémarrage.
+
 ## 4. Enrôlement et approbation
 
 ```
@@ -285,3 +444,8 @@ il est porté comme exigence hors périmètre dans la matrice.
 | `OPENEIDAS_AUDIT_FILE` | `/var/lib/open-eidas/state/ca-audit.log` | Journal d'audit |
 | `OPENEIDAS_AUDIT_RETENTION` | 8760h | Durée de conservation ; le service refuse de démarrer en deçà d'un an |
 | `OPENEIDAS_LISTEN` | `:8320` | Adresse d'écoute |
+| `OPENEIDAS_INTERNAL_LISTEN` | — (désactivé) | Adresse du lien interne `/internal/v1/*` |
+| `OPENEIDAS_INTERNAL_TLS_CERT_FILE` / `_KEY_FILE` | — | Certificat `internal_server` et sa clé (PEM). Les deux ou aucun ; sans eux, boucle locale seulement |
+| `OPENEIDAS_WEBAUTHN_RP_ID` / `_ORIGIN` / `_RP_NAME` | — (obligatoires avec le lien interne, sauf le nom) | Relying Party WebAuthn des opérateurs |
+| `OPENEIDAS_REGISTRY_CHECK_INTERVAL` | 60s | Fréquence du contrôle du registre contre le journal (avec le lien interne) |
+| `OPENEIDAS_WEBAUTHN_MODELS_FILE` | — (obligatoire avec le lien interne) | Liste blanche de modèles de clés (JSON : `description`, `aaguid`, `root_pem`) |

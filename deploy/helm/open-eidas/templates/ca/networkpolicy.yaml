@@ -1,0 +1,32 @@
+{{- if and .Values.ca.internal.enabled .Values.ca.internal.networkPolicy.enabled -}}
+# Isole le port interne (docs/WEBUI.md §17). Une NetworkPolicy ne voit que les
+# ports : c'est pourquoi les routes /internal/v1/* écoutent sur un second port.
+#
+# Dès qu'une NetworkPolicy sélectionne les pods de la CA, tout port non listé
+# est fermé. Le port public reste donc listé, ouvert à tout le cluster : le
+# Gateway y arrive depuis son namespace, TSA et répondeur OCSP s'y enrôlent, et
+# les sondes du kubelet le visent.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "open-eidas.fullname" . }}-ca
+  labels:
+    {{- include "open-eidas.componentLabels" (dict "context" . "component" "ca") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ca") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: {{ .Values.ca.service.port }}
+    # Port interne : uniquement depuis les pods ra-console de cette release.
+    # Tant qu'aucun pod ne porte ce composant, personne ne le joint.
+    - ports:
+        - port: {{ .Values.ca.service.internalPort }}
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "open-eidas.componentSelectorLabels" (dict "context" . "component" "ra-console") | nindent 14 }}
+{{- end }}

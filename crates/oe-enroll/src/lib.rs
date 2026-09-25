@@ -8,6 +8,8 @@
 //! parle au `ca-server` Go existant (interopérabilité HTTP uniquement) tant
 //! que celui-ci n'est pas porté — voir l'ordre de portage du plan.
 
+pub mod software_key;
+
 use std::time::Duration;
 
 use der::asn1::{BitString, SetOfVec};
@@ -292,7 +294,7 @@ fn hmac_signature(csr_der: &[u8], secret: &str) -> String {
 /// Construit une CSR PKCS#10 signée par le token, avec l'algorithme
 /// `sha256WithRSAEncryption` — SHA-1 n'est jamais une option : la CA
 /// refuserait la CSR (ETSI TS 119 312), autant ne pas la produire.
-fn build_csr(
+pub fn build_csr(
     signer: &dyn SigningToken,
     subject: &Subject,
 ) -> Result<(Vec<u8>, String), EnrollError> {

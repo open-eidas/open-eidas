@@ -15,6 +15,13 @@ use oe_hsm::testing::SoftwareToken;
 use tower::ServiceExt;
 
 async fn build_server(crl_validity: time::Duration) -> Arc<http::Server> {
+    build_server_with(crl_validity, None).await
+}
+
+async fn build_server_with(
+    crl_validity: time::Duration,
+    guard: Option<Arc<oe_actions::RegistryGuard>>,
+) -> Arc<http::Server> {
     let store = Arc::new(Memory::new());
     let root_signer = Arc::new(SoftwareToken::generate(3072));
     let issuing_signer = Arc::new(SoftwareToken::generate(3072));
@@ -65,7 +72,11 @@ async fn build_server(crl_validity: time::Duration) -> Arc<http::Server> {
         .unwrap(),
     );
 
-    Arc::new(http::Server::new(issuer, flow, "test-version".to_string()))
+    let mut server = http::Server::new(issuer, flow, "test-version".to_string());
+    if let Some(guard) = guard {
+        server = server.with_registry_guard(guard);
+    }
+    Arc::new(server)
 }
 
 async fn get(
@@ -165,4 +176,44 @@ async fn repository_page_lists_the_real_hierarchy() {
         html.contains("/api/v1/ca.pem"),
         "lien de téléchargement absent"
     );
+}
+
+/// Un registre qui diverge du journal (docs/WEBUI.md §21) met le service en 503,
+/// avec le détail, et le rétablit dès que la garde se rouvre.
+#[tokio::test]
+async fn healthz_degrades_while_the_registry_is_blocked() {
+    let guard = oe_actions::RegistryGuard::new();
+    let server = build_server_with(time::Duration::hours(24), Some(guard.clone())).await;
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    server
+        .start_crl_publication(std::time::Duration::from_secs(3600), shutdown_rx)
+        .await
+        .unwrap();
+
+    let (status, body) = get(&server, "/healthz").await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert!(body["registre_bloque"].is_null());
+
+    guard.block(vec![
+        "la clé abc de bob est révoquée au journal mais active".to_string(),
+    ]);
+    let (status, body) = get(&server, "/healthz").await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "{body}"
+    );
+    assert_eq!(body["statut"], "degrade");
+    assert!(body["detail"]
+        .as_str()
+        .unwrap()
+        .contains("la clé abc de bob"));
+    assert_eq!(
+        body["registre_bloque"][0],
+        "la clé abc de bob est révoquée au journal mais active"
+    );
+
+    guard.open();
+    let (status, _) = get(&server, "/healthz").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
 }
