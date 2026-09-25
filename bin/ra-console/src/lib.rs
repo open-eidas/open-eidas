@@ -17,5 +17,6 @@ pub mod config;
 pub mod db_guard;
 pub mod http;
 pub mod login;
+pub mod purge;
 pub mod session;
 pub mod webauthn_models;
