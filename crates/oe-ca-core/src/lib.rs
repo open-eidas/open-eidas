@@ -46,8 +46,14 @@ pub use profile::{profile_by_name, Profile};
 /// `oe-audit` par convention (mêmes noms d'événement en dur plutôt qu'une
 /// dépendance de crate) pour ne pas lier ce moteur à un format de journal
 /// particulier.
+///
+/// Async : l'écriture peut atteindre un stockage distant (docs/WEBUI.md §7,
+/// §15 étape 2b). Son échec est **bloquant** — voir `Issuer::record` — donc
+/// consigné *avant* toute mutation durable du store, jamais après : on ne
+/// journalise en confiance que ce qui n'est pas encore irréversible.
+#[async_trait::async_trait]
 pub trait Recorder: Send + Sync {
-    fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String>;
+    async fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -178,10 +184,20 @@ impl Issuer {
         Ok(Issuer { opts })
     }
 
-    fn record(&self, event: &str, data: serde_json::Value) {
+    /// Bloquant : un journal qui n'a pas pu être écrit (par ex. le stockage
+    /// distant du §15 étape 2b est injoignable) doit empêcher l'opération en
+    /// cours, pas seulement le signaler. C'est pourquoi chaque appelant
+    /// journalise *avant* la mutation durable qui suit (`save_certificate`,
+    /// `store.revoke`, `store.save_crl`) : si le journal échoue, rien
+    /// d'irréversible n'a encore eu lieu.
+    async fn record(&self, event: &str, data: serde_json::Value) -> Result<(), CaError> {
         if let Some(recorder) = &self.opts.recorder {
-            let _ = recorder.append(event, data);
+            recorder
+                .append(event, data)
+                .await
+                .map_err(|e| CaError::Other(format!("journal : {e}")))?;
         }
+        Ok(())
     }
 
     pub fn certificate(&self) -> &Certificate {
@@ -311,6 +327,10 @@ impl Issuer {
         // jamais se fier aux seuls paramètres qui l'ont construit.
         let check_subject = format!("certificat {} émis pour {}", profile.name, subject_cn);
         if let Err(reason) = (profile.check)(&check_subject, &cert) {
+            // Rien d'irréversible ne dépend de ce journal : le rejet a déjà
+            // lieu quoi qu'il arrive. Mais si le journal lui-même échoue,
+            // c'est cette raison-là qui prime (§15 étape 2b : le journal fait
+            // foi, on ne le contourne jamais en silence).
             self.record(
                 "ca.issuance_refused",
                 serde_json::json!({
@@ -319,11 +339,29 @@ impl Issuer {
                     "motif": reason,
                     "demande": transaction_id,
                 }),
-            );
+            )
+            .await?;
             return Err(CaError::Other(format!(
                 "le certificat produit n'est pas conforme, émission annulée: {reason}"
             )));
         }
+
+        // Le journal *avant* l'enregistrement durable : si l'écriture échoue
+        // (par ex. le stockage distant du journal est injoignable), aucun
+        // certificat n'est inscrit au store — seul le numéro de série réservé
+        // est perdu (déjà toléré, comme pour un numéro de CRL, §15 étape 2b).
+        self.record(
+            "ca.certificate_issued",
+            serde_json::json!({
+                "profil": profile.name,
+                "sujet": cert.tbs_certificate().subject().to_string(),
+                "emetteur": cert.tbs_certificate().issuer().to_string(),
+                "serie": hex::encode(&serial_bytes),
+                "not_after": (now + profile.validity).format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+                "demande": transaction_id,
+            }),
+        )
+        .await?;
 
         self.opts
             .store
@@ -341,18 +379,6 @@ impl Issuer {
                 request_transaction_id: transaction_id.to_string(),
             })
             .await?;
-
-        self.record(
-            "ca.certificate_issued",
-            serde_json::json!({
-                "profil": profile.name,
-                "sujet": cert.tbs_certificate().subject().to_string(),
-                "emetteur": cert.tbs_certificate().issuer().to_string(),
-                "serie": hex::encode(&serial_bytes),
-                "not_after": (now + profile.validity).format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
-                "demande": transaction_id,
-            }),
-        );
 
         Ok(cert)
     }
@@ -398,8 +424,10 @@ impl Issuer {
         }
         let cert = self.opts.store.certificate(&serial.to_vec()).await?;
         let at = time::OffsetDateTime::now_utc();
-        self.opts.store.revoke(&serial.to_vec(), at, reason).await?;
 
+        // Le journal *avant* la révocation en base (§15 étape 2b) : si
+        // l'écriture échoue, le certificat reste actif — pas de révocation
+        // à moitié consignée.
         self.record(
             "ca.certificate_revoked",
             serde_json::json!({
@@ -410,7 +438,9 @@ impl Issuer {
                 "commentaire": comment,
                 "date": at.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
             }),
-        );
+        )
+        .await?;
+        self.opts.store.revoke(&serial.to_vec(), at, reason).await?;
 
         Ok(())
     }
@@ -484,8 +514,11 @@ impl Issuer {
             this_update: now,
             next_update: now + self.opts.crl_validity,
         };
-        self.opts.store.save_crl(record.clone()).await?;
 
+        // Le journal *avant* l'enregistrement durable (§15 étape 2b) : si
+        // l'écriture échoue, cette CRL n'est pas publiée — seul le numéro
+        // réservé (`next_crl_number`) est perdu, déjà toléré (la séquence ne
+        // recule jamais).
         self.record(
             "ca.crl_published",
             serde_json::json!({
@@ -493,7 +526,9 @@ impl Issuer {
                 "entrees": revoked.len(),
                 "prochaine_maj": record.next_update.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
             }),
-        );
+        )
+        .await?;
+        self.opts.store.save_crl(record.clone()).await?;
 
         Ok(record)
     }
