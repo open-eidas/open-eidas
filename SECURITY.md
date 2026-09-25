@@ -25,12 +25,12 @@ Merci d'inclure :
 
 Sont concernés :
 
-- le code de ce dépôt (`internal/`, `cmd/`) ;
+- le code de ce dépôt (`bin/` et `crates/`, en Rust) ;
 - les configurations de déploiement fournies (`deploy/`, `docker-compose.yml`).
 
-Ne sont pas couverts par cette politique les composants tiers embarqués
-(OpenXPKI, SoftHSM2, MariaDB) : signalez leurs vulnérabilités à leurs projets
-respectifs. Une exposition résultant uniquement de la configuration de
+Ne sont pas couverts par cette politique les composants tiers utilisés au
+déploiement (par exemple SoftHSM2 pour la démonstration, PostgreSQL) et les
+dépendances Rust : signalez leurs vulnérabilités à leurs projets respectifs. Une exposition résultant uniquement de la configuration de
 *démonstration* documentée comme telle (enrôlement authentifié par secret
 partagé et approuvé automatiquement,
 TLS non vérifié, OID de politique de test) est un écart connu, listé dans
