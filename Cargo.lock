@@ -2055,6 +2055,7 @@ dependencies = [
  "hmac",
  "http-body-util",
  "oe-actions",
+ "oe-audit",
  "oe-ca-core",
  "oe-castore",
  "oe-certs",

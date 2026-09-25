@@ -14,6 +14,8 @@
 //! consommé, clé révoquée, opérateur désactivé, signature refusée, compteur en
 //! régression. Les distinguer laisserait deviner lequel s'est produit.
 
+use std::sync::Arc;
+
 use hmac::{Hmac, Mac};
 use oe_actions::{Registry, Role};
 use oe_webauthn::{
@@ -23,6 +25,8 @@ use oe_webauthn::{
 use sha2::Sha256;
 use sqlx::Row;
 use time::OffsetDateTime;
+
+use crate::audit::{self, Recorder};
 
 /// Aligné sur la contrainte SQL `challenge_short_lived` (migration 0006) : un
 /// challenge de connexion ne vit pas plus longtemps qu'un challenge d'action.
@@ -55,15 +59,33 @@ pub struct LoginService {
     registry: Registry,
     verifier: Verifier,
     decoy_secret: Vec<u8>,
+    journal: Arc<dyn Recorder>,
 }
 
 impl LoginService {
-    pub fn new(registry: Registry, verifier: Verifier, decoy_secret: Vec<u8>) -> LoginService {
+    pub fn new(
+        registry: Registry,
+        verifier: Verifier,
+        decoy_secret: Vec<u8>,
+        journal: Arc<dyn Recorder>,
+    ) -> LoginService {
         LoginService {
             registry,
             verifier,
             decoy_secret,
+            journal,
         }
+    }
+
+    /// Consigne un refus dans le journal propre à `ra-console` (§7) avec sa
+    /// vraie raison — jamais dans la réponse HTTP, uniforme (§16) — puis rend
+    /// l'erreur à propager.
+    fn refuse(&self, challenge_id: Uuid, reason: &str) -> LoginError {
+        self.journal.append(
+            audit::EVENT_LOGIN_REFUSED,
+            serde_json::json!({ "challenge_id": challenge_id.to_string(), "raison": reason }),
+        );
+        LoginError::Invalid
     }
 
     /// Dérivé du nom et du secret du service : stable pour un même nom (une
@@ -158,16 +180,17 @@ impl LoginService {
         .bind(OffsetDateTime::now_utc())
         .fetch_optional(self.registry.pool())
         .await
-        .map_err(|_| LoginError::Invalid)?
-        .ok_or(LoginError::Invalid)?;
+        .map_err(|_| self.refuse(challenge_id, "base indisponible"))?
+        .ok_or_else(|| self.refuse(challenge_id, "challenge inconnu, expiré ou déjà consommé"))?;
 
         // Un leurre n'a rien à vérifier : aucune assertion ne peut réussir.
         let operator_id: Option<Uuid> = row.get("operator_id");
-        let operator_id = operator_id.ok_or(LoginError::Invalid)?;
+        let operator_id =
+            operator_id.ok_or_else(|| self.refuse(challenge_id, "leurre (nom inconnu)"))?;
         let request_body: Option<serde_json::Value> = row.get("request_body");
         let state: AttestedPasskeyAuthentication = request_body
             .and_then(|v| serde_json::from_value(v).ok())
-            .ok_or(LoginError::Invalid)?;
+            .ok_or_else(|| self.refuse(challenge_id, "état de la cérémonie illisible"))?;
 
         // La clé qui a signé, lue dans le registre — jamais déclarée par
         // l'appelant (§16).
@@ -176,19 +199,22 @@ impl LoginService {
             .registry
             .key(&credential_id)
             .await
-            .map_err(|_| LoginError::Invalid)?
-            .ok_or(LoginError::Invalid)?;
-        if key.revoked || key.operator_id != operator_id {
-            return Err(LoginError::Invalid);
+            .map_err(|_| self.refuse(challenge_id, "base indisponible"))?
+            .ok_or_else(|| self.refuse(challenge_id, "clé inconnue du registre"))?;
+        if key.revoked {
+            return Err(self.refuse(challenge_id, "clé révoquée"));
+        }
+        if key.operator_id != operator_id {
+            return Err(self.refuse(challenge_id, "clé d'un autre opérateur"));
         }
         let operator = self
             .registry
             .operator(operator_id)
             .await
-            .map_err(|_| LoginError::Invalid)?
-            .ok_or(LoginError::Invalid)?;
+            .map_err(|_| self.refuse(challenge_id, "base indisponible"))?
+            .ok_or_else(|| self.refuse(challenge_id, "opérateur inconnu"))?;
         if operator.disabled {
-            return Err(LoginError::Invalid);
+            return Err(self.refuse(challenge_id, "opérateur désactivé"));
         }
 
         // Son propre compteur, jamais `webauthn_credentials.sign_count` : ce
@@ -200,15 +226,20 @@ impl LoginService {
         .bind(&credential_id)
         .fetch_optional(self.registry.pool())
         .await
-        .map_err(|_| LoginError::Invalid)?;
+        .map_err(|_| self.refuse(challenge_id, "base indisponible"))?;
         let last_sign_count = u32::try_from(last_sign_count.unwrap_or(0)).unwrap_or(u32::MAX);
 
         let assertion = self
             .verifier
             .finish_authentication(credential, &state, last_sign_count)
             .map_err(|e| {
+                let reason = if matches!(e, oe_webauthn::Error::CounterRegression { .. }) {
+                    "compteur en régression : clonage présumé"
+                } else {
+                    "assertion refusée"
+                };
                 tracing::debug!(erreur = %e, "assertion de connexion refusée");
-                LoginError::Invalid
+                self.refuse(challenge_id, reason)
             })?;
 
         sqlx::query(
@@ -220,7 +251,12 @@ impl LoginService {
         .bind(i64::from(assertion.counter))
         .execute(self.registry.pool())
         .await
-        .map_err(|_| LoginError::Invalid)?;
+        .map_err(|_| self.refuse(challenge_id, "base indisponible"))?;
+
+        self.journal.append(
+            audit::EVENT_LOGIN_SUCCEEDED,
+            serde_json::json!({ "operateur": operator.name, "credential_id": credential_id }),
+        );
 
         Ok(Verified {
             operator_id: operator.id,

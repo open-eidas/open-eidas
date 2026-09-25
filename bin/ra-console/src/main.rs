@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+use ra_console::audit::AuditRecorder;
 use ra_console::ca_link::CaLink;
 use ra_console::config::Config;
 use ra_console::login::LoginService;
@@ -79,12 +80,20 @@ async fn run_serve() {
     let verifier =
         oe_webauthn::Verifier::new(&cfg.webauthn.rp_id, &origin, &cfg.webauthn.rp_name, models)
             .unwrap_or_else(|e| die("configuration WebAuthn", e));
+
+    // Son propre journal chaîné (docs/WEBUI.md §7, §15 étape 2b-A) : jamais
+    // celui de ca-server, une chaîne distincte.
+    let journal: Arc<dyn ra_console::audit::Recorder> = Arc::new(AuditRecorder(Arc::new(
+        oe_audit::Log::open(&cfg.audit_file).unwrap_or_else(|e| die("journal d'audit", e)),
+    )));
+
     let login = LoginService::new(
         oe_actions::Registry::new(pool.clone()),
         verifier,
         cfg.webauthn.login_decoy_secret.into_bytes(),
+        journal.clone(),
     );
-    let sessions = Sessions::new(oe_actions::Registry::new(pool.clone()));
+    let sessions = Sessions::new(oe_actions::Registry::new(pool.clone()), journal);
 
     // Purge périodique des sessions et challenges expirés (§15 étape 1c-2b) :
     // aucune opération manuelle, arrêtée par le même signal que le serveur.

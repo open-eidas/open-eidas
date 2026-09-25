@@ -29,6 +29,9 @@ oe-certs = { path = "../../crates/oe-certs" }
 # qui restent le seul fait de ca-server (§16).
 oe-actions = { path = "../../crates/oe-actions" }
 oe-webauthn = { path = "../../crates/oe-webauthn" }
+# Son propre journal chaîné (docs/WEBUI.md §7, §15 étape 2b-A) : jamais celui
+# de ca-server, une chaîne distincte.
+oe-audit = { path = "../../crates/oe-audit" }
 clap = { version = "4", features = ["derive"] }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }

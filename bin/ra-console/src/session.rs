@@ -12,11 +12,15 @@
 //! nécessaire. Révocable côté serveur (`revoked_at`), contrairement à un JWT
 //! auto-porteur qu'on ne peut pas rappeler.
 
+use std::sync::Arc;
+
 use oe_actions::{Registry, Role};
 use oe_webauthn::Uuid;
 use rand::RngCore;
 use sqlx::Row;
 use time::OffsetDateTime;
+
+use crate::audit::{self, Recorder};
 
 pub const SESSION_TTL: time::Duration = time::Duration::hours(8);
 
@@ -40,11 +44,12 @@ pub struct Authenticated {
 
 pub struct Sessions {
     registry: Registry,
+    journal: Arc<dyn Recorder>,
 }
 
 impl Sessions {
-    pub fn new(registry: Registry) -> Sessions {
-        Sessions { registry }
+    pub fn new(registry: Registry, journal: Arc<dyn Recorder>) -> Sessions {
+        Sessions { registry, journal }
     }
 
     /// Ouvre une session pour l'identité que `login::LoginService::finish` (ou
@@ -72,6 +77,10 @@ impl Sessions {
         .bind(now + SESSION_TTL)
         .execute(self.registry.pool())
         .await?;
+        self.journal.append(
+            audit::EVENT_SESSION_OPENED,
+            serde_json::json!({ "credential_id": credential_id }),
+        );
         Ok(id)
     }
 
@@ -118,11 +127,19 @@ impl Sessions {
     /// Idempotent (une session déjà révoquée ou inconnue ne fait pas échouer
     /// la déconnexion : le résultat visible, absence de session, est le même).
     pub async fn revoke(&self, session_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE sessions SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL")
-            .bind(session_id)
-            .bind(OffsetDateTime::now_utc())
-            .execute(self.registry.pool())
-            .await?;
+        let done =
+            sqlx::query("UPDATE sessions SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL")
+                .bind(session_id)
+                .bind(OffsetDateTime::now_utc())
+                .execute(self.registry.pool())
+                .await?;
+        // Seulement si cet appel a réellement clos une session : sinon, une
+        // déconnexion rejouée ou d'un cookie déjà expiré grossirait le
+        // journal sans qu'il ne se soit rien passé.
+        if done.rows_affected() > 0 {
+            self.journal
+                .append(audit::EVENT_SESSION_CLOSED, serde_json::json!({}));
+        }
         Ok(())
     }
 }
