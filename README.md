@@ -195,10 +195,10 @@ conformité ETSI EN 319 421 / 319 422 et le développement des futurs services d
 
 ## Licence
 
-Open eIDAS est distribué sous **double licence**, au choix de celui qui le réutilise (identifiant SPDX `EUPL-1.2 OR AGPL-3.0-or-later`) :
+Open eIDAS est distribué sous **double licence**, au choix de celui qui le réutilise (identifiant SPDX `EUPL-1.2 OR AGPL-3.0-only`) :
 
 - la licence publique de l'Union européenne **EUPL v1.2** — voir [LICENSE](LICENSE) ;
-- la **GNU Affero General Public License v3**, ou toute version ultérieure — voir [LICENSE-AGPL-3.0](LICENSE-AGPL-3.0).
+- la **GNU Affero General Public License v3** (version 3 uniquement) — voir [LICENSE-AGPL-3.0](LICENSE-AGPL-3.0).
 
 Les deux sont des licences à réciprocité (*copyleft*) : toute version modifiée et distribuée, y compris lorsqu'elle est mise à disposition en tant que service en réseau, doit rester publiée sous la licence choisie. La branche AGPL permet d'intégrer directement Open eIDAS dans un projet sous AGPL ou GPL v3, sans passer par l'annexe de compatibilité de l'EUPL.
 

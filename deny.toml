@@ -1,6 +1,6 @@
 # Politique de licences des dépendances (`cargo deny check licenses`).
 #
-# Le projet est publié sous double licence, `EUPL-1.2 OR AGPL-3.0-or-later`.
+# Le projet est publié sous double licence, `EUPL-1.2 OR AGPL-3.0-only`.
 # Une dépendance est admise d'office si le binaire qui l'embarque peut rester
 # distribué sous les DEUX licences :
 #
@@ -58,6 +58,6 @@ exceptions = []
 
 [licenses.private]
 # Les crates du workspace ne sont pas publiées ; leur licence (EUPL-1.2) est
-# (`EUPL-1.2 OR AGPL-3.0-or-later`) est déclarée par `[workspace.package]`, et
+# (`EUPL-1.2 OR AGPL-3.0-only`) est déclarée par `[workspace.package]`, et
 # vérifiée par la règle ci-dessus.
 ignore = false

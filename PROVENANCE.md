@@ -4,7 +4,7 @@ Ce document décrit comment le code d'Open eIDAS est conçu, écrit, revu et
 validé, et comment cette provenance peut être justifiée après coup. Il
 complète [CONTRIBUTING.md](CONTRIBUTING.md) et s'applique à tout le dépôt,
 publié sous double licence [EUPL-1.2](LICENSE) ou
-[AGPL-3.0-or-later](LICENSE-AGPL-3.0), au choix du réutilisateur.
+[AGPL-3.0-only](LICENSE-AGPL-3.0), au choix du réutilisateur.
 
 ## 1. Déclaration d'assistance par IA générative
 
@@ -129,7 +129,7 @@ fusion de PR.
 ## 5. Licences des dépendances
 
 Une dépendance n'entre dans le dépôt que si le binaire qui l'embarque peut
-rester distribué sous la licence du projet (`EUPL-1.2 OR AGPL-3.0-or-later`).
+rester distribué sous la licence du projet (`EUPL-1.2 OR AGPL-3.0-only`).
 La politique est
 dans [deny.toml](deny.toml) et vérifiée par la CI (`cargo deny check
 licenses`, ou `make licenses` en local) :

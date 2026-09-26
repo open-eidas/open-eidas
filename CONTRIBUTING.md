@@ -109,5 +109,5 @@ Ne pas ouvrir d'*issue* publique pour une vulnérabilité. Voir
 
 En contribuant, vous acceptez que vos changements soient publiés sous les
 deux licences du projet, au choix du réutilisateur : la licence publique de
-l'Union européenne EUPL-1.2 (voir [LICENSE](LICENSE)) ou la GNU AGPL v3 ou
-ultérieure (voir [LICENSE-AGPL-3.0](LICENSE-AGPL-3.0)).
+l'Union européenne EUPL-1.2 (voir [LICENSE](LICENSE)) ou la GNU AGPL v3,
+version 3 uniquement (voir [LICENSE-AGPL-3.0](LICENSE-AGPL-3.0)).
