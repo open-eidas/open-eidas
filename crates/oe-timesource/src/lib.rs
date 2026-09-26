@@ -66,6 +66,12 @@ impl FromStr for Policy {
 /// Consigne les mesures de temps dans le journal d'audit. La forme exacte du
 /// payload sera revue au jalon J5 (`oe-audit`) pour correspondre au format
 /// réel du journal ; `serde_json::Value` évite de figer une API provisoire.
+/// Reste synchrone, à la différence d'`oe_ca_core::Recorder`/`oe_raflow::Recorder`
+/// (docs/WEBUI.md §15 étape 2b) : `Monitor` s'exécute dans un thread dédié
+/// bloquant (les requêtes NTP le sont déjà), jamais sur un exécuteur async —
+/// un futur dos S3 y ferait un appel HTTP bloquant, sans avoir besoin de
+/// `tokio`. Son échec ne fait échouer aucun appelant (voir `Monitor::record`) :
+/// il retire la traçabilité de la mesure, `now()` s'en charge ensuite.
 pub trait Recorder: Send + Sync {
     fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String>;
 }
@@ -250,12 +256,19 @@ impl Monitor {
             .iter()
             .map(|server| query_one(server, self.opts.timeout))
             .collect();
-        let status = evaluate(&samples, &self.opts, OffsetDateTime::now_utc());
-        self.record(&status);
+        let mut status = evaluate(&samples, &self.opts, OffsetDateTime::now_utc());
+        self.record(&mut status);
         *self.status.write().expect("verrou de statut empoisonné") = status;
     }
 
-    fn record(&self, status: &Status) {
+    /// Journalise la mesure — bloquant, comme `oe_ca_core::Recorder`/
+    /// `oe_raflow::Recorder` (docs/WEBUI.md §15 étape 2b), mais différemment :
+    /// il n'y a ici aucun appelant à faire échouer (une mesure périodique,
+    /// pas une action). Un échec d'écriture retire donc la traçabilité de
+    /// *cette* mesure (`traceable = false`) : c'est le mécanisme existant de
+    /// `now()` (refus en politique `Enforce` si `!traceable`) qui bloque
+    /// l'émission, pas un `Result` de plus à propager ici.
+    fn record(&self, status: &mut Status) {
         let Some(recorder) = &self.opts.recorder else {
             return;
         };
@@ -272,7 +285,10 @@ impl Monitor {
             "sources": sources,
             "max_offset": format_duration(self.opts.max_offset),
         });
-        let _ = recorder.append(EVENT_TIME_MEASUREMENT, payload);
+        if let Err(e) = recorder.append(EVENT_TIME_MEASUREMENT, payload) {
+            status.traceable = false;
+            status.reason = format!("journal indisponible, mesure non traçable : {e}");
+        }
     }
 
     /// Lance la surveillance périodique dans un thread dédié. Le thread
@@ -584,5 +600,61 @@ mod tests {
     #[test]
     fn rejects_unknown_policy() {
         assert!("bogus".parse::<Policy>().is_err());
+    }
+
+    /// Un journal qui échoue systématiquement (docs/WEBUI.md §15 étape 2b) :
+    /// preuve que `Monitor::record` retire bien la traçabilité d'une mesure
+    /// par ailleurs traçable, plutôt que d'ignorer l'échec en silence.
+    struct FailingRecorder;
+    impl Recorder for FailingRecorder {
+        fn append(&self, _event: &str, _data: serde_json::Value) -> Result<(), String> {
+            Err("stockage du journal injoignable (test)".to_string())
+        }
+    }
+
+    #[test]
+    fn a_journal_failure_makes_the_measurement_untraceable() {
+        let opts = Options {
+            servers: vec!["a".into()],
+            min_sources: 1,
+            recorder: Some(Arc::new(FailingRecorder)),
+            ..test_options()
+        };
+        let monitor = Monitor::new(opts).unwrap();
+        let mut status = Status {
+            policy: Policy::Enforce,
+            traceable: true,
+            reason: "ok".to_string(),
+            ..Status::default()
+        };
+        monitor.record(&mut status);
+        assert!(!status.traceable, "{status:?}");
+        assert!(status.reason.contains("journal"), "{}", status.reason);
+    }
+
+    #[test]
+    fn a_working_journal_leaves_traceability_untouched() {
+        struct NullRecorder;
+        impl Recorder for NullRecorder {
+            fn append(&self, _event: &str, _data: serde_json::Value) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let opts = Options {
+            servers: vec!["a".into()],
+            min_sources: 1,
+            recorder: Some(Arc::new(NullRecorder)),
+            ..test_options()
+        };
+        let monitor = Monitor::new(opts).unwrap();
+        let mut status = Status {
+            policy: Policy::Enforce,
+            traceable: true,
+            reason: "ok".to_string(),
+            ..Status::default()
+        };
+        monitor.record(&mut status);
+        assert!(status.traceable);
+        assert_eq!(status.reason, "ok");
     }
 }

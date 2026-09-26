@@ -36,6 +36,10 @@ impl Clock for FixedClock {
 }
 
 fn load_authority() -> Authority {
+    load_authority_with(None)
+}
+
+fn load_authority_with(recorder: Option<Arc<dyn oe_tsa_core::Recorder>>) -> Authority {
     let dir = fixtures_dir();
     let key_pem =
         std::fs::read_to_string(dir.join("tsu-key.pem")).expect("lecture de la clé de test");
@@ -56,9 +60,21 @@ fn load_authority() -> Authority {
         accuracy: std::time::Duration::from_secs(1),
         signing_digest: DigestAlg::Sha256,
         clock: Arc::new(FixedClock),
-        recorder: None,
+        recorder,
     })
     .expect("construction de l'autorité")
+}
+
+/// Un premier `request.der` de granted dans le corpus, pour les tests qui
+/// n'ont besoin que d'une requête RFC 3161 valide quelconque.
+fn any_granted_request() -> Vec<u8> {
+    for entry in std::fs::read_dir(rfc3161_corpus_dir()).expect("corpus introuvable") {
+        let path = entry.unwrap().path();
+        if path.is_dir() && path.join("response.der").exists() {
+            return std::fs::read(path.join("request.der")).unwrap();
+        }
+    }
+    panic!("aucun cas 'granted' dans le corpus");
 }
 
 fn openssl_verify_token(resp_der_path: &Path, query_path: &Path, cert_path: &Path) {
@@ -144,5 +160,76 @@ fn produces_tokens_accepted_by_openssl_for_every_granted_case_in_the_corpus() {
     assert!(
         checked >= 3,
         "le corpus devrait fournir au moins 3 cas accordés, {checked} vérifiés"
+    );
+}
+
+/// Un journal qui échoue systématiquement (docs/WEBUI.md §15 étape 2b) :
+/// preuve que le journal, écrit *avant* la signature, bloque bien
+/// l'horodatage — aucun jeton n'est signé quand il échoue.
+struct FailingRecorder;
+impl oe_tsa_core::Recorder for FailingRecorder {
+    fn append(&self, _event: &str, _data: serde_json::Value) -> Result<(), String> {
+        Err("stockage du journal injoignable (test)".to_string())
+    }
+}
+
+/// Compte les appels à `sign_digest`, pour prouver qu'aucune signature n'a
+/// lieu quand le journal échoue — pas seulement qu'une erreur est rendue
+/// (une erreur rendue *après* avoir signé serait pire, pas mieux).
+struct CountingSigner {
+    inner: SoftwareToken,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl oe_hsm::SigningToken for CountingSigner {
+    fn sign_digest(&self, alg: DigestAlg, digest: &[u8]) -> Result<Vec<u8>, oe_hsm::HsmError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.sign_digest(alg, digest)
+    }
+    fn public_key_der(&self) -> Result<Vec<u8>, oe_hsm::HsmError> {
+        self.inner.public_key_der()
+    }
+}
+
+fn load_authority_with_signer(
+    recorder: Option<Arc<dyn oe_tsa_core::Recorder>>,
+) -> (Authority, Arc<CountingSigner>) {
+    let dir = fixtures_dir();
+    let key_pem =
+        std::fs::read_to_string(dir.join("tsu-key.pem")).expect("lecture de la clé de test");
+    let cert_pem =
+        std::fs::read_to_string(dir.join("tsu-cert.pem")).expect("lecture du certificat de test");
+    let inner = SoftwareToken::from_pkcs8_pem(&key_pem).expect("chargement de la clé RSA de test");
+    let signer = Arc::new(CountingSigner {
+        inner,
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let cert_block = pem::parse(cert_pem.as_bytes()).expect("PEM invalide");
+    let certificate =
+        Certificate::from_der(cert_block.contents()).expect("certificat DER invalide");
+    let authority = Authority::new(Options {
+        signer: signer.clone(),
+        certificate,
+        chain: Vec::new(),
+        policy: der::asn1::ObjectIdentifier::new("1.3.6.1.4.1.99999.1.1.1").unwrap(),
+        accuracy: std::time::Duration::from_secs(1),
+        signing_digest: DigestAlg::Sha256,
+        clock: Arc::new(FixedClock),
+        recorder,
+    })
+    .expect("construction de l'autorité");
+    (authority, signer)
+}
+
+#[test]
+fn a_journal_failure_blocks_the_timestamp_before_any_signature() {
+    let (authority, signer) = load_authority_with_signer(Some(Arc::new(FailingRecorder)));
+    let req_der = any_granted_request();
+    let err = authority.timestamp(&req_der).unwrap_err();
+    assert!(err.to_string().contains("journal"), "{err}");
+    assert_eq!(
+        signer.calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "aucune signature ne doit avoir eu lieu : le journal a échoué avant"
     );
 }
