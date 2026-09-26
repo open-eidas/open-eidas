@@ -379,7 +379,10 @@ def mirror_to(archive: Path, dest: Path) -> tuple[int, int]:
                 errors += 1
                 continue
             os.replace(tmp, dst)
-            os.chmod(dst, 0o400)
+            try:
+                os.chmod(dst, 0o400)
+            except OSError:
+                pass  # exFAT, NTFS… : pas de droits POSIX, l'empreinte reste le contrôle
             copied += 1
     return copied, errors
 
