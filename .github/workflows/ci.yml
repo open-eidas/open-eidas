@@ -100,6 +100,20 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           ignore: RUSTSEC-2023-0071
 
+  licenses:
+    name: Licences des dépendances (EUPL-1.2 / AGPL-3.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Politique dans deny.toml : licences permissives et MPL-2.0 admises,
+      # tout copyleft qui ferait changer la licence du binaire refusé sauf
+      # exception humaine consignée. Lancé sur toutes les fonctionnalités.
+      - name: cargo deny check licenses
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses
+
   conformance:
     name: Matrice de conformité ETSI
     runs-on: ubuntu-latest
