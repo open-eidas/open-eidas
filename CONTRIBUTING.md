@@ -62,6 +62,7 @@ composants `clippy` et `rustfmt` suffit pour développer localement.
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo deny check licenses   # compatibilité des dépendances avec la double licence (make licenses)
 make demo   # bout en bout, si le changement touche à l'horodatage, l'enrôlement
             # ou la PKI
 ```
@@ -70,6 +71,23 @@ La CI (déclenchée sur `dev` et sur toute pull request) exécute les mêmes
 vérifications, plus la matrice de conformité ETSI, un scan de
 vulnérabilités des images (Trivy) et un amorçage complet de la pile
 (`docker compose` et Helm sur `kind`).
+
+## Assistance par IA et provenance
+
+L'usage d'un outil d'IA générative (Claude Code notamment) est admis, à
+condition d'être déclaré et que la revue reste humaine :
+
+- chaque commit produit avec assistance se termine par la remorque
+  `Co-authored-by: Claude <noreply@anthropic.com>` ;
+- `Author` et `Committer` restent le contributeur humain qui valide la
+  modification, jamais l'outil ;
+- la liste de contrôle du modèle de pull request est cochée par ce
+  contributeur, après une revue et des tests qu'il a faits lui-même ;
+- les transcriptions des sessions sont conservées et archivées localement
+  (`scripts/provenance.py archive`), jamais commitées.
+
+Le détail, et la manière de justifier la provenance d'un commit, sont dans
+[PROVENANCE.md](PROVENANCE.md).
 
 ## Style de code
 
@@ -89,5 +107,7 @@ Ne pas ouvrir d'*issue* publique pour une vulnérabilité. Voir
 
 ## Licence
 
-En contribuant, vous acceptez que vos changements soient publiés sous la
-licence du projet, la licence publique de l'Union européenne EUPL-1.2 (voir [LICENSE](LICENSE)).
+En contribuant, vous acceptez que vos changements soient publiés sous les
+deux licences du projet, au choix du réutilisateur : la licence publique de
+l'Union européenne EUPL-1.2 (voir [LICENSE](LICENSE)) ou la GNU AGPL v3,
+version 3 uniquement (voir [LICENSE-AGPL-3.0](LICENSE-AGPL-3.0)).

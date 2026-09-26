@@ -1,0 +1,63 @@
+# Politique de licences des dépendances (`cargo deny check licenses`).
+#
+# Le projet est publié sous double licence, `EUPL-1.2 OR AGPL-3.0-only`.
+# Une dépendance est admise d'office si le binaire qui l'embarque peut rester
+# distribué sous les DEUX licences :
+#
+#   - licences permissives : compatibles, leurs conditions (mention de
+#     l'auteur, texte de licence) sont satisfaites dans une distribution EUPL ;
+#   - MPL-2.0 : copyleft limité au fichier, figure dans l'annexe des licences
+#     compatibles de l'EUPL-1.2, et le code MPL reste sous MPL.
+#
+# AGPL-3.0 est admise : elle est la seconde licence du projet. Mais un binaire
+# qui embarque une dépendance AGPL-3.0 ne peut plus être distribué que sous
+# AGPL-3.0 (la branche EUPL-1.2 n'est plus utilisable pour lui) : la PR qui
+# en ajoute une le dit, et le README le signale pour le binaire concerné.
+#
+# Ne sont PAS admises d'office les autres copyleft, même quand l'annexe de
+# l'EUPL-1.2 les déclare compatibles (GPL-2.0, GPL-3.0, LGPL-2.1, LGPL-3.0,
+# OSL, EPL-1.0, CeCILL-2.x, CC-BY-SA-3.0, LiLiQ-R/R+) : elles feraient
+# basculer la licence du binaire vers une troisième licence. C'est une
+# décision humaine, prise au cas par cas, et consignée dans `exceptions`
+# ci-dessous avec sa justification. En Rust, la liaison est statique : la LGPL
+# n'est donc pas neutre non plus.
+#
+# Une dépendance à double licence (`MIT OR LGPL-2.1-or-later`) passe dès que
+# l'une des branches est admise : c'est cette branche qui s'applique.
+
+[graph]
+all-features = true
+
+[licenses]
+confidence-threshold = 0.93
+# Liste générale : une licence admise mais absente du graphe n'est pas une erreur.
+unused-allowed-license = "allow"
+allow = [
+    "EUPL-1.2",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "Unlicense",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    # Données (racines de confiance de `webpki-roots`), licence permissive.
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+]
+# Chaque exception : crate, licence, décision datée et motif. Aucune à ce jour.
+exceptions = []
+
+[licenses.private]
+# Les crates du workspace ne sont pas publiées ; leur licence (EUPL-1.2) est
+# (`EUPL-1.2 OR AGPL-3.0-only`) est déclarée par `[workspace.package]`, et
+# vérifiée par la règle ci-dessus.
+ignore = false
