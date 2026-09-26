@@ -1821,6 +1821,7 @@ dependencies = [
 name = "oe-raflow"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "der 0.8.2",
  "hex",
  "hmac 0.12.1",
@@ -2209,6 +2210,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 name = "ra-console"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "ca-server",
  "clap",

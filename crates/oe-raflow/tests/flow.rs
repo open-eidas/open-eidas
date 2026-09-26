@@ -65,6 +65,10 @@ fn build_csr_with_bits(cn: &str, bits: usize) -> (Vec<u8>, RsaPrivateKey) {
 }
 
 async fn test_flow() -> (Flow, Arc<Memory>) {
+    test_flow_with(None).await
+}
+
+async fn test_flow_with(recorder: Option<Arc<dyn oe_raflow::Recorder>>) -> (Flow, Arc<Memory>) {
     let store = Arc::new(Memory::new());
     let root_signer = Arc::new(SoftwareToken::generate(2048));
     let issuing_signer = Arc::new(SoftwareToken::generate(2048));
@@ -105,7 +109,7 @@ async fn test_flow() -> (Flow, Arc<Memory>) {
         store: store.clone(),
         issuer: Arc::new(issuer),
         hmac_secret: HMAC_SECRET.to_string(),
-        recorder: None,
+        recorder,
         retry_after: time::Duration::seconds(5),
         clock: None,
     })
@@ -333,4 +337,74 @@ async fn approve_unknown_transaction_is_not_found() {
         .approve("transaction-inconnue", "operateur-ra", "")
         .await;
     assert!(matches!(err, Err(RaflowError::NotFound)));
+}
+
+/// Un journal qui échoue systématiquement (docs/WEBUI.md §15 étape 2b) :
+/// preuve que `Flow::open` bloque bien la création de la demande, et que
+/// `Decider::decide` — l'exception documentée — laisse au contraire la
+/// décision déjà appliquée par l'écriture optimiste, malgré l'échec du
+/// journal qui suit.
+struct FailingRecorder;
+
+#[async_trait::async_trait]
+impl oe_raflow::Recorder for FailingRecorder {
+    async fn append(&self, _event: &str, _data: serde_json::Value) -> Result<(), String> {
+        Err("stockage du journal injoignable (test)".to_string())
+    }
+}
+
+#[tokio::test]
+async fn a_journal_failure_blocks_submission_before_any_request_is_created() {
+    let (flow, store) = test_flow_with(Some(Arc::new(FailingRecorder))).await;
+    let (csr_der, _key) = build_csr("audit.example.test");
+    let signature = oe_raflow::signature(&csr_der, HMAC_SECRET);
+
+    let err = flow
+        .submit(&csr_der, "tsa_signer", &signature)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("journal"), "{err}");
+
+    let fp_hex = hex::encode(Sha256::digest(&csr_der));
+    assert!(
+        store.request_by_fingerprint(&fp_hex).await.is_err(),
+        "aucune demande ne doit être créée : le journal a échoué avant"
+    );
+}
+
+/// Exception documentée : l'écriture optimiste qui départage deux décisions
+/// concurrentes reste *avant* le journal. Une conséquence assumée : la
+/// décision est déjà appliquée quand le journal échoue ensuite — testée ici
+/// pour que ce compromis reste visible, pas une régression silencieuse.
+#[tokio::test]
+async fn a_journal_failure_on_decide_still_leaves_the_decision_applied() {
+    let (flow, store) = test_flow().await;
+    let (csr_der, _key) = build_csr("audit.example.test");
+    let signature = oe_raflow::signature(&csr_der, HMAC_SECRET);
+    flow.submit(&csr_der, "tsa_signer", &signature)
+        .await
+        .unwrap();
+    let fp_hex = hex::encode(Sha256::digest(&csr_der));
+    let request = store.request_by_fingerprint(&fp_hex).await.unwrap();
+
+    let failing_decider = Decider::new(DeciderOptions {
+        store: store.clone(),
+        recorder: Some(Arc::new(FailingRecorder)),
+        clock: None,
+    });
+    let err = failing_decider
+        .approve(&request.transaction_id, "operateur-ra", "")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("journal"), "{err}");
+
+    let updated = store
+        .request_by_transaction_id(&request.transaction_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        updated.state,
+        RequestState::Approved,
+        "la décision reste appliquée malgré l'échec du journal (exception documentée)"
+    );
 }

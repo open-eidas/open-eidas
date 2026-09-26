@@ -30,8 +30,9 @@ struct MemJournal {
     fail: AtomicBool,
 }
 
+#[async_trait::async_trait]
 impl Recorder for MemJournal {
-    fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String> {
+    async fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String> {
         if self.fail.load(Ordering::SeqCst) {
             return Err("disque plein".to_string());
         }

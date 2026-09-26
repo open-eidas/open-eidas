@@ -293,6 +293,7 @@ pub async fn reconcile(
                             "motif": reason,
                         }),
                     )
+                    .await
                     .map_err(Error::Journal)?;
                 tx.commit().await?;
                 out.resolved.push(format!("révocation ré-appliquée : {d}"));
@@ -322,6 +323,7 @@ pub async fn reconcile(
                             "motif": reason,
                         }),
                     )
+                    .await
                     .map_err(Error::Journal)?;
                 tx.commit().await?;
                 out.resolved.push(format!("rôle ré-appliqué : {d}"));
@@ -348,6 +350,7 @@ pub async fn reconcile(
                             "motif": reason,
                         }),
                     )
+                    .await
                     .map_err(Error::Journal)?;
                 out.resolved.push(format!("perte acquittée : {d}"));
             }

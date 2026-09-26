@@ -462,6 +462,7 @@ impl Service {
                     "operator_hint": operator.name,
                 }),
             )
+            .await
             .map_err(Error::Journal)?;
 
         let challenge = options.public_key.challenge.as_ref().to_vec();
@@ -571,6 +572,7 @@ impl Service {
                     "operator_hint": operator.name,
                 }),
             )
+            .await
             .map_err(Error::Journal)?;
         sqlx::query(
             "INSERT INTO action_challenges
@@ -783,6 +785,7 @@ impl Service {
                         "signatures_exigees": required,
                     }),
                 )
+                .await
                 .map_err(Error::Journal)?;
             tx.commit().await?;
             return Ok(Executed {
@@ -845,6 +848,7 @@ impl Service {
                     "signataires": names,
                 }),
             )
+            .await
             .map_err(Error::Journal)?;
 
         let result = match &stored.action {

@@ -362,6 +362,7 @@ impl Service {
                     "attestation": summary.format,
                 }),
             )
+            .await
             .map_err(Error::Journal)?;
         tx.commit().await?;
 

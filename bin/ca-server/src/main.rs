@@ -220,8 +220,9 @@ impl oe_ca_core::Recorder for AuditRecorder {
     }
 }
 
+#[async_trait::async_trait]
 impl oe_raflow::Recorder for AuditRecorder {
-    fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String> {
+    async fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String> {
         self.0
             .append(event, json_to_audit_data(data))
             .map_err(|e| e.to_string())
@@ -1004,12 +1005,15 @@ async fn run_operators_recover_admin(
     let recorder = AuditRecorder(journal);
 
     if let Err(e) = verify_token_pin(&cfg, &pin) {
-        // Un refus est aussi un événement : quelqu'un a essayé.
+        // Un refus est aussi un événement : quelqu'un a essayé. Best-effort :
+        // le refus lui-même (et le processus se termine juste après) n'attend
+        // pas le journal.
         let _ = oe_raflow::Recorder::append(
             &recorder,
             "operators.admin_recovery_refused",
             serde_json::json!({ "nom": name, "motif_du_refus": "PIN du token refusé" }),
-        );
+        )
+        .await;
         // Le détail de l'erreur PKCS#11 ne va pas à l'écran : il n'apprend rien
         // à celui qui a la garde du PIN, et beaucoup à celui qui l'essaie.
         tracing::debug!(erreur = %e, "PIN refusé");
