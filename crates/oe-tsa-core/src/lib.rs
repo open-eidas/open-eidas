@@ -36,6 +36,14 @@ pub trait Clock: Send + Sync {
 }
 
 /// Consigne les décisions de l'autorité dans le journal d'audit.
+///
+/// Reste synchrone, comme `oe_timesource::Recorder` et pour la même raison
+/// (docs/WEBUI.md §15 étape 2b) : `Authority::timestamp` est déjà entièrement
+/// synchrone (la signature HSM l'est), appelée directement depuis un
+/// gestionnaire HTTP async sans `spawn_blocking` — un futur dos S3 y ferait un
+/// appel HTTP bloquant, sans changer ce qui bloque déjà le thread. Son échec
+/// est **bloquant** : `Authority::record` le propage, et chaque appelant
+/// journalise avant la signature elle-même, l'acte irréversible.
 pub trait Recorder: Send + Sync {
     fn append(&self, event: &str, data: serde_json::Value) -> Result<(), String>;
 }
@@ -178,10 +186,13 @@ impl Authority {
         match self.timestamp_inner(req_der) {
             Ok(resp) => Ok(resp),
             Err(TsaError::Rejection(rejection)) => {
+                // Rien d'irréversible ne dépend de ce journal (la requête est
+                // déjà rejetée) : mais si lui-même échoue, c'est cette
+                // raison-là qui prime (§15 étape 2b).
                 self.record(
                     "timestamp.rejected",
                     serde_json::json!({"failure": format!("{:?}", rejection.failure), "reason": rejection.reason}),
-                );
+                )?;
                 Err(TsaError::Rejection(rejection))
             }
             Err(e) => Err(e),
@@ -266,15 +277,12 @@ impl Authority {
 
         let signed_attrs = token::signed_attrs_der(&parts)?;
         let digest_to_sign = hash_with(self.opts.signing_digest, &signed_attrs);
-        let signature = self
-            .opts
-            .signer
-            .sign_digest(self.opts.signing_digest, &digest_to_sign)?;
 
-        let token_der = token::assemble(&parts, &signed_attrs, signature)?;
-        let resp = token::granted_response(token_der)?;
-        let resp_der = resp.to_der()?;
-
+        // Le journal *avant* la signature (§15 étape 2b) : l'acte
+        // irréversible est la signature elle-même (la clé de la TSA ne
+        // signe jamais deux fois la même chose, et rien n'annule une
+        // signature déjà produite). Si le journal échoue, aucun jeton n'est
+        // signé.
         self.record(
             "timestamp.granted",
             serde_json::json!({
@@ -283,7 +291,16 @@ impl Authority {
                 "policy": self.opts.policy.to_string(),
                 "nonce": req.nonce.is_some(),
             }),
-        );
+        )?;
+
+        let signature = self
+            .opts
+            .signer
+            .sign_digest(self.opts.signing_digest, &digest_to_sign)?;
+
+        let token_der = token::assemble(&parts, &signed_attrs, signature)?;
+        let resp = token::granted_response(token_der)?;
+        let resp_der = resp.to_der()?;
         Ok(resp_der)
     }
 
@@ -317,10 +334,13 @@ impl Authority {
         })
     }
 
-    fn record(&self, event: &str, data: serde_json::Value) {
+    fn record(&self, event: &str, data: serde_json::Value) -> Result<(), TsaError> {
         if let Some(recorder) = &self.opts.recorder {
-            let _ = recorder.append(event, data);
+            recorder
+                .append(event, data)
+                .map_err(|e| TsaError::Other(format!("journal : {e}")))?;
         }
+        Ok(())
     }
 }
 
