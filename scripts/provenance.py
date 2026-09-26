@@ -10,7 +10,10 @@ dans ~/.claude/projects/<dépôt>/<session>.jsonl. Ce script :
   archive         copie les transcriptions dans une archive immuable (objets
                   adressés par SHA-256), écrit un manifeste chaîné au précédent
                   et le fait horodater (RFC 3161) par une TSA tierce ;
-  verify          revérifie l'archive : objets, chaîne des manifestes, jetons.
+  mirror          recopie l'archive vers des supports hors poste, sans rien
+                  écraser (aussi fait à chaque `archive` si un miroir est configuré) ;
+  verify          revérifie l'archive (ou un miroir, avec --archive) : objets,
+                  chaîne des manifestes, jetons.
 
 Les transcriptions contiennent tout ce que la session a lu ou affiché, secrets
 compris : l'archive reste privée (droits 0700/0600), elle n'est jamais
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import getpass
 import gzip
 import hashlib
@@ -35,6 +39,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,6 +47,8 @@ CLAUDE_PROJECTS = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claud
 DEFAULT_ARCHIVE = Path(
     os.environ.get("OPENEIDAS_PROVENANCE_DIR", Path.home() / "archives" / "open-eidas" / "provenance")
 )
+# Copies hors poste (disque externe, NAS, stockage objet monté), séparées par « : ».
+DEFAULT_MIRRORS = [m for m in os.environ.get("OPENEIDAS_PROVENANCE_MIRROR", "").split(os.pathsep) if m]
 DEFAULT_TSAS = os.environ.get(
     "OPENEIDAS_PROVENANCE_TSA", "https://freetsa.org/tsr,http://timestamp.digicert.com"
 ).split(",")
@@ -343,7 +350,74 @@ def timestamp(manifest: Path, tsas: list[str]) -> Path | None:
     return None
 
 
+def mirror_to(archive: Path, dest: Path) -> tuple[int, int]:
+    """Recopie objets, manifestes et jetons de l'archive vers `dest`, sans jamais
+    écraser : un fichier déjà présent doit être identique, sinon c'est une
+    anomalie signalée (la copie hors poste ne suit pas une archive réécrite).
+
+    `dest` doit exister : un point de montage absent ne doit pas se remplir en
+    silence sur le disque local."""
+    if not dest.is_dir():
+        print(f"miroir      : {dest} absent (support non monté ?), copie ignorée", file=sys.stderr)
+        return 0, 1
+    copied = errors = 0
+    for sub in ("objects", "manifests"):
+        (dest / sub).mkdir(exist_ok=True)
+        for src in sorted((archive / sub).iterdir()):
+            dst = dest / sub / src.name
+            want = hashlib.sha256(src.read_bytes()).hexdigest()
+            if dst.exists():
+                if hashlib.sha256(dst.read_bytes()).hexdigest() != want:
+                    print(f"miroir      : {dst} diffère de l'archive, laissé en l'état", file=sys.stderr)
+                    errors += 1
+                continue
+            tmp = dst.with_name(dst.name + ".part")
+            shutil.copyfile(src, tmp)
+            if hashlib.sha256(tmp.read_bytes()).hexdigest() != want:
+                tmp.unlink()
+                print(f"miroir      : copie de {src.name} corrompue, abandonnée", file=sys.stderr)
+                errors += 1
+                continue
+            os.replace(tmp, dst)
+            os.chmod(dst, 0o400)
+            copied += 1
+    return copied, errors
+
+
+def run_mirrors(archive: Path, mirrors: list[str]) -> int:
+    failed = 0
+    for m in mirrors:
+        copied, errors = mirror_to(archive, Path(m).expanduser())
+        if errors == 0:
+            print(f"miroir      : {m} ({copied} fichier(s) copié(s))")
+        failed += errors > 0
+    return failed
+
+
+def cmd_mirror(args) -> int:
+    mirrors = args.mirror or DEFAULT_MIRRORS
+    if not mirrors:
+        print("aucun miroir : --mirror <répertoire> ou $OPENEIDAS_PROVENANCE_MIRROR", file=sys.stderr)
+        return 1
+    return 3 if run_mirrors(args.archive, mirrors) else 0
+
+
 def cmd_archive(args) -> int:
+    # Plusieurs sessions peuvent se terminer en même temps (hook de fin de
+    # session) : un seul archivage à la fois, sinon deux manifestes citeraient
+    # le même précédent et la chaîne se diviserait.
+    args.archive.mkdir(parents=True, exist_ok=True)
+    with open(args.archive / ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        code = archive_once(args)
+    # Le miroir suit l'archive même si l'horodatage a échoué : une copie non
+    # horodatée vaut mieux que pas de copie, et le jeton suivra au prochain passage.
+    if run_mirrors(args.archive, args.mirror or DEFAULT_MIRRORS):
+        return code or 3
+    return code
+
+
+def archive_once(args) -> int:
     root = repo_root()
     archive: Path = args.archive
     for d in ("objects", "manifests"):
@@ -375,8 +449,13 @@ def cmd_archive(args) -> int:
             last = latest_archived(archive)[rel]
             current[rel] = (last.name.split(".")[0], -1)
 
-    now = dt.datetime.now(dt.timezone.utc)
-    manifest = archive / "manifests" / f"{now:%Y%m%dT%H%M%SZ}.txt"
+    # Un manifeste par seconde au plus : sous le verrou, le suivant attend.
+    while True:
+        now = dt.datetime.now(dt.timezone.utc)
+        manifest = archive / "manifests" / f"{now:%Y%m%dT%H%M%SZ}.txt"
+        if not manifest.exists():
+            break
+        time.sleep(0.2)
     head = git("rev-parse", "HEAD").strip()
     lines = [
         "# Manifeste de provenance — open-eidas",
@@ -485,7 +564,12 @@ def main() -> int:
     s = sub.add_parser("archive", help="archive immuable + manifeste horodaté")
     s.add_argument("--tsa", action="append", help="URL de TSA RFC 3161 (répétable)")
     s.add_argument("--no-timestamp", action="store_true")
+    s.add_argument("--mirror", action="append",
+                   help="répertoire de copie hors poste, déjà existant (répétable ; défaut : $OPENEIDAS_PROVENANCE_MIRROR)")
     s.set_defaults(func=cmd_archive)
+    s = sub.add_parser("mirror", help="rattrape les copies hors poste sans créer de manifeste")
+    s.add_argument("--mirror", action="append", help="répertoire de copie hors poste (répétable)")
+    s.set_defaults(func=cmd_mirror)
     s = sub.add_parser("verify", help="revérifie objets, chaîne des manifestes et jetons")
     s.add_argument("--tsa-ca", type=Path, help="certificat(s) de confiance de la TSA pour vérifier les jetons")
     s.set_defaults(func=cmd_verify)
