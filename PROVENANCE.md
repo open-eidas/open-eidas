@@ -73,11 +73,15 @@ scripts/provenance.py trace <commit>
 scripts/provenance.py report > provenance-dev.md     # ou : make provenance
 
 # Archiver les transcriptions et horodater le manifeste (à faire régulièrement)
-scripts/provenance.py archive
+scripts/provenance.py archive --mirror /media/archives/open-eidas   # miroir facultatif
 
-# Revérifier l'archive : objets, chaîne des manifestes, jetons
+# Rattraper un miroir resté débranché, sans créer de manifeste
+scripts/provenance.py mirror --mirror /media/archives/open-eidas
+
+# Revérifier l'archive (ou un miroir, avec --archive) : objets, chaîne des manifestes, jetons
 curl -sO https://freetsa.org/files/cacert.pem
 scripts/provenance.py verify --tsa-ca cacert.pem
+scripts/provenance.py --archive /media/archives/open-eidas verify --tsa-ca cacert.pem
 ```
 
 `trace` et `report` classent les preuves par force :
@@ -99,8 +103,35 @@ date attestée, sans dépendre de la confiance accordée au contributeur. Une
 transcription que Claude Code aurait purgée reste dans l'archive.
 
 Emplacement par défaut : `~/archives/open-eidas/provenance`
-(`OPENEIDAS_PROVENANCE_DIR` pour le changer). Cette archive doit être
-sauvegardée comme le reste des documents probants du contributeur.
+(`OPENEIDAS_PROVENANCE_DIR` pour le changer). Un archivage à la fois : un
+verrou sérialise les exécutions simultanées, pour que la chaîne des
+manifestes ne se divise jamais.
+
+### Copie hors poste
+
+Une archive sur un seul disque disparaît avec lui. `--mirror <répertoire>`
+(répétable, ou `OPENEIDAS_PROVENANCE_MIRROR`, chemins séparés par `:`)
+recopie objets, manifestes et jetons vers un support distinct du poste :
+disque externe, NAS, stockage objet monté. La copie :
+
+- ne crée jamais le répertoire de destination : un support non monté est
+  signalé (code de sortie 3) au lieu de se remplir en silence sur le disque
+  local ;
+- n'écrase jamais rien : un fichier déjà présent et différent est signalé,
+  une copie dont l'empreinte ne correspond pas est abandonnée ;
+- se vérifie comme l'archive elle-même (`--archive <miroir> verify`).
+
+### Archivage automatique
+
+Pour réduire l'écart entre l'écriture d'une transcription et son
+horodatage, l'archivage peut se lancer à la fin de chaque session Claude
+Code, par un hook `SessionEnd` dans `~/.claude/settings.json`. Il ne se
+déclenche que pour une session ouverte dans une copie de ce dépôt. Il
+exécute la version de `scripts/provenance.py` publiée sur `origin/dev`, pas
+celle de la branche en cours. Il tourne détaché, pour ne pas retarder la
+fermeture, et écrit dans `~/archives/open-eidas/provenance-hook.log`. Les
+contrôles hors session (litige, audit) restent manuels : `verify`, sur
+l'archive et sur chaque miroir.
 
 ### Conservation des transcriptions
 
